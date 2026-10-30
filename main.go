@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
 	"syscall"
 	"time"
@@ -20,15 +21,16 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	token := os.Getenv(cfg.Jira.TokenEnv)
-	if token == "" {
-		log.Fatalf("%s is not set", cfg.Jira.TokenEnv)
+	for _, tool := range []string{"acli", "gh", "git"} {
+		if _, err := exec.LookPath(tool); err != nil {
+			log.Fatalf("%s not found in PATH", tool)
+		}
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	board := NewBoard(cfg, NewJiraClient(cfg.Jira, token))
+	board := NewBoard(cfg)
 	go board.Run(ctx)
 
 	srv := &http.Server{

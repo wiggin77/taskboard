@@ -8,15 +8,14 @@ Stages: Ticket, Plan, Code, Review, Ready, Merged, Done. Tasks are grouped so th
 
 - Go 1.22+
 - `gh`, authenticated (`gh auth login`)
+- `acli`, logged in to your Jira site (`acli jira auth login`)
 - `git`, and `tmux` if you want session links
-- A Jira API token (https://id.atlassian.com/manage-profile/security/api-tokens)
 
 ## Run
 
 ```sh
 go build -o taskboard .
-cp config.example.json taskboard.json   # edit repos, email, ssh_host
-export JIRA_API_TOKEN=...
+cp config.example.json taskboard.json   # edit repos and ssh_host
 ./taskboard -config taskboard.json
 ```
 
@@ -73,6 +72,7 @@ If you bind to a LAN or Tailscale address instead, requests by IP work as is. Ad
 
 ## Notes
 
+- Jira is read through `acli`, so taskboard uses whatever account acli is logged in as. `jira.base_url` is only used to build ticket links.
 - Jira tickets in a done status category are cached for the life of the process, since merged PRs are rechecked every poll.
 - `merged_pr_limit` controls how many recent merged PRs per repo are checked for the "merged, update Jira" stage.
 - Source failures show in a banner at the top of the page and in the log; the rest of the board still renders.

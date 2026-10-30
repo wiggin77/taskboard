@@ -15,8 +15,7 @@ type Snapshot struct {
 }
 
 type Board struct {
-	cfg  *Config
-	jira *JiraClient
+	cfg *Config
 
 	doneIssues map[string]JiraIssue
 
@@ -24,8 +23,8 @@ type Board struct {
 	snap Snapshot
 }
 
-func NewBoard(cfg *Config, jira *JiraClient) *Board {
-	return &Board{cfg: cfg, jira: jira, doneIssues: map[string]JiraIssue{}}
+func NewBoard(cfg *Config) *Board {
+	return &Board{cfg: cfg, doneIssues: map[string]JiraIssue{}}
 }
 
 func (b *Board) Snapshot() Snapshot {
@@ -77,7 +76,7 @@ func (b *Board) refresh(ctx context.Context) {
 	wg.Add(2 + len(b.cfg.Repos))
 	go func() {
 		defer wg.Done()
-		issues, jiraErr = b.jira.Search(ctx, b.cfg.Jira.JQL)
+		issues, jiraErr = jiraSearch(ctx, b.cfg.Jira.JQL)
 	}()
 	go func() {
 		defer wg.Done()
@@ -111,7 +110,7 @@ func (b *Board) refresh(ctx context.Context) {
 			s.issues[key] = is
 			continue
 		}
-		is, ok, err := b.jira.Get(ctx, key)
+		is, ok, err := jiraGet(ctx, key)
 		if err != nil {
 			errs = append(errs, fmt.Sprintf("Jira %s: %v", key, err))
 			continue

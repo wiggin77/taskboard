@@ -8,8 +8,6 @@
   "allowed_hosts": [],
   "jira": {
     "base_url": "https://mattermost.atlassian.net",
-    "email": "you@mattermost.com",
-    "token_env": "JIRA_API_TOKEN",
     "jql": "assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC"
   },
   "repos": [

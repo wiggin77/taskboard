@@ -25,10 +25,8 @@ type Config struct {
 }
 
 type JiraConfig struct {
-	BaseURL  string `json:"base_url"`
-	Email    string `json:"email"`
-	TokenEnv string `json:"token_env"`
-	JQL      string `json:"jql"`
+	BaseURL string `json:"base_url"`
+	JQL     string `json:"jql"`
 }
 
 type RepoConfig struct {
@@ -62,8 +60,7 @@ func LoadConfig(path string) (*Config, error) {
 		PollInterval:  Duration{time.Minute},
 		MergedPRLimit: 20,
 		Jira: JiraConfig{
-			TokenEnv: "JIRA_API_TOKEN",
-			JQL:      "assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC",
+			JQL: "assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC",
 		},
 	}
 	if err := json.Unmarshal(b, cfg); err != nil {
@@ -76,8 +73,8 @@ func LoadConfig(path string) (*Config, error) {
 }
 
 func (c *Config) validate() error {
-	if c.Jira.BaseURL == "" || c.Jira.Email == "" {
-		return errors.New("jira.base_url and jira.email are required")
+	if c.Jira.BaseURL == "" {
+		return errors.New("jira.base_url is required")
 	}
 	c.Jira.BaseURL = strings.TrimRight(c.Jira.BaseURL, "/")
 	if len(c.ProjectKeys) == 0 {
