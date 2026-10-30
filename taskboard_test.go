@@ -12,7 +12,7 @@ func testConfig(t *testing.T) *Config {
 	cfg := &Config{
 		PollInterval: Duration{time.Minute},
 		ProjectKeys:  []string{"MM"},
-		Jira:         JiraConfig{BaseURL: "https://example.atlassian.net/", Email: "a@b.c"},
+		Jira:         JiraConfig{BaseURL: "https://example.atlassian.net/"},
 		Repos:        []RepoConfig{{Name: "mattermost/mattermost"}},
 	}
 	if err := cfg.validate(); err != nil {
@@ -199,6 +199,27 @@ func TestCheckHost(t *testing.T) {
 		h.ServeHTTP(rec, req)
 		if rec.Code != want {
 			t.Errorf("host %s: got %d, want %d", host, rec.Code, want)
+		}
+	}
+}
+
+func TestDecodeIssues(t *testing.T) {
+	out := []byte(`[{"changelog":null,"fields":{"status":{"id":"6","name":"Closed","statusCategory":{"id":3,"key":"done","name":"Done"}},"summary":"Cross Guard fix"},"id":"154491","key":"MM-71003","names":null},
+{"fields":{"status":{"name":"In Progress","statusCategory":{"key":"indeterminate"}},"summary":"Other"},"key":"MM-2"}]`)
+	issues, err := decodeIssues(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []JiraIssue{
+		{Key: "MM-71003", Summary: "Cross Guard fix", Status: "Closed", Done: true},
+		{Key: "MM-2", Summary: "Other", Status: "In Progress"},
+	}
+	if len(issues) != len(want) {
+		t.Fatalf("got %d issues", len(issues))
+	}
+	for i := range want {
+		if issues[i] != want[i] {
+			t.Errorf("issues[%d] = %+v, want %+v", i, issues[i], want[i])
 		}
 	}
 }
