@@ -1,0 +1,19 @@
+{
+  "listen": "127.0.0.1:8484",
+  "poll_interval": "60s",
+  "project_keys": ["MM"],
+  "merged_pr_limit": 20,
+  "ssh_host": "ubuntu",
+  "attach_command": ["gnome-terminal", "--", "tmux", "attach", "-t", "{target}"],
+  "allowed_hosts": [],
+  "jira": {
+    "base_url": "https://mattermost.atlassian.net",
+    "email": "you@mattermost.com",
+    "token_env": "JIRA_API_TOKEN",
+    "jql": "assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC"
+  },
+  "repos": [
+    {"name": "mattermost/mattermost", "path": "/home/you/src/mattermost", "plans_dir": "plans"},
+    {"name": "mattermost/mattermost-plugin-jira", "path": "/home/you/src/mattermost-plugin-jira"}
+  ]
+}

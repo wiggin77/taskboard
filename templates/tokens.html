@@ -1,0 +1,18 @@
+{{define "tokens"}}
+:root{
+  color-scheme:light;
+  --bg:#EDF0F3;--surface:#FFFFFF;--ink:#1B2530;--muted:#5D6876;--line:#CCD3DB;--trail:#8A95A3;
+  --link:#2B5C9E;--fail:#B93A2E;--needs:#A86400;--ok:#2D7A4C;--active:#2B5C9E;
+}
+@media (prefers-color-scheme:dark){
+  :root{
+    color-scheme:dark;
+    --bg:#151A20;--surface:#1D242C;--ink:#E2E7ED;--muted:#97A2AF;--line:#35404C;--trail:#6E7A88;
+    --link:#82A9E3;--fail:#EE7464;--needs:#E3A443;--ok:#62BE87;--active:#82A9E3;
+  }
+}
+*{box-sizing:border-box}
+body{margin:0 auto;max-width:64rem;padding:1.5rem 1rem 3rem;background:var(--bg);color:var(--ink);
+  font:15px/1.45 "Inter","Segoe UI",system-ui,-apple-system,"Ubuntu",sans-serif}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+{{end}}

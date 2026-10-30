@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{.Task.Key}} plan</title>
+<style>
+{{template "tokens"}}
+nav{display:flex;flex-wrap:wrap;gap:.25rem 1rem;font-size:.875rem;margin-bottom:1rem}
+a{color:var(--link);text-decoration:none}
+a:hover{text-decoration:underline}
+:focus-visible{outline:2px solid var(--link);outline-offset:2px}
+h1{font-size:1.25rem;font-weight:650;margin:0 0 .25rem}
+.path{color:var(--muted);font-size:.8125rem;margin:0 0 1rem;overflow-wrap:anywhere}
+pre{background:var(--surface);border:1px solid var(--line);border-radius:6px;padding:1rem;white-space:pre-wrap;overflow-wrap:anywhere;
+  font:13.5px/1.55 ui-monospace,"JetBrains Mono","Ubuntu Mono",monospace;max-width:80ch}
+</style>
+</head>
+<body>
+<nav>
+  <a href="/">Back to board</a>
+  <a href="{{.Task.JiraURL}}" target="_blank" rel="noopener">Jira</a>
+  {{with .Task.PR}}<a href="{{.URL}}" target="_blank" rel="noopener">PR #{{.Number}}</a>{{end}}
+  {{with .Task.Plan.GitHubURL}}<a href="{{.}}" target="_blank" rel="noopener">Plan on GitHub</a>{{end}}
+</nav>
+<h1>{{.Task.Key}} {{.Task.Summary}}</h1>
+<p class="path">{{.Task.Plan.Path}}{{if .Task.Plan.Approved}} (approved){{end}}</p>
+<pre>{{.Content}}</pre>
+</body>
+</html>

@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="refresh" content="{{.RefreshSeconds}}">
+<title>Task board</title>
+<style>
+{{template "tokens"}}
+header{display:flex;flex-wrap:wrap;align-items:baseline;justify-content:space-between;gap:.25rem 1rem;margin-bottom:1.5rem}
+h1{font-size:1.5rem;font-weight:650;letter-spacing:-.01em;margin:0}
+.updated{color:var(--muted);font-size:.875rem}
+.errors{border-left:3px solid var(--fail);background:var(--surface);padding:.75rem 1rem;margin:0 0 1.5rem;font-size:.875rem}
+.errors p{margin:0 0 .25rem}
+.errors ul{margin:0;padding-left:1.1rem;color:var(--muted)}
+section{margin-bottom:2rem}
+h2,summary{font-size:1rem;font-weight:650;margin:0 0 .5rem}
+.count{color:var(--muted);font-weight:400;font-variant-numeric:tabular-nums;margin-left:.35rem}
+summary{cursor:pointer}
+.legend,.task{display:grid;grid-template-columns:minmax(0,1fr) 17rem;gap:.35rem 1.5rem;align-items:center}
+.legend{color:var(--muted);font-size:.6875rem;margin:0 0 .25rem;padding:0 1rem}
+.legend ol{display:grid;grid-template-columns:repeat(7,1fr);list-style:none;margin:0;padding:0;text-align:center}
+.legend span{grid-column:1}
+ul.tasks{list-style:none;margin:0;padding:0;background:var(--surface);border:1px solid var(--line);border-radius:6px}
+.task{padding:.75rem 1rem;border-top:1px solid var(--line)}
+.task:first-child{border-top:0}
+.title{min-width:0}
+.title p{margin:0;overflow-wrap:anywhere}
+.key{font-weight:650;font-variant-numeric:tabular-nums;margin-right:.4rem}
+.links{display:flex;flex-wrap:wrap;gap:.25rem 1rem;margin-top:.3rem;font-size:.875rem}
+a,button.link{color:var(--link);text-decoration:none;font:inherit;background:none;border:0;padding:0;cursor:pointer}
+a:hover,button.link:hover{text-decoration:underline}
+:focus-visible{outline:2px solid var(--link);outline-offset:2px;border-radius:2px}
+.meta{color:var(--muted)}
+.where{grid-column:2;grid-row:1 / span 2}
+.stage{font-size:.8125rem;font-weight:600;color:var(--tone);margin:0 0 .3rem}
+.track{display:grid;grid-template-columns:repeat(7,1fr);list-style:none;margin:0;padding:0}
+.track li{position:relative;height:14px}
+.track li::before{content:"";position:absolute;left:0;right:0;top:6px;height:2px;background:var(--line)}
+.track li:first-child::before{left:50%}
+.track li:last-child::before{right:50%}
+.track li.past::before{background:var(--trail)}
+.track li.now::before{background:linear-gradient(to right,var(--trail) 50%,var(--line) 50%)}
+.track li:first-child.now::before{background:var(--line)}
+.track li::after{content:"";position:absolute;left:50%;top:3px;width:8px;height:8px;margin-left:-4px;box-sizing:border-box;border-radius:50%;background:var(--surface);border:2px solid var(--line)}
+.track li.past::after{background:var(--trail);border-color:var(--trail)}
+.track li.now::after{top:0;width:14px;height:14px;margin-left:-7px;background:var(--tone);border-color:var(--tone);box-shadow:0 0 0 3px var(--surface)}
+.tone-fail{--tone:var(--fail)}
+.tone-needs{--tone:var(--needs)}
+.tone-ok{--tone:var(--ok)}
+.tone-active{--tone:var(--active)}
+.tone-idle{--tone:var(--muted)}
+.empty{color:var(--muted)}
+@media (max-width:40rem){
+  .legend{display:none}
+  .task{grid-template-columns:minmax(0,1fr)}
+  .where{grid-column:1;grid-row:auto;max-width:18rem}
+}
+</style>
+</head>
+<body>
+<header>
+  <h1>Task board</h1>
+  <span class="updated">{{if .Updated.IsZero}}Loading. This page refreshes on its own.{{else}}Updated {{.Updated.Format "15:04:05"}}{{end}}</span>
+</header>
+
+{{with .Errors}}
+<div class="errors" role="status">
+  <p>Some sources failed, so the board may be incomplete.</p>
+  <ul>{{range .}}<li>{{.}}</li>{{end}}</ul>
+</div>
+{{end}}
+
+{{if and (not .Groups) (not .Updated.IsZero)}}
+<p class="empty">No tasks yet. Check jira.jql, project_keys and repos in your config.</p>
+{{end}}
+
+{{$stations := .Stations}}
+{{$canAttach := .CanAttach}}
+{{range $i, $g := .Groups}}
+<section>
+  {{if eq .Name "Done"}}<details><summary>{{.Name}} <span class="count">{{len .Tasks}}</span></summary>
+  {{else}}<h2>{{.Name}} <span class="count">{{len .Tasks}}</span></h2>
+  {{if eq $i 0}}<div class="legend" aria-hidden="true"><span></span><ol>{{range $stations}}<li>{{.}}</li>{{end}}</ol></div>{{end}}
+  {{end}}
+  <ul class="tasks">
+  {{range .Tasks}}
+    <li class="task tone-{{.Tone}}">
+      <div class="title">
+        <p><span class="key">{{.Key}}</span>{{.Summary}}</p>
+      </div>
+      <div class="where">
+        <p class="stage">{{.StageLabel}}</p>
+        <ol class="track" aria-label="Stage: {{.StageLabel}}">
+          {{range .Track}}<li class="{{.State}}" title="{{.Label}}"></li>{{end}}
+        </ol>
+      </div>
+      <div class="links">
+        <a href="{{.JiraURL}}" target="_blank" rel="noopener">Jira{{with .JiraStatus}} <span class="meta">{{.}}</span>{{end}}</a>
+        {{with .PR}}<a href="{{.URL}}" target="_blank" rel="noopener">PR #{{.Number}}{{with .CI.String}} <span class="meta">{{.}}</span>{{end}}</a>{{end}}
+        {{with .Plan}}<a href="/plan/{{.Key}}">Plan{{if .Approved}} <span class="meta">approved</span>{{end}}</a>{{end}}
+        {{with .Session}}
+          <button class="link" type="button" data-copy="{{.AttachCmd}}">Copy session command</button>
+          {{if $canAttach}}<button class="link" type="button" data-attach="{{.Key}}">Open session</button>{{end}}
+        {{end}}
+      </div>
+    </li>
+  {{end}}
+  </ul>
+  {{if eq .Name "Done"}}</details>{{end}}
+</section>
+{{end}}
+
+<script>
+function flash(el, text) {
+  const old = el.textContent;
+  el.textContent = text;
+  setTimeout(() => { el.textContent = old; }, 1500);
+}
+document.addEventListener("click", async (e) => {
+  const copy = e.target.closest("[data-copy]");
+  if (copy) {
+    try {
+      await navigator.clipboard.writeText(copy.dataset.copy);
+      flash(copy, "Copied");
+    } catch {
+      prompt("Copy this command:", copy.dataset.copy);
+    }
+    return;
+  }
+  const open = e.target.closest("[data-attach]");
+  if (open) {
+    const res = await fetch("/attach/" + encodeURIComponent(open.dataset.attach), {
+      method: "POST",
+      headers: { "X-Taskboard": "1" },
+    });
+    flash(open, res.ok ? "Opened" : "Could not open");
+  }
+});
+</script>
+</body>
+</html>
