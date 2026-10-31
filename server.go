@@ -1,7 +1,10 @@
 package main
 
 import (
+	"bytes"
+	"compress/gzip"
 	"embed"
+	"encoding/json"
 	"html/template"
 	"log"
 	"net"
@@ -77,6 +80,8 @@ type indexData struct {
 	Nav            []navItem
 	Errors         []string
 	Updated        time.Time
+	Refreshing     bool
+	Version        string
 	RefreshSeconds int
 	CanAttach      bool
 	Stations       []string
@@ -91,6 +96,7 @@ func newServer(cfg *Config, board *Board) http.Handler {
 	s := &server{cfg: cfg, board: board}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", s.index)
+	mux.HandleFunc("GET /version", s.version)
 	mux.HandleFunc("GET /plan/{key}", s.plan)
 	mux.HandleFunc("POST /attach/{key}", s.attach)
 	return s.checkHost(mux)
@@ -113,6 +119,7 @@ func (s *server) checkHost(next http.Handler) http.Handler {
 }
 
 func (s *server) index(w http.ResponseWriter, r *http.Request) {
+	s.board.Viewed()
 	snap := s.board.Snapshot()
 	byGroup := map[string][]Task{}
 	for _, t := range snap.Tasks {
@@ -122,6 +129,8 @@ func (s *server) index(w http.ResponseWriter, r *http.Request) {
 		Errors:         snap.Errors,
 		Updated:        snap.Updated,
 		RefreshSeconds: int(s.cfg.PollInterval.Seconds()),
+		Refreshing:     s.refreshing(snap),
+		Version:        snap.Version,
 		CanAttach:      len(s.cfg.AttachCommand) > 0 && isLoopback(r),
 		Stations:       stations,
 	}
@@ -134,6 +143,9 @@ func (s *server) index(w http.ResponseWriter, r *http.Request) {
 		if len(sec.PRs) > 0 {
 			data.PRSections = append(data.PRSections, sec)
 		}
+	}
+	if data.Refreshing {
+		data.RefreshSeconds = 5
 	}
 	data.PRsFirst = len(data.Groups) == 0 || data.Groups[0].Name != groupNeedsYou
 
@@ -153,7 +165,30 @@ func (s *server) index(w http.ResponseWriter, r *http.Request) {
 	} else {
 		data.Nav = append(append(groupNav[:1:1], prNav...), groupNav[1:]...)
 	}
-	render(w, "index.html", data)
+	render(w, r, "index.html", data)
+}
+
+func updatedLabel(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	return t.Format("15:04")
+}
+
+func (s *server) refreshing(snap Snapshot) bool {
+	return time.Since(snap.Updated) > 2*s.cfg.PollInterval.Duration
+}
+
+func (s *server) version(w http.ResponseWriter, r *http.Request) {
+	s.board.Viewed()
+	snap := s.board.Snapshot()
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	json.NewEncoder(w).Encode(map[string]any{
+		"version":    snap.Version,
+		"updated":    updatedLabel(snap.Updated),
+		"refreshing": s.refreshing(snap),
+	})
 }
 
 func (s *server) plan(w http.ResponseWriter, r *http.Request) {
@@ -167,7 +202,7 @@ func (s *server) plan(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	render(w, "plan.html", planData{Task: t, Content: string(content)})
+	render(w, r, "plan.html", planData{Task: t, Content: string(content)})
 }
 
 // The custom header forces a CORS preflight, which this server never answers, so other sites cannot trigger it.
@@ -203,9 +238,21 @@ func isLoopback(r *http.Request) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
-func render(w http.ResponseWriter, name string, data any) {
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := templates.ExecuteTemplate(w, name, data); err != nil {
+func render(w http.ResponseWriter, r *http.Request, name string, data any) {
+	var buf bytes.Buffer
+	if err := templates.ExecuteTemplate(&buf, name, data); err != nil {
 		log.Printf("render %s: %v", name, err)
+		http.Error(w, "render failed", http.StatusInternalServerError)
+		return
 	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Vary", "Accept-Encoding")
+	if !strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
+		w.Write(buf.Bytes())
+		return
+	}
+	w.Header().Set("Content-Encoding", "gzip")
+	gz := gzip.NewWriter(w)
+	gz.Write(buf.Bytes())
+	gz.Close()
 }

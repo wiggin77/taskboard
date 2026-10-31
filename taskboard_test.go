@@ -1,12 +1,15 @@
 package main
 
 import (
+	"compress/gzip"
 	"encoding/json"
 	"fmt"
+	"io"
 	"maps"
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 )
@@ -14,11 +17,12 @@ import (
 func testConfig(t *testing.T) *Config {
 	t.Helper()
 	cfg := &Config{
-		PollInterval: Duration{time.Minute},
-		DoneDays:     30,
-		ProjectKeys:  []string{"MM"},
-		Jira:         JiraConfig{BaseURL: "https://example.atlassian.net/"},
-		Repos:        []RepoConfig{{Name: "mattermost/mattermost"}},
+		PollInterval:     Duration{time.Minute},
+		IdlePollInterval: Duration{15 * time.Minute},
+		DoneDays:         30,
+		ProjectKeys:      []string{"MM"},
+		Jira:             JiraConfig{BaseURL: "https://example.atlassian.net/"},
+		Repos:            []RepoConfig{{Name: "mattermost/mattermost"}},
 	}
 	if err := cfg.validate(); err != nil {
 		t.Fatal(err)
@@ -376,5 +380,107 @@ func TestDoneWindow(t *testing.T) {
 	want := map[string]Stage{"MM-1": StageDone, "MM-3": StageCleanup, "MM-4": StageDone, "MM-6": StageDone}
 	if !maps.Equal(got, want) {
 		t.Errorf("stages = %v, want %v", got, want)
+	}
+}
+
+func TestIdlePolling(t *testing.T) {
+	b := NewBoard(testConfig(t))
+	woke := func() bool {
+		select {
+		case <-b.wake:
+			return true
+		default:
+			return false
+		}
+	}
+	if got := b.nextWait(); got != 15*time.Minute {
+		t.Errorf("before any view: wait %v, want idle interval", got)
+	}
+
+	b.Viewed()
+	if !woke() {
+		t.Error("first view should wake the poll loop")
+	}
+	if got := b.nextWait(); got != time.Minute {
+		t.Errorf("after a view: wait %v, want poll interval", got)
+	}
+	b.Viewed()
+	if woke() {
+		t.Error("a view while active should not wake the poll loop")
+	}
+
+	b.lastView = time.Now().Add(-idleAfter - time.Second)
+	if got := b.nextWait(); got != 15*time.Minute {
+		t.Errorf("after idling: wait %v, want idle interval", got)
+	}
+	b.Viewed()
+	if !woke() {
+		t.Error("a view after idling should wake the poll loop")
+	}
+}
+
+func TestSnapshotVersion(t *testing.T) {
+	snap := Snapshot{Tasks: []Task{{Key: "MM-1", PR: &PR{Number: 1}}}, Updated: time.Now()}
+	v := snapshotVersion(snap)
+	snap.Updated = snap.Updated.Add(time.Minute)
+	if got := snapshotVersion(snap); got != v {
+		t.Error("version should ignore Updated")
+	}
+	snap.Tasks[0].PR = &PR{Number: 1}
+	if got := snapshotVersion(snap); got != v {
+		t.Error("version should depend on PR contents, not the pointer")
+	}
+	snap.Tasks[0].PR.CI = CIFailing
+	if got := snapshotVersion(snap); got == v {
+		t.Error("version should change when a task changes")
+	}
+}
+
+func TestIndexGzipAndVersion(t *testing.T) {
+	cfg := testConfig(t)
+	board := NewBoard(cfg)
+	h := newServer(cfg, board)
+
+	req := httptest.NewRequest("GET", "/", nil)
+	req.Host = "localhost"
+	req.Header.Set("Accept-Encoding", "gzip, deflate")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Header().Get("Content-Encoding") != "gzip" {
+		t.Fatalf("Content-Encoding = %q, want gzip", rec.Header().Get("Content-Encoding"))
+	}
+	zr, err := gzip.NewReader(rec.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, err := io.ReadAll(zr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(body), "<title>Task board</title>") {
+		t.Error("gzipped body is not the board page")
+	}
+	<-board.wake
+
+	board.lastView = time.Time{}
+	req = httptest.NewRequest("GET", "/version", nil)
+	req.Host = "localhost"
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	var v struct {
+		Version    string `json:"version"`
+		Updated    string `json:"updated"`
+		Refreshing bool   `json:"refreshing"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &v); err != nil {
+		t.Fatalf("version body %q: %v", rec.Body.String(), err)
+	}
+	if v.Updated != "" || !v.Refreshing {
+		t.Errorf("before the first refresh: %+v, want no time and refreshing", v)
+	}
+	select {
+	case <-board.wake:
+	default:
+		t.Error("a version check should count as a view")
 	}
 }

@@ -2,9 +2,12 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"log"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -16,6 +19,7 @@ type Snapshot struct {
 	OtherPRs []PRLink
 	Errors   []string
 	Updated  time.Time
+	Version  string
 }
 
 type Board struct {
@@ -23,13 +27,22 @@ type Board struct {
 
 	doneIssues    map[string]JiraIssue
 	missingIssues map[string]bool
+	cachesReset   time.Time
 
 	jiraUpdated  map[string]time.Time
 	updatedCheck time.Time
 
-	mu   sync.RWMutex
-	snap Snapshot
+	wake chan struct{}
+
+	mu       sync.RWMutex
+	snap     Snapshot
+	lastView time.Time
 }
+
+const (
+	idleAfter     = 15 * time.Minute
+	issueCacheTTL = 24 * time.Hour
+)
 
 func NewBoard(cfg *Config) *Board {
 	return &Board{
@@ -37,7 +50,33 @@ func NewBoard(cfg *Config) *Board {
 		doneIssues:    map[string]JiraIssue{},
 		missingIssues: map[string]bool{},
 		jiraUpdated:   map[string]time.Time{},
+		cachesReset:   time.Now(),
+		wake:          make(chan struct{}, 1),
 	}
+}
+
+func (b *Board) Viewed() {
+	b.mu.Lock()
+	wasIdle := b.idleLocked()
+	b.lastView = time.Now()
+	b.mu.Unlock()
+	if wasIdle {
+		select {
+		case b.wake <- struct{}{}:
+		default:
+		}
+	}
+}
+
+func (b *Board) idleLocked() bool { return time.Since(b.lastView) > idleAfter }
+
+func (b *Board) nextWait() time.Duration {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	if b.idleLocked() {
+		return b.cfg.IdlePollInterval.Duration
+	}
+	return b.cfg.PollInterval.Duration
 }
 
 func (b *Board) Snapshot() Snapshot {
@@ -56,14 +95,21 @@ func (b *Board) Task(key string) (Task, bool) {
 }
 
 func (b *Board) Run(ctx context.Context) {
-	ticker := time.NewTicker(b.cfg.PollInterval.Duration)
-	defer ticker.Stop()
 	for {
 		b.refresh(ctx)
+		// A view during the refresh is already served by it.
+		select {
+		case <-b.wake:
+		default:
+		}
+		timer := time.NewTimer(b.nextWait())
 		select {
 		case <-ctx.Done():
+			timer.Stop()
 			return
-		case <-ticker.C:
+		case <-timer.C:
+		case <-b.wake:
+			timer.Stop()
 		}
 	}
 }
@@ -76,8 +122,14 @@ type repoResult struct {
 }
 
 func (b *Board) refresh(ctx context.Context) {
-	ctx, cancel := context.WithTimeout(ctx, b.cfg.PollInterval.Duration)
+	ctx, cancel := context.WithTimeout(ctx, max(b.cfg.PollInterval.Duration, 2*time.Minute))
 	defer cancel()
+
+	if time.Since(b.cachesReset) > issueCacheTTL {
+		clear(b.doneIssues)
+		clear(b.missingIssues)
+		b.cachesReset = time.Now()
+	}
 
 	var (
 		wg        sync.WaitGroup
@@ -165,6 +217,7 @@ func (b *Board) refresh(ctx context.Context) {
 	}
 
 	snap := Snapshot{Tasks: buildTasks(b.cfg, s, time.Now()), Reviews: reviews, OtherPRs: otherPRs, Errors: errs, Updated: time.Now()}
+	snap.Version = snapshotVersion(snap)
 	for _, e := range errs {
 		log.Print(e)
 	}
@@ -241,6 +294,9 @@ func (b *Board) unknownKeys(s sources) []string {
 // acli search cannot return the updated field, so dates come from one view call per issue. They are
 // cached, and each refresh re-fetches only the issues a search reports as changed since the last check.
 func (b *Board) fillJiraUpdated(ctx context.Context, issues map[string]JiraIssue) error {
+	if b.updatedCheck.IsZero() {
+		b.updatedCheck = time.Now()
+	}
 	var cached, missing []string
 	for key, is := range issues {
 		switch {
@@ -290,9 +346,25 @@ func (b *Board) fillJiraUpdated(ctx context.Context, issues map[string]JiraIssue
 		b.updatedCheck = checked
 	}
 
+	for key := range b.jiraUpdated {
+		if _, ok := issues[key]; !ok {
+			delete(b.jiraUpdated, key)
+		}
+	}
 	for key, is := range issues {
 		is.Updated = b.jiraUpdated[key]
 		issues[key] = is
 	}
 	return err
+}
+
+// The version leaves out Updated so a refresh that finds nothing new does not reload open pages.
+func snapshotVersion(snap Snapshot) string {
+	b, err := json.Marshal([]any{snap.Tasks, snap.Reviews, snap.OtherPRs, snap.Errors})
+	if err != nil {
+		return snap.Updated.String()
+	}
+	h := fnv.New64a()
+	h.Write(b)
+	return strconv.FormatUint(h.Sum64(), 36)
 }

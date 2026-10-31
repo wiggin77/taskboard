@@ -11,16 +11,17 @@ import (
 )
 
 type Config struct {
-	Listen        string       `json:"listen"`
-	AllowedHosts  []string     `json:"allowed_hosts"`
-	PollInterval  Duration     `json:"poll_interval"`
-	ProjectKeys   []string     `json:"project_keys"`
-	MergedPRLimit int          `json:"merged_pr_limit"`
-	DoneDays      int          `json:"done_days"`
-	SSHHost       string       `json:"ssh_host"`
-	AttachCommand []string     `json:"attach_command"`
-	Jira          JiraConfig   `json:"jira"`
-	Repos         []RepoConfig `json:"repos"`
+	Listen           string       `json:"listen"`
+	AllowedHosts     []string     `json:"allowed_hosts"`
+	PollInterval     Duration     `json:"poll_interval"`
+	IdlePollInterval Duration     `json:"idle_poll_interval"`
+	ProjectKeys      []string     `json:"project_keys"`
+	MergedPRLimit    int          `json:"merged_pr_limit"`
+	DoneDays         int          `json:"done_days"`
+	SSHHost          string       `json:"ssh_host"`
+	AttachCommand    []string     `json:"attach_command"`
+	Jira             JiraConfig   `json:"jira"`
+	Repos            []RepoConfig `json:"repos"`
 
 	keyRE *regexp.Regexp
 }
@@ -57,10 +58,11 @@ func LoadConfig(path string) (*Config, error) {
 		return nil, err
 	}
 	cfg := &Config{
-		Listen:        "127.0.0.1:8484",
-		PollInterval:  Duration{time.Minute},
-		MergedPRLimit: 20,
-		DoneDays:      30,
+		Listen:           "127.0.0.1:8484",
+		PollInterval:     Duration{2 * time.Minute},
+		IdlePollInterval: Duration{15 * time.Minute},
+		MergedPRLimit:    20,
+		DoneDays:         30,
 		Jira: JiraConfig{
 			JQL: "assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC",
 		},
@@ -99,6 +101,9 @@ func (c *Config) validate() error {
 	}
 	if c.PollInterval.Duration < 10*time.Second {
 		return errors.New("poll_interval must be at least 10s")
+	}
+	if c.IdlePollInterval.Duration < c.PollInterval.Duration {
+		return errors.New("idle_poll_interval must be at least poll_interval")
 	}
 
 	quoted := make([]string, len(c.ProjectKeys))
