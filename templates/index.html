@@ -51,6 +51,9 @@ a:hover,button.link:hover{text-decoration:underline}
 .tone-active{--tone:var(--active)}
 .tone-idle{--tone:var(--muted)}
 .empty{color:var(--muted)}
+.age{color:var(--muted)}
+.age-stale{color:var(--needs)}
+.age-old{color:var(--fail)}
 @media (max-width:40rem){
   .legend{display:none}
   .task{grid-template-columns:minmax(0,1fr)}
@@ -71,12 +74,13 @@ a:hover,button.link:hover{text-decoration:underline}
 </div>
 {{end}}
 
-{{if and (not .Groups) (not .Updated.IsZero)}}
+{{if and (not .Groups) (not .PRSections) (not .Updated.IsZero)}}
 <p class="empty">No tasks yet. Check jira.jql, project_keys and repos in your config.</p>
 {{end}}
 
 {{$stations := .Stations}}
 {{$canAttach := .CanAttach}}
+{{if .PRsFirst}}{{template "prsections" .PRSections}}{{end}}
 {{range $i, $g := .Groups}}
 <section>
   {{if eq .Name "Done"}}<details><summary>{{.Name}} <span class="count">{{len .Tasks}}</span></summary>
@@ -103,12 +107,14 @@ a:hover,button.link:hover{text-decoration:underline}
           <button class="link" type="button" data-copy="{{.AttachCmd}}">Copy session command</button>
           {{if $canAttach}}<button class="link" type="button" data-attach="{{.Key}}">Open session</button>{{end}}
         {{end}}
+        {{template "updated" .Updated}}
       </div>
     </li>
   {{end}}
   </ul>
   {{if eq .Name "Done"}}</details>{{end}}
 </section>
+{{if and (eq $i 0) (not $.PRsFirst)}}{{template "prsections" $.PRSections}}{{end}}
 {{end}}
 
 <script>

@@ -2,16 +2,20 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
 )
 
 type Snapshot struct {
-	Tasks   []Task
-	Errors  []string
-	Updated time.Time
+	Tasks    []Task
+	Reviews  []PRLink
+	OtherPRs []PRLink
+	Errors   []string
+	Updated  time.Time
 }
 
 type Board struct {
@@ -19,12 +23,15 @@ type Board struct {
 
 	doneIssues map[string]JiraIssue
 
+	jiraUpdated  map[string]time.Time
+	updatedCheck time.Time
+
 	mu   sync.RWMutex
 	snap Snapshot
 }
 
 func NewBoard(cfg *Config) *Board {
-	return &Board{cfg: cfg, doneIssues: map[string]JiraIssue{}}
+	return &Board{cfg: cfg, doneIssues: map[string]JiraIssue{}, jiraUpdated: map[string]time.Time{}}
 }
 
 func (b *Board) Snapshot() Snapshot {
@@ -67,13 +74,16 @@ func (b *Board) refresh(ctx context.Context) {
 	defer cancel()
 
 	var (
-		wg       sync.WaitGroup
-		issues   []JiraIssue
-		jiraErr  error
-		sessions []Session
-		repos    = make([]repoResult, len(b.cfg.Repos))
+		wg        sync.WaitGroup
+		issues    []JiraIssue
+		jiraErr   error
+		sessions  []Session
+		reviews   []PRLink
+		otherPRs  []PRLink
+		prLinkErr error
+		repos     = make([]repoResult, len(b.cfg.Repos))
 	)
-	wg.Add(2 + len(b.cfg.Repos))
+	wg.Add(3 + len(b.cfg.Repos))
 	go func() {
 		defer wg.Done()
 		issues, jiraErr = jiraSearch(ctx, b.cfg.Jira.JQL)
@@ -81,6 +91,10 @@ func (b *Board) refresh(ctx context.Context) {
 	go func() {
 		defer wg.Done()
 		sessions, _ = listSessions(ctx, b.cfg)
+	}()
+	go func() {
+		defer wg.Done()
+		reviews, otherPRs, prLinkErr = listPRLinks(ctx, b.cfg)
 	}()
 	for i, repo := range b.cfg.Repos {
 		go func() {
@@ -94,6 +108,9 @@ func (b *Board) refresh(ctx context.Context) {
 	s := sources{issues: map[string]JiraIssue{}, sessions: sessions}
 	if jiraErr != nil {
 		errs = append(errs, "Jira search: "+jiraErr.Error())
+	}
+	if prLinkErr != nil {
+		errs = append(errs, "GitHub search: "+prLinkErr.Error())
 	}
 	for _, is := range issues {
 		s.issues[is.Key] = is
@@ -123,7 +140,11 @@ func (b *Board) refresh(ctx context.Context) {
 		}
 	}
 
-	snap := Snapshot{Tasks: buildTasks(b.cfg, s), Errors: errs, Updated: time.Now()}
+	if err := b.fillJiraUpdated(ctx, s.issues); err != nil {
+		errs = append(errs, "Jira updated dates: "+err.Error())
+	}
+
+	snap := Snapshot{Tasks: buildTasks(b.cfg, s), Reviews: reviews, OtherPRs: otherPRs, Errors: errs, Updated: time.Now()}
 	for _, e := range errs {
 		log.Print(e)
 	}
@@ -181,4 +202,63 @@ func (b *Board) unknownKeys(s sources) []string {
 		add(sess.Key)
 	}
 	return keys
+}
+
+// acli search cannot return the updated field, so dates come from one view call per issue. They are
+// cached, and each refresh re-fetches only the issues a search reports as changed since the last check.
+func (b *Board) fillJiraUpdated(ctx context.Context, issues map[string]JiraIssue) error {
+	var cached, missing []string
+	for key, is := range issues {
+		switch {
+		case !is.Updated.IsZero():
+			b.jiraUpdated[key] = is.Updated
+		case b.jiraUpdated[key].IsZero():
+			missing = append(missing, key)
+		default:
+			cached = append(cached, key)
+		}
+	}
+
+	var searchErr error
+	checked := time.Now()
+	if len(cached) > 0 {
+		mins := int(checked.Sub(b.updatedCheck).Minutes()) + 2
+		var changed []JiraIssue
+		changed, searchErr = jiraSearch(ctx, fmt.Sprintf("key in (%s) AND updated >= -%dm", strings.Join(cached, ","), mins))
+		for _, is := range changed {
+			missing = append(missing, is.Key)
+		}
+	}
+
+	fetched := make([]time.Time, len(missing))
+	errs := make([]error, len(missing))
+	sem := make(chan struct{}, 8)
+	var wg sync.WaitGroup
+	for i, key := range missing {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			var is JiraIssue
+			is, _, errs[i] = jiraGet(ctx, key)
+			fetched[i] = is.Updated
+		}()
+	}
+	wg.Wait()
+	for i, key := range missing {
+		if !fetched[i].IsZero() {
+			b.jiraUpdated[key] = fetched[i]
+		}
+	}
+	err := errors.Join(append(errs, searchErr)...)
+	if err == nil {
+		b.updatedCheck = checked
+	}
+
+	for key, is := range issues {
+		is.Updated = b.jiraUpdated[key]
+		issues[key] = is
+	}
+	return err
 }

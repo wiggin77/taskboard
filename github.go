@@ -3,7 +3,9 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"sort"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -118,4 +120,140 @@ func rollupCI(checks []ghCheck) CIState {
 		return CIPending
 	}
 	return CIPassing
+}
+
+// Declared in display order; sorting relies on it.
+type Role int
+
+const (
+	RoleRequested Role = iota
+	RoleAuthor
+	RoleReviewed
+)
+
+type PRLink struct {
+	Repo      string
+	Number    int
+	Title     string
+	URL       string
+	Author    string
+	Draft     bool
+	Role      Role
+	UpdatedAt time.Time
+}
+
+func (p PRLink) Meta() string {
+	var parts []string
+	if p.Role != RoleAuthor {
+		parts = append(parts, "by "+p.Author)
+	}
+	if p.Draft {
+		parts = append(parts, "draft")
+	}
+	return strings.Join(parts, ", ")
+}
+
+func (p PRLink) StageLabel() string {
+	switch p.Role {
+	case RoleRequested:
+		return "Review requested"
+	case RoleAuthor:
+		return "Your PR"
+	}
+	return "Reviewed, waiting on author"
+}
+
+func (p PRLink) Tone() string {
+	if p.Role == RoleRequested {
+		return "needs"
+	}
+	return "active"
+}
+
+type ghSearchPR struct {
+	Repository struct {
+		NameWithOwner string `json:"nameWithOwner"`
+	} `json:"repository"`
+	Number int    `json:"number"`
+	Title  string `json:"title"`
+	URL    string `json:"url"`
+	Author struct {
+		Login string `json:"login"`
+	} `json:"author"`
+	IsDraft   bool      `json:"isDraft"`
+	UpdatedAt time.Time `json:"updatedAt"`
+}
+
+func listPRLinks(ctx context.Context, cfg *Config) (reviews, others []PRLink, err error) {
+	var found [3][]ghSearchPR
+	// GitHub drops a review request once you submit a review, so reviewed-by covers PRs you have already looked at.
+	queries := [3][]string{
+		RoleRequested: {"review-requested:@me"},
+		RoleAuthor:    {"author:@me"},
+		RoleReviewed:  {"reviewed-by:@me", "-author:@me"},
+	}
+	for role, q := range queries {
+		if found[role], err = searchPRs(ctx, q...); err != nil {
+			return nil, nil, err
+		}
+	}
+	reviews, others = splitPRLinks(cfg, mergePRLinks(found))
+	return reviews, others, nil
+}
+
+func searchPRs(ctx context.Context, query ...string) ([]ghSearchPR, error) {
+	args := []string{"search", "prs", "--state", "open", "--limit", "100",
+		"--json", "repository,number,title,url,author,isDraft,updatedAt", "--"}
+	out, err := runCmd(ctx, "", "gh", append(args, query...)...)
+	if err != nil {
+		return nil, err
+	}
+	var raw []ghSearchPR
+	if err := json.Unmarshal(out, &raw); err != nil {
+		return nil, err
+	}
+	return raw, nil
+}
+
+func mergePRLinks(found [3][]ghSearchPR) []PRLink {
+	seen := map[string]bool{}
+	var links []PRLink
+	for role, prs := range found {
+		for _, r := range prs {
+			if seen[r.URL] {
+				continue
+			}
+			seen[r.URL] = true
+			links = append(links, PRLink{
+				Repo:      r.Repository.NameWithOwner,
+				Number:    r.Number,
+				Title:     r.Title,
+				URL:       r.URL,
+				Author:    r.Author.Login,
+				Draft:     r.IsDraft,
+				Role:      Role(role),
+				UpdatedAt: r.UpdatedAt,
+			})
+		}
+	}
+	sort.SliceStable(links, func(i, j int) bool {
+		if links[i].Role != links[j].Role {
+			return links[i].Role < links[j].Role
+		}
+		return links[i].UpdatedAt.Before(links[j].UpdatedAt)
+	})
+	return links
+}
+
+// Authored PRs in configured repos are left out because they already appear as tasks.
+func splitPRLinks(cfg *Config, links []PRLink) (reviews, others []PRLink) {
+	for _, l := range links {
+		switch {
+		case !cfg.hasRepo(l.Repo):
+			others = append(others, l)
+		case l.Role != RoleAuthor:
+			reviews = append(reviews, l)
+		}
+	}
+	return reviews, others
 }

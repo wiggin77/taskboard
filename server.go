@@ -16,7 +16,33 @@ import (
 //go:embed templates/*.html
 var templateFS embed.FS
 
-var templates = template.Must(template.ParseFS(templateFS, "templates/*.html"))
+var templates = template.Must(template.New("").Funcs(template.FuncMap{
+	"ageTone":   func(t time.Time) string { return ageTone(t, time.Now()) },
+	"dateLabel": func(t time.Time) string { return dateLabel(t, time.Now()) },
+}).ParseFS(templateFS, "templates/*.html"))
+
+func ageTone(t, now time.Time) string {
+	switch age := now.Sub(t); {
+	case age > 7*24*time.Hour:
+		return "old"
+	case age > 2*24*time.Hour:
+		return "stale"
+	}
+	return "fresh"
+}
+
+func dateLabel(t, now time.Time) string {
+	t = t.In(now.Location())
+	ty, tm, td := t.Date()
+	ny, nm, nd := now.Date()
+	switch {
+	case ty == ny && tm == nm && td == nd:
+		return "today " + t.Format("15:04")
+	case ty == ny:
+		return t.Format("Jan 2")
+	}
+	return t.Format("Jan 2, 2006")
+}
 
 type server struct {
 	cfg   *Config
@@ -28,8 +54,15 @@ type group struct {
 	Tasks []Task
 }
 
+type prSection struct {
+	Name string
+	PRs  []PRLink
+}
+
 type indexData struct {
 	Groups         []group
+	PRSections     []prSection
+	PRsFirst       bool
 	Errors         []string
 	Updated        time.Time
 	RefreshSeconds int
@@ -85,6 +118,12 @@ func (s *server) index(w http.ResponseWriter, r *http.Request) {
 			data.Groups = append(data.Groups, group{Name: name, Tasks: tasks})
 		}
 	}
+	for _, sec := range []prSection{{"Reviews", snap.Reviews}, {"Other repos", snap.OtherPRs}} {
+		if len(sec.PRs) > 0 {
+			data.PRSections = append(data.PRSections, sec)
+		}
+	}
+	data.PRsFirst = len(data.Groups) == 0 || data.Groups[0].Name != groupNeedsYou
 	render(w, "index.html", data)
 }
 

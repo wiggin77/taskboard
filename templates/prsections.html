@@ -1,0 +1,22 @@
+{{define "prsections"}}{{range .}}
+<section>
+  <h2>{{.Name}} <span class="count">{{len .PRs}}</span></h2>
+  <ul class="tasks">
+  {{range .PRs}}
+    <li class="task tone-{{.Tone}}">
+      <div class="title">
+        <p>{{.Title}}</p>
+      </div>
+      <div class="where">
+        <p class="stage">{{.StageLabel}}</p>
+      </div>
+      <div class="links">
+        <a href="{{.URL}}" target="_blank" rel="noopener">{{.Repo}}#{{.Number}}</a>
+        {{with .Meta}}<span class="meta">{{.}}</span>{{end}}
+        {{template "updated" .UpdatedAt}}
+      </div>
+    </li>
+  {{end}}
+  </ul>
+</section>
+{{end}}{{end}}

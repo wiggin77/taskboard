@@ -2,6 +2,7 @@ package main
 
 import (
 	"sort"
+	"time"
 )
 
 type Stage int
@@ -56,6 +57,7 @@ type Task struct {
 	JiraURL    string
 	JiraStatus string
 	JiraDone   bool
+	Updated    time.Time
 	Stage      Stage
 	PR         *PR
 	Plan       *Plan
@@ -157,6 +159,7 @@ func buildTasks(cfg *Config, s sources) []Task {
 		t.Summary = is.Summary
 		t.JiraStatus = is.Status
 		t.JiraDone = is.Done
+		t.Updated = is.Updated
 	}
 	for i := range s.prs {
 		pr := &s.prs[i]
@@ -195,14 +198,29 @@ func buildTasks(cfg *Config, s sources) []Task {
 		if t.Summary == "" && t.PR != nil {
 			t.Summary = t.PR.Title
 		}
+		if t.PR != nil && t.PR.UpdatedAt.After(t.Updated) {
+			t.Updated = t.PR.UpdatedAt
+		}
 		t.Stage = stageFor(t)
 		tasks = append(tasks, *t)
 	}
 	sort.Slice(tasks, func(i, j int) bool {
-		if tasks[i].Stage != tasks[j].Stage {
-			return tasks[i].Stage < tasks[j].Stage
+		a, b := tasks[i], tasks[j]
+		if a.Stage != b.Stage {
+			return a.Stage < b.Stage
 		}
-		return tasks[i].Key < tasks[j].Key
+		if !a.Updated.Equal(b.Updated) {
+			return olderFirst(a.Updated, b.Updated)
+		}
+		return a.Key < b.Key
 	})
 	return tasks
+}
+
+// Unknown (zero) times sort last.
+func olderFirst(a, b time.Time) bool {
+	if a.IsZero() || b.IsZero() {
+		return b.IsZero() && !a.IsZero()
+	}
+	return a.Before(b)
 }

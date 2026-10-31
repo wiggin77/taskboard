@@ -119,3 +119,12 @@ func (c *Config) findKey(s string) string {
 func (c *Config) issueURL(key string) string {
 	return c.Jira.BaseURL + "/browse/" + key
 }
+
+func (c *Config) hasRepo(name string) bool {
+	for _, r := range c.Repos {
+		if strings.EqualFold(r.Name, name) {
+			return true
+		}
+	}
+	return false
+}

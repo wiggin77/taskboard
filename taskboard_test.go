@@ -1,8 +1,11 @@
 package main
 
 import (
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"testing"
 	"time"
 )
@@ -221,5 +224,115 @@ func TestDecodeIssues(t *testing.T) {
 		if issues[i] != want[i] {
 			t.Errorf("issues[%d] = %+v, want %+v", i, issues[i], want[i])
 		}
+	}
+}
+
+func TestMergePRLinks(t *testing.T) {
+	pr := func(repo string, n, updated int) ghSearchPR {
+		var r ghSearchPR
+		r.Repository.NameWithOwner = repo
+		r.Number = n
+		r.URL = fmt.Sprintf("https://github.com/%s/pull/%d", repo, n)
+		r.UpdatedAt = time.Unix(int64(updated), 0)
+		return r
+	}
+	cfg := testConfig(t)
+	cfg.Repos = []RepoConfig{{Name: "mattermost/mattermost"}}
+	found := [3][]ghSearchPR{
+		RoleRequested: {pr("mattermost/mattermost", 1, 1), pr("other/repo", 2, 3)},
+		RoleAuthor:    {pr("mattermost/mattermost", 3, 9), pr("Other/Repo", 4, 2)},
+		RoleReviewed:  {pr("mattermost/mattermost", 1, 1), pr("Mattermost/Mattermost", 5, 5), pr("other/repo", 6, 4), pr("mattermost/mattermost", 7, 2)},
+	}
+	reviews, others := splitPRLinks(cfg, mergePRLinks(found))
+
+	type want struct {
+		n    int
+		role Role
+	}
+	check := func(name string, got []PRLink, want []want) {
+		t.Helper()
+		if len(got) != len(want) {
+			t.Fatalf("%s: got %d links, want %d", name, len(got), len(want))
+		}
+		for i, w := range want {
+			if got[i].Number != w.n || got[i].Role != w.role {
+				t.Errorf("%s[%d] = #%d role %d, want #%d role %d", name, i, got[i].Number, got[i].Role, w.n, w.role)
+			}
+		}
+	}
+	check("reviews", reviews, []want{{1, RoleRequested}, {7, RoleReviewed}, {5, RoleReviewed}})
+	check("others", others, []want{{2, RoleRequested}, {4, RoleAuthor}, {6, RoleReviewed}})
+}
+
+func TestTaskOrderOldestFirst(t *testing.T) {
+	now := time.Now()
+	ago := func(h int) time.Time { return now.Add(-time.Duration(h) * time.Hour) }
+	tasks := buildTasks(testConfig(t), sources{
+		issues: map[string]JiraIssue{
+			"MM-1": {Key: "MM-1", Updated: ago(1)},
+			"MM-2": {Key: "MM-2", Updated: ago(48)},
+			"MM-3": {Key: "MM-3"},
+			"MM-4": {Key: "MM-4", Updated: ago(100)},
+			"MM-5": {Key: "MM-5", Updated: ago(2)},
+		},
+		prs: []PR{
+			{Key: "MM-4", State: "OPEN", UpdatedAt: ago(3)},
+			{Key: "MM-5", State: "OPEN", UpdatedAt: ago(200)},
+		},
+	})
+	var got []string
+	for _, task := range tasks {
+		got = append(got, task.Key)
+	}
+	want := []string{"MM-4", "MM-5", "MM-2", "MM-1", "MM-3"}
+	if !slices.Equal(got, want) {
+		t.Errorf("order = %v, want %v", got, want)
+	}
+	if !tasks[0].Updated.Equal(ago(3)) {
+		t.Errorf("MM-4 updated = %v, want the newer PR time", tasks[0].Updated)
+	}
+}
+
+func TestAgeTone(t *testing.T) {
+	now := time.Now()
+	tests := map[time.Duration]string{
+		time.Hour:          "fresh",
+		47 * time.Hour:     "fresh",
+		49 * time.Hour:     "stale",
+		7 * 24 * time.Hour: "stale",
+		8 * 24 * time.Hour: "old",
+	}
+	for age, want := range tests {
+		if got := ageTone(now.Add(-age), now); got != want {
+			t.Errorf("ageTone(%v) = %s, want %s", age, got, want)
+		}
+	}
+}
+
+func TestDateLabel(t *testing.T) {
+	now := time.Date(2026, 10, 31, 15, 0, 0, 0, time.UTC)
+	tests := []struct {
+		t    time.Time
+		want string
+	}{
+		{time.Date(2026, 10, 31, 9, 5, 0, 0, time.UTC), "today 09:05"},
+		{time.Date(2026, 10, 30, 23, 0, 0, 0, time.UTC), "Oct 30"},
+		{time.Date(2024, 8, 6, 12, 0, 0, 0, time.UTC), "Aug 6, 2024"},
+	}
+	for _, tt := range tests {
+		if got := dateLabel(tt.t, now); got != tt.want {
+			t.Errorf("dateLabel(%v) = %q, want %q", tt.t, got, tt.want)
+		}
+	}
+}
+
+func TestJiraUpdatedParse(t *testing.T) {
+	var raw jiraIssueJSON
+	if err := json.Unmarshal([]byte(`{"key":"MM-1","fields":{"updated":"2026-10-27T06:51:35.697-0700"}}`), &raw); err != nil {
+		t.Fatal(err)
+	}
+	want := time.Date(2026, 10, 27, 13, 51, 35, 697e6, time.UTC)
+	if got := raw.issue().Updated; !got.Equal(want) {
+		t.Errorf("updated = %v, want %v", got, want)
 	}
 }

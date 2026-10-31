@@ -73,6 +73,9 @@ If you bind to a LAN or Tailscale address instead, requests by IP work as is. Ad
 ## Notes
 
 - Jira is read through `acli`, so taskboard uses whatever account acli is logged in as. `jira.base_url` is only used to build ticket links.
+- Within each section, items are sorted by stage, then least recently updated first. A task's date is the later of its Jira ticket's and its PR's last update. Dates turn orange after 2 days and red after a week.
+- `acli` search cannot return a ticket's updated date, so the first refresh fetches each ticket with `acli jira workitem view` (about 30s for 100 tickets). Later refreshes only re-fetch tickets that a search reports as changed since the last check.
 - Jira tickets in a done status category are cached for the life of the process, since merged PRs are rechecked every poll.
+- The Reviews section lists open PRs in the configured repos where your review is requested, then ones you have already reviewed (GitHub drops the request once you submit a review). Other repos lists the same for every repo not in `repos`, plus open PRs you authored there. Neither section is joined on Jira keys.
 - `merged_pr_limit` controls how many recent merged PRs per repo are checked for the "merged, update Jira" stage.
 - Source failures show in a banner at the top of the page and in the log; the rest of the board still renders.

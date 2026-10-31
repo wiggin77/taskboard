@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"strings"
+	"time"
 )
 
 type JiraIssue struct {
@@ -11,12 +12,14 @@ type JiraIssue struct {
 	Summary string
 	Status  string
 	Done    bool
+	Updated time.Time
 }
 
 type jiraIssueJSON struct {
 	Key    string `json:"key"`
 	Fields struct {
 		Summary string `json:"summary"`
+		Updated string `json:"updated"`
 		Status  struct {
 			Name           string `json:"name"`
 			StatusCategory struct {
@@ -27,13 +30,17 @@ type jiraIssueJSON struct {
 }
 
 func (j jiraIssueJSON) issue() JiraIssue {
+	updated, _ := time.Parse(jiraTimeLayout, j.Fields.Updated)
 	return JiraIssue{
 		Key:     j.Key,
 		Summary: j.Fields.Summary,
 		Status:  j.Fields.Status.Name,
 		Done:    j.Fields.Status.StatusCategory.Key == "done",
+		Updated: updated,
 	}
 }
+
+const jiraTimeLayout = "2006-01-02T15:04:05.000-0700"
 
 func jiraSearch(ctx context.Context, jql string) ([]JiraIssue, error) {
 	out, err := runCmd(ctx, "", "acli", "jira", "workitem", "search",
@@ -59,7 +66,7 @@ func decodeIssues(out []byte) ([]JiraIssue, error) {
 // jiraGet returns ok=false when the issue does not exist or is not visible to the user.
 func jiraGet(ctx context.Context, key string) (JiraIssue, bool, error) {
 	out, err := runCmd(ctx, "", "acli", "jira", "workitem", "view", key,
-		"--fields", "summary,status", "--json")
+		"--fields", "summary,status,updated", "--json")
 	if err != nil {
 		if isNotFound(err) {
 			return JiraIssue{}, false, nil
