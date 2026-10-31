@@ -35,7 +35,7 @@ func main() {
 
 	srv := &http.Server{
 		Addr:              cfg.Listen,
-		Handler:           newServer(cfg, board),
+		Handler:           newServer(board, *configPath),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 	go func() {

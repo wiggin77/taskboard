@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Task board settings</title>
+<style>
+{{template "tokens"}}
+body{padding-top:1.5rem;max-width:48rem}
+a{color:var(--link);text-decoration:none}
+a:hover{text-decoration:underline}
+:focus-visible{outline:2px solid var(--link);outline-offset:2px;border-radius:4px}
+header{display:flex;align-items:baseline;justify-content:space-between;gap:1rem;margin-bottom:.25rem}
+h1{font-size:1.25rem;font-weight:700;letter-spacing:-.02em;margin:0}
+.path{color:var(--muted);font-size:.8125rem;margin:0 0 1.5rem;overflow-wrap:anywhere}
+fieldset{margin:0 0 1.25rem;padding:1rem 1.1rem 1.1rem;background:var(--surface);border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow)}
+legend{float:left;width:100%;margin:0 0 .75rem;padding:0;font-size:.9375rem;font-weight:650}
+label{display:block;margin-top:.9rem;font-size:.8125rem;font-weight:600}
+legend+label,legend+.hint+label{margin-top:0}
+.hint{display:block;margin-top:.2rem;color:var(--muted);font-size:.75rem;font-weight:400}
+fieldset>.hint{margin:-.5rem 0 .75rem}
+input,textarea{display:block;width:100%;margin-top:.3rem;padding:.4rem .55rem;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--ink);
+  font:13.5px/1.45 ui-monospace,"JetBrains Mono","SF Mono",Menlo,monospace}
+textarea{resize:vertical;min-height:4.5rem}
+input:focus,textarea:focus{outline:2px solid var(--link);outline-offset:-1px}
+.row3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:0 .75rem;align-items:end}
+.row2{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 .75rem;align-items:end}
+.repo{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(0,1.6fr) minmax(0,.7fr) auto;gap:.5rem;align-items:end;padding:.6rem 0;border-top:1px solid var(--line)}
+.repo:first-of-type{border-top:0;padding-top:0}
+.repo label{margin-top:0}
+button{padding:.35rem .85rem;border:1px solid var(--line);border-radius:999px;background:var(--surface);color:var(--ink);
+  font:inherit;font-size:.8125rem;font-weight:550;cursor:pointer;transition:border-color .12s}
+button:hover:not(:disabled){border-color:var(--muted)}
+button:disabled{color:var(--muted);cursor:default}
+button.primary{background:var(--link);border-color:var(--link);color:var(--surface)}
+button.remove{padding:.35rem .6rem;margin-bottom:.1rem}
+.add{margin-top:.75rem}
+.actions{position:sticky;bottom:0;display:flex;align-items:center;gap:1rem;padding:.9rem 0;background:color-mix(in srgb,var(--bg) 85%,transparent);
+  -webkit-backdrop-filter:blur(12px);backdrop-filter:blur(12px)}
+#status{margin:0;font-size:.8125rem;white-space:pre-wrap}
+#status.error{color:var(--fail)}
+#status.ok{color:var(--ok)}
+@media (max-width:40rem){
+  .row3,.row2{grid-template-columns:minmax(0,1fr)}
+  .repo{grid-template-columns:minmax(0,1fr)}
+}
+</style>
+</head>
+<body>
+<header>
+  <h1>Settings</h1>
+  <a href="/">Back to board</a>
+</header>
+<p class="path">Saved to {{.ConfigPath}}. Changes apply right away, except the listen address.</p>
+
+{{with .Config}}
+<form id="settings">
+<fieldset>
+  <legend>Jira</legend>
+  <label>Base URL<input name="jira.base_url" type="url" required value="{{.Jira.BaseURL}}"></label>
+  <label>JQL<span class="hint">Tickets to show besides those found through PRs, worktrees and sessions.</span>
+    <textarea name="jira.jql" rows="2">{{.Jira.JQL}}</textarea></label>
+  <label>Project keys<span class="hint">Comma separated. Used to find keys in branch names, PR titles, plan files and tmux windows.</span>
+    <input name="project_keys" required value="{{join .ProjectKeys ", "}}"></label>
+  <div class="row2">
+    <label>Done window, days<input name="done_days" type="number" min="1" required value="{{.DoneDays}}"></label>
+    <label>Merged PRs per repo<input name="merged_pr_limit" type="number" min="1" required value="{{.MergedPRLimit}}"></label>
+  </div>
+</fieldset>
+
+<fieldset id="repos">
+  <legend>Repos</legend>
+  <span class="hint">Local path is optional; without it the repo's worktrees and plans are not shown.</span>
+  {{range .Repos}}{{template "repo" .}}{{end}}
+  <button class="add" type="button" id="add-repo">Add repo</button>
+</fieldset>
+
+<fieldset>
+  <legend>Polling</legend>
+  <span class="hint">Durations like 90s, 2m or 1h.</span>
+  <div class="row3">
+    <label>Poll interval<span class="hint">While the board is being viewed.</span><input name="poll_interval" required value="{{.PollInterval}}"></label>
+    <label>Idle poll interval<span class="hint">After 15 minutes unviewed. 0 means none.</span><input name="idle_poll_interval" value="{{.IdlePollInterval}}"></label>
+    <label>Refresh timeout<span class="hint">A slower refresh is cut short.</span><input name="refresh_timeout" required value="{{.RefreshTimeout}}"></label>
+  </div>
+</fieldset>
+
+<fieldset>
+  <legend>Sessions</legend>
+  <label>SSH host<span class="hint">Prefixed to the copied session command. Leave empty for a plain tmux attach.</span>
+    <input name="ssh_host" value="{{.SSHHost}}"></label>
+  <label>Attach command<span class="hint">One argument per line; {target} becomes the tmux window. Leave empty to hide Open session.</span>
+    <textarea name="attach_command" rows="4">{{join .AttachCommand "\n"}}</textarea></label>
+</fieldset>
+
+<fieldset>
+  <legend>Server</legend>
+  <label>Listen address<span class="hint">Takes effect after a restart. Running on {{$.Listen}}.</span>
+    <input name="listen" required value="{{.Listen}}"></label>
+  <label>Allowed hosts<span class="hint">One per line. Hostnames other devices use to reach the board.</span>
+    <textarea name="allowed_hosts" rows="2">{{join .AllowedHosts "\n"}}</textarea></label>
+</fieldset>
+
+<div class="actions">
+  <button class="primary" type="submit">Save</button>
+  <p id="status" role="status"></p>
+</div>
+</form>
+{{end}}
+
+<template id="repo-row">{{template "repo" .NewRepo}}</template>
+
+<script>
+const form = document.getElementById("settings");
+const status = document.getElementById("status");
+const repos = document.getElementById("repos");
+const val = name => form.elements[name].value.trim();
+const lines = name => val(name).split("\n").map(s => s.trim()).filter(Boolean);
+document.getElementById("add-repo").addEventListener("click", e => {
+  e.target.before(document.getElementById("repo-row").content.cloneNode(true));
+  e.target.previousElementSibling.querySelector("input").focus();
+});
+repos.addEventListener("click", e => {
+  if (e.target.closest(".remove")) e.target.closest(".repo").remove();
+});
+form.addEventListener("submit", async e => {
+  e.preventDefault();
+  const cfg = {
+    listen: val("listen"),
+    allowed_hosts: lines("allowed_hosts"),
+    poll_interval: val("poll_interval"),
+    idle_poll_interval: val("idle_poll_interval") || "0s",
+    refresh_timeout: val("refresh_timeout"),
+    project_keys: val("project_keys").split(/[\s,]+/).filter(Boolean),
+    merged_pr_limit: Number(val("merged_pr_limit")),
+    done_days: Number(val("done_days")),
+    ssh_host: val("ssh_host"),
+    attach_command: lines("attach_command"),
+    jira: { base_url: val("jira.base_url"), jql: val("jira.jql") },
+    repos: [...repos.querySelectorAll(".repo")].map(row => {
+      const f = n => row.querySelector(`[data-field=${n}]`).value.trim();
+      return { name: f("name"), path: f("path"), plans_dir: f("plans_dir") };
+    }).filter(r => r.name || r.path),
+  };
+  const button = form.querySelector("[type=submit]");
+  button.disabled = true;
+  status.className = "";
+  status.textContent = "Saving";
+  try {
+    const res = await fetch("/settings", {
+      method: "POST",
+      headers: { "X-Taskboard": "1", "Content-Type": "application/json" },
+      body: JSON.stringify(cfg),
+    });
+    if (!res.ok) throw new Error((await res.text()).trim() || res.statusText);
+    const { restart } = await res.json();
+    status.className = "ok";
+    status.textContent = "Saved. The board is refreshing." + (restart ? " Restart taskboard to use the new listen address." : "");
+  } catch (err) {
+    status.className = "error";
+    status.textContent = "Not saved: " + err.message;
+  } finally {
+    button.disabled = false;
+  }
+});
+</script>
+</body>
+</html>
+
+{{define "repo"}}<div class="repo">
+  <label>Name<input data-field="name" placeholder="owner/repo" value="{{.Name}}"></label>
+  <label>Local path<input data-field="path" placeholder="/path/to/checkout" value="{{.Path}}"></label>
+  <label>Plans dir<input data-field="plans_dir" placeholder="plans" value="{{.PlansDir}}"></label>
+  <button class="remove" type="button" aria-label="Remove repo">Remove</button>
+</div>{{end}}

@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -23,7 +24,7 @@ type Snapshot struct {
 }
 
 type Board struct {
-	cfg *Config
+	cfg atomic.Pointer[Config]
 
 	doneIssues    map[string]JiraIssue
 	missingIssues map[string]bool
@@ -47,14 +48,26 @@ const (
 )
 
 func NewBoard(cfg *Config) *Board {
-	return &Board{
-		cfg:           cfg,
+	b := &Board{
 		doneIssues:    map[string]JiraIssue{},
 		missingIssues: map[string]bool{},
 		jiraUpdated:   map[string]time.Time{},
 		cachesReset:   time.Now(),
 		wake:          make(chan struct{}, 1),
 	}
+	b.cfg.Store(cfg)
+	return b
+}
+
+// Config returns the current config, which callers must treat as read-only.
+func (b *Board) Config() *Config { return b.cfg.Load() }
+
+// SetConfig always requests a refresh, even during one, since that refresh used the old config.
+func (b *Board) SetConfig(cfg *Config) {
+	b.cfg.Store(cfg)
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.requestLocked()
 }
 
 func (b *Board) Viewed() {
@@ -95,9 +108,9 @@ func (b *Board) nextWait() time.Duration {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 	if b.idleLocked() {
-		return b.cfg.IdlePollInterval.Duration
+		return b.Config().IdlePollInterval.Duration
 	}
-	return b.cfg.PollInterval.Duration
+	return b.Config().PollInterval.Duration
 }
 
 func (b *Board) Snapshot() Snapshot {
@@ -159,7 +172,8 @@ type repoResult struct {
 }
 
 func (b *Board) refresh(ctx context.Context) {
-	ctx, cancel := context.WithTimeout(ctx, b.cfg.RefreshTimeout.Duration)
+	cfg := b.Config()
+	ctx, cancel := context.WithTimeout(ctx, cfg.RefreshTimeout.Duration)
 	defer cancel()
 
 	if time.Since(b.cachesReset) > issueCacheTTL {
@@ -177,29 +191,29 @@ func (b *Board) refresh(ctx context.Context) {
 		reviews   []PRLink
 		otherPRs  []PRLink
 		prLinkErr error
-		repos     = make([]repoResult, len(b.cfg.Repos))
+		repos     = make([]repoResult, len(cfg.Repos))
 	)
-	wg.Add(3 + len(b.cfg.Repos))
+	wg.Add(3 + len(cfg.Repos))
 	go func() {
 		defer wg.Done()
-		issues, jiraErr = jiraSearch(ctx, b.cfg.Jira.JQL)
+		issues, jiraErr = jiraSearch(ctx, cfg.Jira.JQL)
 		if jiraErr != nil {
 			return
 		}
-		resolved, jiraErr = jiraSearch(ctx, fmt.Sprintf("assignee = currentUser() AND statusCategory = Done AND resolved >= -%dd", b.cfg.DoneDays))
+		resolved, jiraErr = jiraSearch(ctx, fmt.Sprintf("assignee = currentUser() AND statusCategory = Done AND resolved >= -%dd", cfg.DoneDays))
 	}()
 	go func() {
 		defer wg.Done()
-		sessions, _ = listSessions(ctx, b.cfg)
+		sessions, _ = listSessions(ctx, cfg)
 	}()
 	go func() {
 		defer wg.Done()
-		reviews, otherPRs, prLinkErr = listPRLinks(ctx, b.cfg)
+		reviews, otherPRs, prLinkErr = listPRLinks(ctx, cfg)
 	}()
-	for i, repo := range b.cfg.Repos {
+	for i, repo := range cfg.Repos {
 		go func() {
 			defer wg.Done()
-			repos[i] = b.scanRepo(ctx, repo)
+			repos[i] = scanRepo(ctx, cfg, repo)
 		}()
 	}
 	wg.Wait()
@@ -253,7 +267,7 @@ func (b *Board) refresh(ctx context.Context) {
 		errs = append(errs, "Jira updated dates: "+err.Error())
 	}
 
-	snap := Snapshot{Tasks: buildTasks(b.cfg, s, time.Now()), Reviews: reviews, OtherPRs: otherPRs, Errors: errs, Updated: time.Now()}
+	snap := Snapshot{Tasks: buildTasks(cfg, s, time.Now()), Reviews: reviews, OtherPRs: otherPRs, Errors: errs, Updated: time.Now()}
 	snap.Version = snapshotVersion(snap)
 	for _, e := range errs {
 		log.Print(e)
@@ -263,18 +277,18 @@ func (b *Board) refresh(ctx context.Context) {
 	b.mu.Unlock()
 }
 
-func (b *Board) scanRepo(ctx context.Context, repo RepoConfig) repoResult {
+func scanRepo(ctx context.Context, cfg *Config, repo RepoConfig) repoResult {
 	var r repoResult
-	open, err := listPRs(ctx, b.cfg, repo.Name, "open", 100, "")
+	open, err := listPRs(ctx, cfg, repo.Name, "open", 100, "")
 	if err != nil {
 		r.errs = append(r.errs, fmt.Sprintf("%s open PRs: %v", repo.Name, err))
 	}
-	merged, err := listPRs(ctx, b.cfg, repo.Name, "merged", b.cfg.MergedPRLimit, "")
+	merged, err := listPRs(ctx, cfg, repo.Name, "merged", cfg.MergedPRLimit, "")
 	if err != nil {
 		r.errs = append(r.errs, fmt.Sprintf("%s merged PRs: %v", repo.Name, err))
 	}
-	cutoff := time.Now().AddDate(0, 0, -b.cfg.DoneDays).Format("2006-01-02")
-	recent, err := listPRs(ctx, b.cfg, repo.Name, "merged", 100, "merged:>="+cutoff)
+	cutoff := time.Now().AddDate(0, 0, -cfg.DoneDays).Format("2006-01-02")
+	recent, err := listPRs(ctx, cfg, repo.Name, "merged", 100, "merged:>="+cutoff)
 	if err != nil {
 		r.errs = append(r.errs, fmt.Sprintf("%s recently merged PRs: %v", repo.Name, err))
 	}
@@ -292,12 +306,12 @@ func (b *Board) scanRepo(ctx context.Context, repo RepoConfig) repoResult {
 	if repo.Path == "" {
 		return r
 	}
-	r.worktrees, err = listWorktrees(ctx, b.cfg, repo)
+	r.worktrees, err = listWorktrees(ctx, cfg, repo)
 	if err != nil {
 		r.errs = append(r.errs, fmt.Sprintf("%s worktrees: %v", repo.Name, err))
 		return r
 	}
-	r.plans, err = findPlans(b.cfg, repo, r.worktrees)
+	r.plans, err = findPlans(cfg, repo, r.worktrees)
 	if err != nil {
 		r.errs = append(r.errs, fmt.Sprintf("%s plans: %v", repo.Name, err))
 	}

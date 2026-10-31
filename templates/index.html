@@ -15,9 +15,9 @@ h1{font-size:1.25rem;font-weight:700;letter-spacing:-.02em;margin:0}
 .updated::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--ok);box-shadow:0 0 0 3px color-mix(in srgb,var(--ok) 22%,transparent)}
 .updated.refreshing::before{background:var(--needs);box-shadow:0 0 0 3px color-mix(in srgb,var(--needs) 22%,transparent)}
 .status{display:flex;align-items:center;gap:.75rem}
-.refresh{padding:.25rem .75rem;border:1px solid var(--line);border-radius:999px;background:var(--surface);color:var(--ink);
+.refresh,.pill{padding:.25rem .75rem;border:1px solid var(--line);border-radius:999px;background:var(--surface);color:var(--ink);
   font:inherit;font-size:.8125rem;font-weight:550;cursor:pointer;transition:border-color .12s}
-.refresh:hover:not(:disabled){border-color:var(--muted)}
+.refresh:hover:not(:disabled),.pill:hover{border-color:var(--muted);text-decoration:none}
 .refresh:disabled{color:var(--muted);cursor:default}
 .jump{display:flex;gap:.4rem;margin-top:.8rem;overflow-x:auto;scrollbar-width:none}
 .jump::-webkit-scrollbar{display:none}
@@ -98,6 +98,7 @@ a:hover,button.link:hover{text-decoration:underline}
     <div class="status">
       <span class="updated{{if .Refreshing}} refreshing{{end}}">{{if .Updated.IsZero}}Loading. This page refreshes on its own.{{else}}Updated {{.Updated.Format "15:04"}}{{if .Refreshing}}, refreshing{{end}}{{end}}</span>
       <button class="refresh" type="button"{{if .Refreshing}} disabled{{end}}>Refresh</button>
+      {{if .Local}}<a class="pill" href="/settings">Settings</a>{{end}}
     </div>
   </div>
   {{with .Nav}}<nav class="jump" aria-label="Sections">{{range .}}<a href="#{{slug .Name}}"{{with .Tone}} class="tone-{{.}}"{{end}}>{{.Name}} <span class="count">{{.Count}}</span></a>{{end}}</nav>{{end}}

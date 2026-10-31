@@ -6,6 +6,7 @@ import (
 	"embed"
 	"encoding/json"
 	"html/template"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -23,6 +24,7 @@ var templates = template.Must(template.New("").Funcs(template.FuncMap{
 	"ageTone":   func(t time.Time) string { return ageTone(t, time.Now()) },
 	"dateLabel": func(t time.Time) string { return dateLabel(t, time.Now()) },
 	"slug":      slug,
+	"join":      strings.Join,
 }).ParseFS(templateFS, "templates/*.html"))
 
 func slug(name string) string {
@@ -53,8 +55,9 @@ func dateLabel(t, now time.Time) string {
 }
 
 type server struct {
-	cfg   *Config
-	board *Board
+	board      *Board
+	configPath string
+	listen     string
 }
 
 type group struct {
@@ -84,7 +87,15 @@ type indexData struct {
 	Version        string
 	RefreshSeconds int
 	CanAttach      bool
+	Local          bool
 	Stations       []string
+}
+
+type settingsData struct {
+	Config     *Config
+	ConfigPath string
+	Listen     string
+	NewRepo    RepoConfig
 }
 
 type planData struct {
@@ -92,14 +103,16 @@ type planData struct {
 	Content string
 }
 
-func newServer(cfg *Config, board *Board) http.Handler {
-	s := &server{cfg: cfg, board: board}
+func newServer(board *Board, configPath string) http.Handler {
+	s := &server{board: board, configPath: configPath, listen: board.Config().Listen}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", s.index)
 	mux.HandleFunc("GET /version", s.version)
 	mux.HandleFunc("GET /plan/{key}", s.plan)
 	mux.HandleFunc("POST /attach/{key}", s.attach)
 	mux.HandleFunc("POST /refresh", s.refresh)
+	mux.HandleFunc("GET /settings", s.settings)
+	mux.HandleFunc("POST /settings", s.saveSettings)
 	return s.checkHost(mux)
 }
 
@@ -111,7 +124,7 @@ func (s *server) checkHost(next http.Handler) http.Handler {
 			host = r.Host
 		}
 		host = strings.Trim(host, "[]")
-		if host != "localhost" && net.ParseIP(host) == nil && !slices.Contains(s.cfg.AllowedHosts, host) {
+		if host != "localhost" && net.ParseIP(host) == nil && !slices.Contains(s.board.Config().AllowedHosts, host) {
 			http.Error(w, "unknown host "+host+"; add it to allowed_hosts", http.StatusForbidden)
 			return
 		}
@@ -120,6 +133,7 @@ func (s *server) checkHost(next http.Handler) http.Handler {
 }
 
 func (s *server) index(w http.ResponseWriter, r *http.Request) {
+	cfg := s.board.Config()
 	s.board.Viewed()
 	snap := s.board.Snapshot()
 	byGroup := map[string][]Task{}
@@ -129,10 +143,11 @@ func (s *server) index(w http.ResponseWriter, r *http.Request) {
 	data := indexData{
 		Errors:         snap.Errors,
 		Updated:        snap.Updated,
-		RefreshSeconds: int(s.cfg.PollInterval.Seconds()),
+		RefreshSeconds: int(cfg.PollInterval.Seconds()),
 		Refreshing:     s.board.Refreshing(),
 		Version:        snap.Version,
-		CanAttach:      len(s.cfg.AttachCommand) > 0 && isLoopback(r),
+		CanAttach:      len(cfg.AttachCommand) > 0 && isLoopback(r),
+		Local:          isLoopback(r),
 		Stations:       stations,
 	}
 	for _, name := range groupOrder {
@@ -204,7 +219,8 @@ func (s *server) plan(w http.ResponseWriter, r *http.Request) {
 
 // The custom header forces a CORS preflight, which this server never answers, so other sites cannot trigger it.
 func (s *server) attach(w http.ResponseWriter, r *http.Request) {
-	if r.Header.Get("X-Taskboard") != "1" || !isLoopback(r) || len(s.cfg.AttachCommand) == 0 {
+	cfg := s.board.Config()
+	if r.Header.Get("X-Taskboard") != "1" || !isLoopback(r) || len(cfg.AttachCommand) == 0 {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
@@ -213,8 +229,8 @@ func (s *server) attach(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	args := make([]string, len(s.cfg.AttachCommand))
-	for i, a := range s.cfg.AttachCommand {
+	args := make([]string, len(cfg.AttachCommand))
+	for i, a := range cfg.AttachCommand {
 		args[i] = strings.ReplaceAll(a, "{target}", t.Session.Target)
 	}
 	cmd := exec.Command(args[0], args[1:]...)
@@ -234,6 +250,39 @@ func (s *server) refresh(w http.ResponseWriter, r *http.Request) {
 	}
 	s.board.Refresh()
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// Settings are loopback-only because attach_command runs on this machine.
+func (s *server) settings(w http.ResponseWriter, r *http.Request) {
+	if !isLoopback(r) {
+		http.Error(w, "settings can only be changed from the machine running taskboard", http.StatusForbidden)
+		return
+	}
+	render(w, r, "settings.html", settingsData{Config: s.board.Config(), ConfigPath: s.configPath, Listen: s.listen})
+}
+
+func (s *server) saveSettings(w http.ResponseWriter, r *http.Request) {
+	if r.Header.Get("X-Taskboard") != "1" || !isLoopback(r) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<20))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	cfg, err := parseConfig(body)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := SaveConfig(s.configPath, cfg); err != nil {
+		http.Error(w, "save "+s.configPath+": "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	s.board.SetConfig(cfg)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]bool{"restart": cfg.Listen != s.listen})
 }
 
 func isLoopback(r *http.Request) bool {

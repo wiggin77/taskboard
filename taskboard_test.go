@@ -8,6 +8,7 @@ import (
 	"maps"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"slices"
 	"strings"
 	"testing"
@@ -20,6 +21,7 @@ func testConfig(t *testing.T) *Config {
 		PollInterval:     Duration{time.Minute},
 		IdlePollInterval: Duration{15 * time.Minute},
 		RefreshTimeout:   Duration{5 * time.Minute},
+		MergedPRLimit:    20,
 		DoneDays:         30,
 		ProjectKeys:      []string{"MM"},
 		Jira:             JiraConfig{BaseURL: "https://example.atlassian.net/"},
@@ -201,7 +203,7 @@ func TestAttachCommand(t *testing.T) {
 func TestCheckHost(t *testing.T) {
 	cfg := testConfig(t)
 	cfg.AllowedHosts = []string{"ubuntu.tail1234.ts.net"}
-	h := (&server{cfg: cfg}).checkHost(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	h := (&server{board: NewBoard(cfg)}).checkHost(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 	cases := map[string]int{
 		"localhost:8484":             http.StatusOK,
 		"127.0.0.1:8484":             http.StatusOK,
@@ -419,7 +421,7 @@ func TestIdlePolling(t *testing.T) {
 		t.Error("a view after idling should wake the poll loop")
 	}
 
-	b.cfg.IdlePollInterval.Duration = 0
+	b.Config().IdlePollInterval.Duration = 0
 	b.lastView = time.Time{}
 	if got := b.nextWait(); got != 0 {
 		t.Errorf("idle with idle_poll_interval 0: wait %v, want 0 (no timer)", got)
@@ -472,7 +474,7 @@ func TestSnapshotVersion(t *testing.T) {
 func TestIndexGzipAndVersion(t *testing.T) {
 	cfg := testConfig(t)
 	board := NewBoard(cfg)
-	h := newServer(cfg, board)
+	h := newServer(board, "")
 
 	req := httptest.NewRequest("GET", "/", nil)
 	req.Host = "localhost"
@@ -521,7 +523,7 @@ func TestIndexGzipAndVersion(t *testing.T) {
 func TestRefreshEndpoint(t *testing.T) {
 	cfg := testConfig(t)
 	board := NewBoard(cfg)
-	h := newServer(cfg, board)
+	h := newServer(board, "")
 	post := func(header bool) int {
 		req := httptest.NewRequest("POST", "/refresh", nil)
 		req.Host = "localhost"
@@ -537,5 +539,102 @@ func TestRefreshEndpoint(t *testing.T) {
 	}
 	if code := post(true); code != http.StatusNoContent || len(board.wake) != 1 {
 		t.Errorf("with the header: %d, want 204 and a refresh", code)
+	}
+}
+
+func TestDurationString(t *testing.T) {
+	for in, want := range map[time.Duration]string{
+		0: "0s", 90 * time.Second: "1m30s", 2 * time.Minute: "2m", time.Hour: "1h", 90 * time.Minute: "1h30m",
+	} {
+		if got := (Duration{in}).String(); got != want {
+			t.Errorf("Duration(%v) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestSaveSettings(t *testing.T) {
+	path := t.TempDir() + "/taskboard.json"
+	cfg := testConfig(t)
+	cfg.Listen = "127.0.0.1:8484"
+	cfg.AttachCommand = []string{"sh", "-c", "a && b"}
+	if err := SaveConfig(path, cfg); err != nil {
+		t.Fatal(err)
+	}
+	if raw, _ := os.ReadFile(path); !strings.Contains(string(raw), `"a && b"`) {
+		t.Errorf("saved config should keep & readable:\n%s", raw)
+	}
+	board := NewBoard(cfg)
+	h := newServer(board, path)
+	post := func(remote string, header bool, body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest("POST", "/settings", strings.NewReader(body))
+		req.Host = "localhost"
+		req.RemoteAddr = remote
+		if header {
+			req.Header.Set("X-Taskboard", "1")
+		}
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec
+	}
+	valid := `{"listen":"127.0.0.1:9000","poll_interval":"1h","project_keys":["MM","ABC"],
+		"jira":{"base_url":"https://example.atlassian.net"},"repos":[{"name":"mattermost/logr"}]}`
+
+	if rec := post("192.0.2.1:1234", true, valid); rec.Code != http.StatusForbidden {
+		t.Errorf("non-loopback: %d, want 403", rec.Code)
+	}
+	if rec := post("127.0.0.1:1234", false, valid); rec.Code != http.StatusForbidden {
+		t.Errorf("without the header: %d, want 403", rec.Code)
+	}
+	if rec := post("127.0.0.1:1234", true, `{"poll_interval":"1h"}`); rec.Code != http.StatusBadRequest {
+		t.Errorf("invalid config: %d, want 400", rec.Code)
+	}
+	if board.Config() != cfg || len(board.wake) != 0 {
+		t.Fatal("a rejected save should leave the config alone")
+	}
+
+	rec := post("127.0.0.1:1234", true, valid)
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"restart":true`) {
+		t.Fatalf("valid save: %d %s, want 200 asking for a restart", rec.Code, rec.Body)
+	}
+	got := board.Config()
+	if got.PollInterval.Duration != time.Hour || got.findKey("abc-12") != "ABC-12" || got.Repos[0].PlansDir != "plans" {
+		t.Errorf("live config not updated: %+v", got)
+	}
+	if len(board.wake) != 1 {
+		t.Error("a save should request a refresh")
+	}
+	saved, err := LoadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.PollInterval != got.PollInterval || saved.Listen != "127.0.0.1:9000" || saved.Repos[0].Name != "mattermost/logr" {
+		t.Errorf("saved config = %+v", saved)
+	}
+}
+
+func TestSettingsPage(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.AttachCommand = []string{"tmux", "attach", "-t", "{target}"}
+	h := newServer(NewBoard(cfg), "/tmp/taskboard.json")
+	get := func(remote string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest("GET", "/settings", nil)
+		req.Host = "localhost"
+		req.RemoteAddr = remote
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec
+	}
+	if rec := get("192.0.2.1:1234"); rec.Code != http.StatusForbidden {
+		t.Errorf("non-loopback: %d, want 403", rec.Code)
+	}
+	rec := get("127.0.0.1:1234")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("loopback: %d, want 200", rec.Code)
+	}
+	body := rec.Body.String()
+	for _, want := range []string{`value="1m"`, ">tmux\nattach\n-t\n{target}</textarea>", `value="mattermost/mattermost"`, `value="MM"`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("settings page missing %q", want)
+		}
 	}
 }

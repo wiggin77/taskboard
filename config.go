@@ -1,10 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -12,15 +14,15 @@ import (
 
 type Config struct {
 	Listen           string       `json:"listen"`
-	AllowedHosts     []string     `json:"allowed_hosts"`
+	AllowedHosts     []string     `json:"allowed_hosts,omitempty"`
 	PollInterval     Duration     `json:"poll_interval"`
 	IdlePollInterval Duration     `json:"idle_poll_interval"`
 	RefreshTimeout   Duration     `json:"refresh_timeout"`
 	ProjectKeys      []string     `json:"project_keys"`
 	MergedPRLimit    int          `json:"merged_pr_limit"`
 	DoneDays         int          `json:"done_days"`
-	SSHHost          string       `json:"ssh_host"`
-	AttachCommand    []string     `json:"attach_command"`
+	SSHHost          string       `json:"ssh_host,omitempty"`
+	AttachCommand    []string     `json:"attach_command,omitempty"`
 	Jira             JiraConfig   `json:"jira"`
 	Repos            []RepoConfig `json:"repos"`
 
@@ -34,7 +36,7 @@ type JiraConfig struct {
 
 type RepoConfig struct {
 	Name     string `json:"name"`
-	Path     string `json:"path"`
+	Path     string `json:"path,omitempty"`
 	PlansDir string `json:"plans_dir"`
 }
 
@@ -53,11 +55,32 @@ func (d *Duration) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
+func (d Duration) MarshalJSON() ([]byte, error) { return json.Marshal(d.String()) }
+
+func (d Duration) String() string {
+	s := d.Duration.String()
+	if strings.HasSuffix(s, "m0s") {
+		s = s[:len(s)-2]
+	}
+	if strings.HasSuffix(s, "h0m") {
+		s = s[:len(s)-2]
+	}
+	return s
+}
+
 func LoadConfig(path string) (*Config, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
+	cfg, err := parseConfig(b)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
+	}
+	return cfg, nil
+}
+
+func parseConfig(b []byte) (*Config, error) {
 	cfg := &Config{
 		Listen:         "127.0.0.1:8484",
 		PollInterval:   Duration{2 * time.Minute},
@@ -69,12 +92,44 @@ func LoadConfig(path string) (*Config, error) {
 		},
 	}
 	if err := json.Unmarshal(b, cfg); err != nil {
-		return nil, fmt.Errorf("parse %s: %w", path, err)
+		return nil, fmt.Errorf("parse: %w", err)
 	}
 	if err := cfg.validate(); err != nil {
-		return nil, fmt.Errorf("%s: %w", path, err)
+		return nil, err
 	}
 	return cfg, nil
+}
+
+// SaveConfig writes via a temp file and rename so a crash never leaves a truncated config.
+func SaveConfig(path string, cfg *Config) error {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	enc.SetIndent("", "  ")
+	if err := enc.Encode(cfg); err != nil {
+		return err
+	}
+	mode := os.FileMode(0o644)
+	if fi, err := os.Stat(path); err == nil {
+		mode = fi.Mode().Perm()
+	}
+	f, err := os.CreateTemp(filepath.Dir(path), ".taskboard-*.json")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(f.Name())
+	if _, err := f.Write(buf.Bytes()); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Chmod(mode); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	return os.Rename(f.Name(), path)
 }
 
 func (c *Config) validate() error {
@@ -96,6 +151,9 @@ func (c *Config) validate() error {
 		if r.PlansDir == "" {
 			r.PlansDir = "plans"
 		}
+	}
+	if c.MergedPRLimit < 1 {
+		return errors.New("merged_pr_limit must be at least 1")
 	}
 	if c.DoneDays < 1 {
 		return errors.New("done_days must be at least 1")
