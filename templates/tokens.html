@@ -1,3 +1,52 @@
+{{define "theme"}}<script>
+(() => {
+  const key = "taskboard.theme";
+  const order = ["auto", "light", "dark"];
+  const labels = { auto: "Theme: match system", light: "Theme: light", dark: "Theme: dark" };
+  const root = document.documentElement;
+  const current = () => root.dataset.theme ?? "auto";
+  function apply(t) {
+    if (t === "light" || t === "dark") root.dataset.theme = t;
+    else delete root.dataset.theme;
+    const label = labels[current()];
+    for (const b of document.querySelectorAll(".theme")) {
+      b.title = label;
+      b.setAttribute("aria-label", label);
+    }
+  }
+  function load() {
+    let t = null;
+    try { t = localStorage.getItem(key); } catch {}
+    apply(t);
+  }
+  load();
+  addEventListener("DOMContentLoaded", load);
+  addEventListener("storage", e => { if (e.key === key || e.key === null) apply(e.newValue); });
+  document.addEventListener("click", e => {
+    if (!e.target.closest(".theme")) return;
+    const t = order[(order.indexOf(current()) + 1) % order.length];
+    apply(t);
+    try {
+      if (t === "auto") localStorage.removeItem(key);
+      else localStorage.setItem(key, t);
+    } catch {}
+  });
+})();
+</script>{{end}}
+
+{{define "themebutton"}}<button class="icon theme" type="button" title="Theme: match system" aria-label="Theme: match system">
+  <svg class="auto" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 18a6 6 0 0 0 0-12v12z"/></svg>
+  <svg class="light" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>
+  <svg class="dark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg>
+</button>{{end}}
+
+{{define "dark"}}
+    color-scheme:dark;
+    --bg:#0F1318;--surface:#171C23;--ink:#E4E9EF;--muted:#9AA5B2;--faint:#6E7A88;--line:#28313B;--trail:#6E7A88;
+    --chip:#232B34;--hover:#1C232B;--shadow:0 1px 2px rgba(0,0,0,.35);
+    --link:#82A9E3;--fail:#EE7464;--needs:#E3A443;--ok:#62BE87;--active:#82A9E3;
+{{end}}
+
 {{define "tokens"}}
 :root{
   color-scheme:light;
@@ -5,16 +54,19 @@
   --chip:#EEF1F5;--hover:#F8FAFC;--shadow:0 1px 2px rgba(16,24,40,.05),0 1px 3px rgba(16,24,40,.06);
   --link:#2B5C9E;--fail:#B93A2E;--needs:#A86400;--ok:#2D7A4C;--active:#2B5C9E;
 }
+:root[data-theme=dark]{ {{template "dark"}} }
 @media (prefers-color-scheme:dark){
-  :root{
-    color-scheme:dark;
-    --bg:#0F1318;--surface:#171C23;--ink:#E4E9EF;--muted:#9AA5B2;--faint:#6E7A88;--line:#28313B;--trail:#6E7A88;
-    --chip:#232B34;--hover:#1C232B;--shadow:0 1px 2px rgba(0,0,0,.35);
-    --link:#82A9E3;--fail:#EE7464;--needs:#E3A443;--ok:#62BE87;--active:#82A9E3;
-  }
+  :root:not([data-theme=light]){ {{template "dark"}} }
 }
 *{box-sizing:border-box}
 body{margin:0 auto;max-width:70rem;padding:0 1.25rem 4rem;background:var(--bg);color:var(--ink);
   font:15px/1.45 "Inter","Segoe UI",system-ui,-apple-system,"Ubuntu",sans-serif;-webkit-font-smoothing:antialiased}
+.icon{display:inline-grid;place-items:center;width:30px;height:30px;padding:0;border:1px solid var(--line);border-radius:50%;
+  background:var(--surface);color:var(--muted);cursor:pointer;transition:border-color .12s,color .12s}
+.icon:hover:not(:disabled){border-color:var(--muted);color:var(--ink);text-decoration:none}
+.icon:disabled{cursor:default}
+.icon svg{width:16px;height:16px}
+.theme svg{display:none}
+:root:not([data-theme]) .theme .auto,:root[data-theme=light] .theme .light,:root[data-theme=dark] .theme .dark{display:block}
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}
 {{end}}

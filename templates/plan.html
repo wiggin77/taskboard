@@ -3,11 +3,13 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+{{template "theme"}}
 <title>{{.Task.Key}} plan</title>
 <style>
 {{template "tokens"}}
 body{padding-top:1.5rem}
-nav{display:flex;flex-wrap:wrap;gap:.25rem 1rem;font-size:.875rem;margin-bottom:1rem}
+header{display:flex;align-items:center;justify-content:space-between;gap:1rem;margin-bottom:1rem}
+nav{display:flex;flex-wrap:wrap;gap:.25rem 1rem;font-size:.875rem}
 a{color:var(--link);text-decoration:none}
 a:hover{text-decoration:underline}
 :focus-visible{outline:2px solid var(--link);outline-offset:2px}
@@ -18,12 +20,15 @@ pre{background:var(--surface);border:1px solid var(--line);border-radius:6px;pad
 </style>
 </head>
 <body>
-<nav>
-  <a href="/">Back to board</a>
-  <a href="{{.Task.JiraURL}}" target="_blank" rel="noopener">Jira</a>
-  {{with .Task.PR}}<a href="{{.URL}}" target="_blank" rel="noopener">PR #{{.Number}}</a>{{end}}
-  {{with .Task.Plan.GitHubURL}}<a href="{{.}}" target="_blank" rel="noopener">Plan on GitHub</a>{{end}}
-</nav>
+<header>
+  <nav>
+    <a href="/">Back to board</a>
+    <a href="{{.Task.JiraURL}}" target="_blank" rel="noopener">Jira</a>
+    {{with .Task.PR}}<a href="{{.URL}}" target="_blank" rel="noopener">PR #{{.Number}}</a>{{end}}
+    {{with .Task.Plan.GitHubURL}}<a href="{{.}}" target="_blank" rel="noopener">Plan on GitHub</a>{{end}}
+  </nav>
+  {{template "themebutton"}}
+</header>
 <h1>{{.Task.Key}} {{.Task.Summary}}</h1>
 <p class="path">{{.Task.Plan.Path}}{{if .Task.Plan.Approved}} (approved){{end}}</p>
 <pre>{{.Content}}</pre>

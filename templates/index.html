@@ -3,6 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+{{template "theme"}}
 <noscript><meta http-equiv="refresh" content="{{.RefreshSeconds}}"></noscript>
 <title>Task board</title>
 <style>
@@ -16,11 +17,6 @@ h1{font-size:1.25rem;font-weight:700;letter-spacing:-.02em;margin:0}
 .updated.refreshing::before{background:var(--needs);box-shadow:0 0 0 3px color-mix(in srgb,var(--needs) 22%,transparent)}
 .status{display:flex;align-items:center;gap:.5rem}
 .updated{margin-right:.25rem}
-.icon{display:inline-grid;place-items:center;width:30px;height:30px;padding:0;border:1px solid var(--line);border-radius:50%;
-  background:var(--surface);color:var(--muted);cursor:pointer;transition:border-color .12s,color .12s}
-.icon:hover:not(:disabled){border-color:var(--muted);color:var(--ink)}
-.icon:disabled{cursor:default}
-.icon svg{width:16px;height:16px}
 .refresh:disabled svg{animation:spin 1s linear infinite}
 @keyframes spin{to{transform:rotate(360deg)}}
 @media (prefers-reduced-motion:reduce){.refresh:disabled svg{animation:none}}
@@ -105,6 +101,7 @@ a:hover,button.link:hover{text-decoration:underline}
       <button class="icon refresh" type="button"{{if .Refreshing}} disabled title="Refreshing" aria-label="Refreshing"{{else}} title="Refresh now" aria-label="Refresh now"{{end}}>
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></svg>
       </button>
+      {{template "themebutton"}}
       {{if .Local}}<a class="icon" href="/settings" title="Settings" aria-label="Settings">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
       </a>{{end}}
