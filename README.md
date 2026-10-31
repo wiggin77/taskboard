@@ -1,6 +1,10 @@
 # taskboard
 
-A local dashboard that shows every in-flight task by stage, keyed by Jira ticket, with links to the ticket, PR, implementation plan and Claude Code session.
+A local dashboard for multitasking across many coding-agent sessions.
+
+With a dozen coding-agent sessions running in parallel, each in its own worktree on its own ticket, the bottleneck is no longer writing code but keeping track of it: which session is waiting on you, which plan needs review, whose CI broke, what merged and still needs its ticket closed, which worktrees can be cleaned up. taskboard collects that state from where it already lives (the ticket tracker, GitHub PRs, git worktrees, plan files and tmux windows) and shows one row per task, with the work blocked on you at the top. Each row links to the ticket, PR, plan and session, so you can go straight back to the terminal that needs you.
+
+taskboard doesn't start or drive sessions; it watches them. The only convention it needs is the ticket key in branch and tmux window names. Jira is the only ticket tracker supported today; others, such as GitHub issues, may follow.
 
 Stages: Ticket, Plan, Code, Review, Ready, Merged, Done. Tasks are grouped so the ones waiting on you come first: CI failing, changes requested, ready to merge, plan needs review, and merged but Jira not yet updated.
 
@@ -35,7 +39,7 @@ Like Open session, Settings is only available from the machine running taskboard
 
 ## Conventions
 
-Everything is joined on the Jira key (any key matching `project_keys`, case-insensitive):
+Everything is joined on the ticket key, currently any Jira key matching `project_keys` (case-insensitive):
 
 | Source | Where the key must appear |
 |---|---|
@@ -58,11 +62,11 @@ Plan files only attach to tasks found through Jira, a PR, a worktree or a sessio
 
 ## Starting sessions in tmux
 
-Name the window after the ticket and run Claude Code in the task's worktree:
+Name the window after the ticket and start your coding agent in the task's worktree, replacing `<agent>` with its command:
 
 ```sh
 git -C ~/src/mattermost worktree add ../mattermost-MM-1234 -b MM-1234-short-name
-tmux new-window -n MM-1234 -c ~/src/mattermost-MM-1234 claude
+tmux new-window -n MM-1234 -c ~/src/mattermost-MM-1234 <agent>
 ```
 
 If no tmux server is running yet, use `tmux new-session -d -s work` first.
@@ -91,3 +95,7 @@ If you bind to a LAN or Tailscale address instead, requests by IP work as is. Ad
 - The Reviews section lists open PRs in the configured repos where your review is requested, then ones you have already reviewed (GitHub drops the request once you submit a review). Other repos lists the same for every repo not in `repos`, plus open PRs you authored there. Neither section is joined on Jira keys.
 - `merged_pr_limit` controls how many recent merged PRs per repo are checked for the "merged, update Jira" stage. It is independent of `done_days`, so a merged PR older than the Done window still shows when its ticket needs updating.
 - Source failures show in a banner at the top of the page and in the log; the rest of the board still renders.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
