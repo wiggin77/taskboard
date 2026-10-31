@@ -85,11 +85,11 @@ button.remove{padding:.35rem .6rem;margin-bottom:.1rem}
 
 <fieldset>
   <legend>Polling</legend>
-  <span class="hint">The board is in use while it is showing in a browser tab and for 15 minutes after; a tab in the background or a minimized window does not count. Durations like 90s, 2m or 1h. The Refresh button on the board refreshes at any time.</span>
+  <span class="hint">The board is on screen while any browser tab is showing it, and for 15 minutes after. A closed tab, a background tab or a minimized window is off screen. Durations like 90s, 2m or 1h. The Refresh button on the board refreshes at any time.</span>
   <div class="row3">
-    <label>Refresh while in use<span class="hint">At least 10s.</span>
+    <label>Refresh while on screen<span class="hint">At least 10s.</span>
       <input name="poll_interval" required placeholder="2m" value="{{.PollInterval}}"></label>
-    <label>Refresh when not in use<span class="hint">0 turns it off, and opening the board refreshes right away. Otherwise at least the in-use interval.</span>
+    <label>Refresh while off screen<span class="hint">0 turns it off, and showing the board again refreshes right away. Otherwise at least the on-screen interval.</span>
       <input name="idle_poll_interval" placeholder="0" value="{{.IdlePollInterval}}"></label>
     <label>Refresh time limit<span class="hint">A refresh still running after this is cut short and reports the sources it missed.</span>
       <input name="refresh_timeout" required placeholder="5m" value="{{.RefreshTimeout}}"></label>
