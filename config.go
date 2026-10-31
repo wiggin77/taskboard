@@ -15,6 +15,7 @@ type Config struct {
 	AllowedHosts     []string     `json:"allowed_hosts"`
 	PollInterval     Duration     `json:"poll_interval"`
 	IdlePollInterval Duration     `json:"idle_poll_interval"`
+	RefreshTimeout   Duration     `json:"refresh_timeout"`
 	ProjectKeys      []string     `json:"project_keys"`
 	MergedPRLimit    int          `json:"merged_pr_limit"`
 	DoneDays         int          `json:"done_days"`
@@ -58,11 +59,11 @@ func LoadConfig(path string) (*Config, error) {
 		return nil, err
 	}
 	cfg := &Config{
-		Listen:           "127.0.0.1:8484",
-		PollInterval:     Duration{2 * time.Minute},
-		IdlePollInterval: Duration{15 * time.Minute},
-		MergedPRLimit:    20,
-		DoneDays:         30,
+		Listen:         "127.0.0.1:8484",
+		PollInterval:   Duration{2 * time.Minute},
+		RefreshTimeout: Duration{5 * time.Minute},
+		MergedPRLimit:  20,
+		DoneDays:       30,
 		Jira: JiraConfig{
 			JQL: "assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC",
 		},
@@ -102,8 +103,11 @@ func (c *Config) validate() error {
 	if c.PollInterval.Duration < 10*time.Second {
 		return errors.New("poll_interval must be at least 10s")
 	}
-	if c.IdlePollInterval.Duration < c.PollInterval.Duration {
-		return errors.New("idle_poll_interval must be at least poll_interval")
+	if c.RefreshTimeout.Duration < 10*time.Second {
+		return errors.New("refresh_timeout must be at least 10s")
+	}
+	if idle := c.IdlePollInterval.Duration; idle != 0 && idle < c.PollInterval.Duration {
+		return errors.New("idle_poll_interval must be 0 (no idle polling) or at least poll_interval")
 	}
 
 	quoted := make([]string, len(c.ProjectKeys))

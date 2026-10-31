@@ -14,6 +14,11 @@ h1{font-size:1.25rem;font-weight:700;letter-spacing:-.02em;margin:0}
 .updated{display:inline-flex;align-items:center;gap:.5rem;color:var(--muted);font-size:.8125rem;font-variant-numeric:tabular-nums}
 .updated::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--ok);box-shadow:0 0 0 3px color-mix(in srgb,var(--ok) 22%,transparent)}
 .updated.refreshing::before{background:var(--needs);box-shadow:0 0 0 3px color-mix(in srgb,var(--needs) 22%,transparent)}
+.status{display:flex;align-items:center;gap:.75rem}
+.refresh{padding:.25rem .75rem;border:1px solid var(--line);border-radius:999px;background:var(--surface);color:var(--ink);
+  font:inherit;font-size:.8125rem;font-weight:550;cursor:pointer;transition:border-color .12s}
+.refresh:hover:not(:disabled){border-color:var(--muted)}
+.refresh:disabled{color:var(--muted);cursor:default}
 .jump{display:flex;gap:.4rem;margin-top:.8rem;overflow-x:auto;scrollbar-width:none}
 .jump::-webkit-scrollbar{display:none}
 .jump a{flex:none;display:inline-flex;align-items:center;gap:.45rem;padding:.25rem .35rem .25rem .75rem;border:1px solid var(--line);border-radius:999px;
@@ -90,7 +95,10 @@ a:hover,button.link:hover{text-decoration:underline}
 <header class="top">
   <div class="bar">
     <h1>Task board</h1>
-    <span class="updated{{if .Refreshing}} refreshing{{end}}">{{if .Updated.IsZero}}Loading. This page refreshes on its own.{{else}}Updated {{.Updated.Format "15:04"}}{{if .Refreshing}}, refreshing{{end}}{{end}}</span>
+    <div class="status">
+      <span class="updated{{if .Refreshing}} refreshing{{end}}">{{if .Updated.IsZero}}Loading. This page refreshes on its own.{{else}}Updated {{.Updated.Format "15:04"}}{{if .Refreshing}}, refreshing{{end}}{{end}}</span>
+      <button class="refresh" type="button"{{if .Refreshing}} disabled{{end}}>Refresh</button>
+    </div>
   </div>
   {{with .Nav}}<nav class="jump" aria-label="Sections">{{range .}}<a href="#{{slug .Name}}"{{with .Tone}} class="tone-{{.}}"{{end}}>{{.Name}} <span class="count">{{.Count}}</span></a>{{end}}</nav>{{end}}
 </header>
@@ -160,16 +168,32 @@ async function check() {
     try {
       const v = await (await fetch("/version", { cache: "no-store" })).json();
       if (v.version !== pageVersion) return location.reload();
-      refreshing = v.refreshing;
-      const el = document.querySelector(".updated");
-      if (v.updated) {
-        el.textContent = "Updated " + v.updated + (refreshing ? ", refreshing" : "");
-        el.classList.toggle("refreshing", refreshing);
-      }
+      showRefreshing(v.refreshing, v.updated);
     } catch {}
   }
   timer = setTimeout(check, refreshing ? 5000 : 15000);
 }
+function showRefreshing(r, updated) {
+  refreshing = r;
+  refreshButton.disabled = r;
+  const el = document.querySelector(".updated");
+  if (updated) {
+    el.textContent = "Updated " + updated + (r ? ", refreshing" : "");
+    el.classList.toggle("refreshing", r);
+  }
+}
+const refreshButton = document.querySelector(".refresh");
+refreshButton.addEventListener("click", async () => {
+  refreshButton.disabled = true;
+  try {
+    const res = await fetch("/refresh", { method: "POST", headers: { "X-Taskboard": "1" } });
+    if (!res.ok) throw new Error(res.status);
+  } catch {
+    refreshButton.disabled = false;
+    return flash(refreshButton, "Failed");
+  }
+  check();
+});
 timer = setTimeout(check, refreshing ? 5000 : 15000);
 document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") check(); });
 

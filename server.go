@@ -99,6 +99,7 @@ func newServer(cfg *Config, board *Board) http.Handler {
 	mux.HandleFunc("GET /version", s.version)
 	mux.HandleFunc("GET /plan/{key}", s.plan)
 	mux.HandleFunc("POST /attach/{key}", s.attach)
+	mux.HandleFunc("POST /refresh", s.refresh)
 	return s.checkHost(mux)
 }
 
@@ -129,7 +130,7 @@ func (s *server) index(w http.ResponseWriter, r *http.Request) {
 		Errors:         snap.Errors,
 		Updated:        snap.Updated,
 		RefreshSeconds: int(s.cfg.PollInterval.Seconds()),
-		Refreshing:     s.refreshing(snap),
+		Refreshing:     s.board.Refreshing(),
 		Version:        snap.Version,
 		CanAttach:      len(s.cfg.AttachCommand) > 0 && isLoopback(r),
 		Stations:       stations,
@@ -175,10 +176,6 @@ func updatedLabel(t time.Time) string {
 	return t.Format("15:04")
 }
 
-func (s *server) refreshing(snap Snapshot) bool {
-	return time.Since(snap.Updated) > 2*s.cfg.PollInterval.Duration
-}
-
 func (s *server) version(w http.ResponseWriter, r *http.Request) {
 	s.board.Viewed()
 	snap := s.board.Snapshot()
@@ -187,7 +184,7 @@ func (s *server) version(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]any{
 		"version":    snap.Version,
 		"updated":    updatedLabel(snap.Updated),
-		"refreshing": s.refreshing(snap),
+		"refreshing": s.board.Refreshing(),
 	})
 }
 
@@ -226,6 +223,16 @@ func (s *server) attach(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	go cmd.Wait()
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// Same CORS-preflight guard as attach, so other sites cannot make this server spend API calls.
+func (s *server) refresh(w http.ResponseWriter, r *http.Request) {
+	if r.Header.Get("X-Taskboard") != "1" {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	s.board.Refresh()
 	w.WriteHeader(http.StatusNoContent)
 }
 

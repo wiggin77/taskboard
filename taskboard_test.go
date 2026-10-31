@@ -19,6 +19,7 @@ func testConfig(t *testing.T) *Config {
 	cfg := &Config{
 		PollInterval:     Duration{time.Minute},
 		IdlePollInterval: Duration{15 * time.Minute},
+		RefreshTimeout:   Duration{5 * time.Minute},
 		DoneDays:         30,
 		ProjectKeys:      []string{"MM"},
 		Jira:             JiraConfig{BaseURL: "https://example.atlassian.net/"},
@@ -417,6 +418,38 @@ func TestIdlePolling(t *testing.T) {
 	if !woke() {
 		t.Error("a view after idling should wake the poll loop")
 	}
+
+	b.cfg.IdlePollInterval.Duration = 0
+	b.lastView = time.Time{}
+	if got := b.nextWait(); got != 0 {
+		t.Errorf("idle with idle_poll_interval 0: wait %v, want 0 (no timer)", got)
+	}
+}
+
+func TestRefreshRequests(t *testing.T) {
+	b := NewBoard(testConfig(t))
+	b.snap.Updated = time.Now()
+	b.lastView = time.Now()
+	if b.Refreshing() {
+		t.Error("an idle board with a snapshot should not report refreshing")
+	}
+
+	b.Refresh()
+	if !b.Refreshing() || len(b.wake) != 1 {
+		t.Error("Refresh should wake the loop and report refreshing")
+	}
+
+	b.running, b.requested = true, false
+	<-b.wake
+	b.lastView = time.Time{}
+	b.Viewed()
+	if b.requested {
+		t.Error("a view during a refresh should not queue another")
+	}
+	b.Refresh()
+	if b.requested || len(b.wake) != 0 {
+		t.Error("Refresh during a refresh should not queue another")
+	}
 }
 
 func TestSnapshotVersion(t *testing.T) {
@@ -482,5 +515,27 @@ func TestIndexGzipAndVersion(t *testing.T) {
 	case <-board.wake:
 	default:
 		t.Error("a version check should count as a view")
+	}
+}
+
+func TestRefreshEndpoint(t *testing.T) {
+	cfg := testConfig(t)
+	board := NewBoard(cfg)
+	h := newServer(cfg, board)
+	post := func(header bool) int {
+		req := httptest.NewRequest("POST", "/refresh", nil)
+		req.Host = "localhost"
+		if header {
+			req.Header.Set("X-Taskboard", "1")
+		}
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec.Code
+	}
+	if code := post(false); code != http.StatusForbidden || len(board.wake) != 0 {
+		t.Errorf("without the header: %d, want 403 and no refresh", code)
+	}
+	if code := post(true); code != http.StatusNoContent || len(board.wake) != 1 {
+		t.Errorf("with the header: %d, want 204 and a refresh", code)
 	}
 }

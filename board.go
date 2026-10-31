@@ -34,9 +34,11 @@ type Board struct {
 
 	wake chan struct{}
 
-	mu       sync.RWMutex
-	snap     Snapshot
-	lastView time.Time
+	mu        sync.RWMutex
+	snap      Snapshot
+	lastView  time.Time
+	running   bool
+	requested bool
 }
 
 const (
@@ -57,19 +59,38 @@ func NewBoard(cfg *Config) *Board {
 
 func (b *Board) Viewed() {
 	b.mu.Lock()
-	wasIdle := b.idleLocked()
-	b.lastView = time.Now()
-	b.mu.Unlock()
-	if wasIdle {
-		select {
-		case b.wake <- struct{}{}:
-		default:
-		}
+	defer b.mu.Unlock()
+	if b.idleLocked() && !b.running {
+		b.requestLocked()
 	}
+	b.lastView = time.Now()
+}
+
+func (b *Board) Refresh() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if !b.running {
+		b.requestLocked()
+	}
+}
+
+func (b *Board) requestLocked() {
+	b.requested = true
+	select {
+	case b.wake <- struct{}{}:
+	default:
+	}
+}
+
+func (b *Board) Refreshing() bool {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	return b.running || b.requested || b.snap.Updated.IsZero()
 }
 
 func (b *Board) idleLocked() bool { return time.Since(b.lastView) > idleAfter }
 
+// nextWait returns 0 when the loop should wait for a view or a refresh request instead of a timer.
 func (b *Board) nextWait() time.Duration {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
@@ -96,20 +117,36 @@ func (b *Board) Task(key string) (Task, bool) {
 
 func (b *Board) Run(ctx context.Context) {
 	for {
-		b.refresh(ctx)
-		// A view during the refresh is already served by it.
+		b.mu.Lock()
+		b.running, b.requested = true, false
 		select {
 		case <-b.wake:
 		default:
 		}
-		timer := time.NewTimer(b.nextWait())
+		b.mu.Unlock()
+
+		b.refresh(ctx)
+
+		b.mu.Lock()
+		b.running = false
+		b.mu.Unlock()
+
+		var timer *time.Timer
+		var fire <-chan time.Time
+		if wait := b.nextWait(); wait > 0 {
+			timer = time.NewTimer(wait)
+			fire = timer.C
+		}
 		select {
 		case <-ctx.Done():
-			timer.Stop()
-			return
-		case <-timer.C:
+		case <-fire:
 		case <-b.wake:
+		}
+		if timer != nil {
 			timer.Stop()
+		}
+		if ctx.Err() != nil {
+			return
 		}
 	}
 }
@@ -122,7 +159,7 @@ type repoResult struct {
 }
 
 func (b *Board) refresh(ctx context.Context) {
-	ctx, cancel := context.WithTimeout(ctx, max(b.cfg.PollInterval.Duration, 2*time.Minute))
+	ctx, cancel := context.WithTimeout(ctx, b.cfg.RefreshTimeout.Duration)
 	defer cancel()
 
 	if time.Since(b.cachesReset) > issueCacheTTL {
