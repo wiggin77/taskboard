@@ -19,7 +19,12 @@ var templateFS embed.FS
 var templates = template.Must(template.New("").Funcs(template.FuncMap{
 	"ageTone":   func(t time.Time) string { return ageTone(t, time.Now()) },
 	"dateLabel": func(t time.Time) string { return dateLabel(t, time.Now()) },
+	"slug":      slug,
 }).ParseFS(templateFS, "templates/*.html"))
+
+func slug(name string) string {
+	return strings.ReplaceAll(strings.ToLower(name), " ", "-")
+}
 
 func ageTone(t, now time.Time) string {
 	switch age := now.Sub(t); {
@@ -59,10 +64,17 @@ type prSection struct {
 	PRs  []PRLink
 }
 
+type navItem struct {
+	Name  string
+	Count int
+	Tone  string
+}
+
 type indexData struct {
 	Groups         []group
 	PRSections     []prSection
 	PRsFirst       bool
+	Nav            []navItem
 	Errors         []string
 	Updated        time.Time
 	RefreshSeconds int
@@ -124,6 +136,23 @@ func (s *server) index(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	data.PRsFirst = len(data.Groups) == 0 || data.Groups[0].Name != groupNeedsYou
+
+	var prNav, groupNav []navItem
+	for _, sec := range data.PRSections {
+		prNav = append(prNav, navItem{Name: sec.Name, Count: len(sec.PRs)})
+	}
+	for _, g := range data.Groups {
+		item := navItem{Name: g.Name, Count: len(g.Tasks)}
+		if g.Name == groupNeedsYou {
+			item.Tone = "needs"
+		}
+		groupNav = append(groupNav, item)
+	}
+	if data.PRsFirst {
+		data.Nav = append(prNav, groupNav...)
+	} else {
+		data.Nav = append(append(groupNav[:1:1], prNav...), groupNav[1:]...)
+	}
 	render(w, "index.html", data)
 }
 

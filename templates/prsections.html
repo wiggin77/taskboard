@@ -1,5 +1,5 @@
 {{define "prsections"}}{{range .}}
-<section>
+<section id="{{slug .Name}}">
   <h2>{{.Name}} <span class="count">{{len .PRs}}</span></h2>
   <ul class="tasks">
   {{range .PRs}}
@@ -9,11 +9,11 @@
       </div>
       <div class="where">
         <p class="stage">{{.StageLabel}}</p>
+        {{template "updated" .UpdatedAt}}
       </div>
       <div class="links">
-        <a href="{{.URL}}" target="_blank" rel="noopener">{{.Repo}}#{{.Number}}</a>
-        {{with .Meta}}<span class="meta">{{.}}</span>{{end}}
-        {{template "updated" .UpdatedAt}}
+        <a href="{{.URL}}" target="_blank" rel="noopener" title="{{.Repo}}#{{.Number}}">{{.RepoName}} #{{.Number}}</a>
+        {{with .Meta}}<span>{{.}}</span>{{end}}
       </div>
     </li>
   {{end}}

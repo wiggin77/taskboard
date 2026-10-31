@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"path"
 	"sort"
 	"strconv"
 	"strings"
@@ -145,6 +146,8 @@ type PRLink struct {
 	Role      Role
 	UpdatedAt time.Time
 }
+
+func (p PRLink) RepoName() string { return path.Base(p.Repo) }
 
 func (p PRLink) Meta() string {
 	var parts []string
