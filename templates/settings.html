@@ -62,48 +62,54 @@ button.remove{padding:.35rem .6rem;margin-bottom:.1rem}
 <form id="settings">
 <fieldset>
   <legend>Jira</legend>
-  <label>Base URL<input name="jira.base_url" type="url" required value="{{.Jira.BaseURL}}"></label>
-  <label>JQL<span class="hint">Tickets to show besides those found through PRs, worktrees and sessions.</span>
-    <textarea name="jira.jql" rows="2">{{.Jira.JQL}}</textarea></label>
-  <label>Project keys<span class="hint">Comma separated. Used to find keys in branch names, PR titles, plan files and tmux windows.</span>
-    <input name="project_keys" required value="{{join .ProjectKeys ", "}}"></label>
+  <label>Jira site URL<span class="hint">Only used to build ticket links. Tickets are read through acli, as whoever it is logged in as.</span>
+    <input name="jira.base_url" type="url" required placeholder="https://yourcompany.atlassian.net" value="{{.Jira.BaseURL}}"></label>
+  <label>Tickets to show (JQL)<span class="hint">Tickets matching this query always appear. Tickets named by a PR, worktree or session appear even if it misses them.</span>
+    <textarea name="jira.jql" rows="2" placeholder="assignee = currentUser() AND statusCategory != Done">{{.Jira.JQL}}</textarea></label>
+  <label>Project keys<span class="hint">Comma separated. A key like MM-1234 in a branch name, PR title, plan file name or tmux window name ties it to that ticket.</span>
+    <input name="project_keys" required placeholder="MM, PLUG" value="{{join .ProjectKeys ", "}}"></label>
   <div class="row2">
-    <label>Done window, days<input name="done_days" type="number" min="1" required value="{{.DoneDays}}"></label>
-    <label>Merged PRs per repo<input name="merged_pr_limit" type="number" min="1" required value="{{.MergedPRLimit}}"></label>
+    <label>Days to keep finished tasks<span class="hint">Tasks whose PR merged or ticket was resolved this recently stay under Done. Default 30.</span>
+      <input name="done_days" type="number" min="1" required value="{{.DoneDays}}"></label>
+    <label>Merged PRs to check per repo<span class="hint">Recent merged PRs checked for a ticket that still needs closing. Default 20.</span>
+      <input name="merged_pr_limit" type="number" min="1" required value="{{.MergedPRLimit}}"></label>
   </div>
 </fieldset>
 
 <fieldset id="repos">
   <legend>Repos</legend>
-  <span class="hint">Local path is optional; without it the repo's worktrees and plans are not shown.</span>
+  <span class="hint">Your PRs in these repos become tasks; PRs elsewhere go under Other repos. With a local checkout, the board also shows its worktrees and the plan files in each worktree's plans folder (default plans), named after the ticket, like MM-1234.md.</span>
   {{range .Repos}}{{template "repo" .}}{{end}}
   <button class="add" type="button" id="add-repo">Add repo</button>
 </fieldset>
 
 <fieldset>
   <legend>Polling</legend>
-  <span class="hint">Durations like 90s, 2m or 1h.</span>
+  <span class="hint">The board is in use while it is showing in a browser tab and for 15 minutes after; a tab in the background or a minimized window does not count. Durations like 90s, 2m or 1h. The Refresh button on the board refreshes at any time.</span>
   <div class="row3">
-    <label>Poll interval<span class="hint">While the board is being viewed.</span><input name="poll_interval" required value="{{.PollInterval}}"></label>
-    <label>Idle poll interval<span class="hint">After 15 minutes unviewed. 0 means none.</span><input name="idle_poll_interval" value="{{.IdlePollInterval}}"></label>
-    <label>Refresh timeout<span class="hint">A slower refresh is cut short.</span><input name="refresh_timeout" required value="{{.RefreshTimeout}}"></label>
+    <label>Refresh while in use<span class="hint">At least 10s.</span>
+      <input name="poll_interval" required placeholder="2m" value="{{.PollInterval}}"></label>
+    <label>Refresh when not in use<span class="hint">0 turns it off, and opening the board refreshes right away. Otherwise at least the in-use interval.</span>
+      <input name="idle_poll_interval" placeholder="0" value="{{.IdlePollInterval}}"></label>
+    <label>Refresh time limit<span class="hint">A refresh still running after this is cut short and reports the sources it missed.</span>
+      <input name="refresh_timeout" required placeholder="5m" value="{{.RefreshTimeout}}"></label>
   </div>
 </fieldset>
 
 <fieldset>
   <legend>Sessions</legend>
-  <label>SSH host<span class="hint">Prefixed to the copied session command. Leave empty for a plain tmux attach.</span>
-    <input name="ssh_host" value="{{.SSHHost}}"></label>
-  <label>Attach command<span class="hint">One argument per line; {target} becomes the tmux window. Leave empty to hide Open session.</span>
-    <textarea name="attach_command" rows="4">{{join .AttachCommand "\n"}}</textarea></label>
+  <label>SSH host for copied commands<span class="hint">Copy session command gives ssh -t HOST 'tmux attach -t work:3', to paste on another machine. Leave empty to copy a plain tmux attach.</span>
+    <input name="ssh_host" placeholder="devbox" value="{{.SSHHost}}"></label>
+  <label>Open session command<span class="hint">Runs on this machine when you press Open session, e.g. a new terminal attached to the window. One argument per line; {target} becomes the tmux window. Leave empty to hide the button.</span>
+    <textarea name="attach_command" rows="4" placeholder="gnome-terminal&#10;--&#10;tmux&#10;attach&#10;-t&#10;{target}">{{join .AttachCommand "\n"}}</textarea></label>
 </fieldset>
 
 <fieldset>
   <legend>Server</legend>
-  <label>Listen address<span class="hint">Takes effect after a restart. Running on {{$.Listen}}.</span>
-    <input name="listen" required value="{{.Listen}}"></label>
-  <label>Allowed hosts<span class="hint">One per line. Hostnames other devices use to reach the board.</span>
-    <textarea name="allowed_hosts" rows="2">{{join .AllowedHosts "\n"}}</textarea></label>
+  <label>Listen address<span class="hint">host:port. There is no login, so keep 127.0.0.1 and use an SSH tunnel unless you trust the network. Takes effect after a restart; running on {{$.Listen}}.</span>
+    <input name="listen" required placeholder="127.0.0.1:8484" value="{{.Listen}}"></label>
+  <label>Extra hostnames<span class="hint">One per line, e.g. a Tailscale MagicDNS name. IP addresses and localhost always work; other hostnames are refused to block DNS rebinding.</span>
+    <textarea name="allowed_hosts" rows="2" placeholder="devbox.tailnet.ts.net">{{join .AllowedHosts "\n"}}</textarea></label>
 </fieldset>
 
 <div class="actions">
@@ -173,8 +179,8 @@ form.addEventListener("submit", async e => {
 </html>
 
 {{define "repo"}}<div class="repo">
-  <label>Name<input data-field="name" placeholder="owner/repo" value="{{.Name}}"></label>
-  <label>Local path<input data-field="path" placeholder="/path/to/checkout" value="{{.Path}}"></label>
-  <label>Plans dir<input data-field="plans_dir" placeholder="plans" value="{{.PlansDir}}"></label>
+  <label>GitHub repo<input data-field="name" placeholder="owner/repo" value="{{.Name}}"></label>
+  <label>Local checkout<input data-field="path" placeholder="/path/to/checkout, optional" value="{{.Path}}"></label>
+  <label>Plans folder<input data-field="plans_dir" placeholder="plans" value="{{.PlansDir}}"></label>
   <button class="remove" type="button" aria-label="Remove repo">Remove</button>
 </div>{{end}}
