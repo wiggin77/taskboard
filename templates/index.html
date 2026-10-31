@@ -54,6 +54,7 @@ a:hover,button.link:hover{text-decoration:underline}
 .age{color:var(--muted)}
 .age-stale{color:var(--needs)}
 .age-old{color:var(--fail)}
+.done .age{color:var(--muted)}
 @media (max-width:40rem){
   .legend{display:none}
   .task{grid-template-columns:minmax(0,1fr)}
@@ -82,7 +83,7 @@ a:hover,button.link:hover{text-decoration:underline}
 {{$canAttach := .CanAttach}}
 {{if .PRsFirst}}{{template "prsections" .PRSections}}{{end}}
 {{range $i, $g := .Groups}}
-<section>
+<section{{if eq .Name "Done"}} class="done"{{end}}>
   {{if eq .Name "Done"}}<details><summary>{{.Name}} <span class="count">{{len .Tasks}}</span></summary>
   {{else}}<h2>{{.Name}} <span class="count">{{len .Tasks}}</span></h2>
   {{if eq $i 0}}<div class="legend" aria-hidden="true"><span></span><ol>{{range $stations}}<li>{{.}}</li>{{end}}</ol></div>{{end}}
