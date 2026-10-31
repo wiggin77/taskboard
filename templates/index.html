@@ -14,11 +14,16 @@ h1{font-size:1.25rem;font-weight:700;letter-spacing:-.02em;margin:0}
 .updated{display:inline-flex;align-items:center;gap:.5rem;color:var(--muted);font-size:.8125rem;font-variant-numeric:tabular-nums}
 .updated::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--ok);box-shadow:0 0 0 3px color-mix(in srgb,var(--ok) 22%,transparent)}
 .updated.refreshing::before{background:var(--needs);box-shadow:0 0 0 3px color-mix(in srgb,var(--needs) 22%,transparent)}
-.status{display:flex;align-items:center;gap:.75rem}
-.refresh,.pill{padding:.25rem .75rem;border:1px solid var(--line);border-radius:999px;background:var(--surface);color:var(--ink);
-  font:inherit;font-size:.8125rem;font-weight:550;cursor:pointer;transition:border-color .12s}
-.refresh:hover:not(:disabled),.pill:hover{border-color:var(--muted);text-decoration:none}
-.refresh:disabled{color:var(--muted);cursor:default}
+.status{display:flex;align-items:center;gap:.5rem}
+.updated{margin-right:.25rem}
+.icon{display:inline-grid;place-items:center;width:30px;height:30px;padding:0;border:1px solid var(--line);border-radius:50%;
+  background:var(--surface);color:var(--muted);cursor:pointer;transition:border-color .12s,color .12s}
+.icon:hover:not(:disabled){border-color:var(--muted);color:var(--ink)}
+.icon:disabled{cursor:default}
+.icon svg{width:16px;height:16px}
+.refresh:disabled svg{animation:spin 1s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){.refresh:disabled svg{animation:none}}
 .jump{display:flex;gap:.4rem;margin-top:.8rem;overflow-x:auto;scrollbar-width:none}
 .jump::-webkit-scrollbar{display:none}
 .jump a{flex:none;display:inline-flex;align-items:center;gap:.45rem;padding:.25rem .35rem .25rem .75rem;border:1px solid var(--line);border-radius:999px;
@@ -38,7 +43,7 @@ summary::-webkit-details-marker{display:none}
 summary::before{content:"";width:.4rem;height:.4rem;margin:0 .15rem 0 .1rem;border-right:2px solid var(--muted);border-bottom:2px solid var(--muted);
   transform:rotate(-45deg);transition:transform .15s}
 details[open] summary::before{transform:rotate(45deg)}
-.legend,.task{display:grid;grid-template-columns:minmax(0,1fr) 18rem;gap:.3rem 2rem;align-items:center}
+.legend,.task{display:grid;grid-template-columns:minmax(0,1fr) 19.5rem;gap:.3rem 2rem;align-items:center}
 .legend{color:var(--faint);font-size:.6875rem;margin:0 0 .35rem;padding:0 1.1rem 0 1.35rem}
 .legend ol{display:grid;grid-template-columns:repeat(7,1fr);list-style:none;margin:0;padding:0;text-align:center}
 .legend span{grid-column:1}
@@ -96,9 +101,13 @@ a:hover,button.link:hover{text-decoration:underline}
   <div class="bar">
     <h1>Task board</h1>
     <div class="status">
-      <span class="updated{{if .Refreshing}} refreshing{{end}}">{{if .Updated.IsZero}}Loading. This page refreshes on its own.{{else}}Updated {{.Updated.Format "15:04"}}{{if .Refreshing}}, refreshing{{end}}{{end}}</span>
-      <button class="refresh" type="button"{{if .Refreshing}} disabled{{end}}>Refresh</button>
-      {{if .Local}}<a class="pill" href="/settings">Settings</a>{{end}}
+      <span class="updated{{if .Refreshing}} refreshing{{end}}">{{if .Updated.IsZero}}Loading. This page refreshes on its own.{{else}}Updated <time datetime="{{iso .Updated}}">{{.Updated.Format "15:04"}}</time>{{if .Refreshing}}, refreshing{{end}}{{end}}</span>
+      <button class="icon refresh" type="button"{{if .Refreshing}} disabled title="Refreshing" aria-label="Refreshing"{{else}} title="Refresh now" aria-label="Refresh now"{{end}}>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></svg>
+      </button>
+      {{if .Local}}<a class="icon" href="/settings" title="Settings" aria-label="Settings">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
+      </a>{{end}}
     </div>
   </div>
   {{with .Nav}}<nav class="jump" aria-label="Sections">{{range .}}<a href="#{{slug .Name}}"{{with .Tone}} class="tone-{{.}}"{{end}}>{{.Name}} <span class="count">{{.Count}}</span></a>{{end}}</nav>{{end}}
@@ -160,6 +169,10 @@ a:hover,button.link:hover{text-decoration:underline}
 // Ages and "today" labels depend on the clock, so the page also reloads at least hourly.
 const pageVersion = {{.Version}};
 const loadedAt = Date.now();
+const timeFormat = new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" });
+const fullFormat = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" });
+for (const el of document.querySelectorAll("time[datetime]")) el.textContent = timeFormat.format(new Date(el.dateTime));
+for (const el of document.querySelectorAll("[data-ts]")) el.title = "Last updated " + fullFormat.format(new Date(el.dataset.ts));
 let refreshing = {{.Refreshing}};
 let timer;
 async function check() {
@@ -176,22 +189,28 @@ async function check() {
 }
 function showRefreshing(r, updated) {
   refreshing = r;
-  refreshButton.disabled = r;
+  setRefreshButton(r);
   const el = document.querySelector(".updated");
   if (updated) {
-    el.textContent = "Updated " + updated + (r ? ", refreshing" : "");
+    el.textContent = "Updated " + timeFormat.format(new Date(updated)) + (r ? ", refreshing" : "");
     el.classList.toggle("refreshing", r);
   }
 }
 const refreshButton = document.querySelector(".refresh");
+function setRefreshButton(busy, label) {
+  refreshButton.disabled = busy;
+  label ??= busy ? "Refreshing" : "Refresh now";
+  refreshButton.title = label;
+  refreshButton.setAttribute("aria-label", label);
+}
 refreshButton.addEventListener("click", async () => {
-  refreshButton.disabled = true;
+  setRefreshButton(true);
   try {
     const res = await fetch("/refresh", { method: "POST", headers: { "X-Taskboard": "1" } });
     if (!res.ok) throw new Error(res.status);
   } catch {
-    refreshButton.disabled = false;
-    return flash(refreshButton, "Failed");
+    setRefreshButton(false, "Refresh failed, try again");
+    return flash(document.querySelector(".updated"), "Refresh failed");
   }
   check();
 });

@@ -1,1 +1,1 @@
-{{define "updated"}}{{if not .IsZero}}<span class="age age-{{ageTone .}}" title="Last updated {{.Local.Format "2006-01-02 15:04"}}">{{dateLabel .}}</span>{{end}}{{end}}
+{{define "updated"}}{{if not .IsZero}}<span class="age age-{{ageTone .}}" data-ts="{{iso .}}" title="Last updated {{.Local.Format "2006-01-02 15:04"}}">{{dateLabel .}}{{if isToday .}} <time datetime="{{iso .}}">{{.Local.Format "15:04"}}</time>{{end}}</span>{{end}}{{end}}

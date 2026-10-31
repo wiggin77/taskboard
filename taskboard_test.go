@@ -333,7 +333,7 @@ func TestDateLabel(t *testing.T) {
 		t    time.Time
 		want string
 	}{
-		{time.Date(2026, 10, 31, 9, 5, 0, 0, time.UTC), "today 09:05"},
+		{time.Date(2026, 10, 31, 9, 5, 0, 0, time.UTC), "today"},
 		{time.Date(2026, 10, 30, 23, 0, 0, 0, time.UTC), "Oct 30"},
 		{time.Date(2024, 8, 6, 12, 0, 0, 0, time.UTC), "Aug 6, 2024"},
 	}

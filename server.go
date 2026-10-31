@@ -23,6 +23,8 @@ var templateFS embed.FS
 var templates = template.Must(template.New("").Funcs(template.FuncMap{
 	"ageTone":   func(t time.Time) string { return ageTone(t, time.Now()) },
 	"dateLabel": func(t time.Time) string { return dateLabel(t, time.Now()) },
+	"isToday":   func(t time.Time) bool { return isToday(t, time.Now()) },
+	"iso":       func(t time.Time) string { return t.Format(time.RFC3339) },
 	"slug":      slug,
 	"join":      strings.Join,
 }).ParseFS(templateFS, "templates/*.html"))
@@ -41,17 +43,21 @@ func ageTone(t, now time.Time) string {
 	return "fresh"
 }
 
-func dateLabel(t, now time.Time) string {
-	t = t.In(now.Location())
-	ty, tm, td := t.Date()
+func isToday(t, now time.Time) bool {
+	ty, tm, td := t.In(now.Location()).Date()
 	ny, nm, nd := now.Date()
+	return ty == ny && tm == nm && td == nd
+}
+
+// For today it returns just "today"; templates add the time so the browser can format it.
+func dateLabel(t, now time.Time) string {
 	switch {
-	case ty == ny && tm == nm && td == nd:
-		return "today " + t.Format("15:04")
-	case ty == ny:
-		return t.Format("Jan 2")
+	case isToday(t, now):
+		return "today"
+	case t.In(now.Location()).Year() == now.Year():
+		return t.In(now.Location()).Format("Jan 2")
 	}
-	return t.Format("Jan 2, 2006")
+	return t.In(now.Location()).Format("Jan 2, 2006")
 }
 
 type server struct {
@@ -188,7 +194,7 @@ func updatedLabel(t time.Time) string {
 	if t.IsZero() {
 		return ""
 	}
-	return t.Format("15:04")
+	return t.Format(time.RFC3339)
 }
 
 func (s *server) version(w http.ResponseWriter, r *http.Request) {
