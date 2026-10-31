@@ -1,7 +1,9 @@
 package main
 
 import (
+	"path"
 	"sort"
+	"strconv"
 	"time"
 )
 
@@ -61,6 +63,7 @@ type Task struct {
 	JiraStatus  string
 	JiraDone    bool
 	JiraMissing bool
+	NoTicket    bool
 	Updated     time.Time
 	Stage       Stage
 	PR          *PR
@@ -73,11 +76,21 @@ func (t Task) StageLabel() string { return stageInfo[t.Stage].label }
 func (t Task) Tone() string       { return stageInfo[t.Stage].tone }
 func (t Task) Group() string      { return stageInfo[t.Stage].group }
 
-func (t Task) doneAt() time.Time {
-	if t.PR != nil && t.PR.State == "MERGED" {
-		return t.PR.MergedAt
+func (t Task) DisplayKey() string {
+	if t.NoTicket {
+		return path.Base(t.PR.Repo) + "#" + strconv.Itoa(t.PR.Number)
 	}
-	return t.Updated
+	return t.Key
+}
+
+func (t Task) doneSince(cutoff time.Time, recentlyResolved bool) bool {
+	if recentlyResolved {
+		return true
+	}
+	if t.PR != nil && t.PR.State == "MERGED" {
+		return !t.PR.MergedAt.Before(cutoff)
+	}
+	return !t.Updated.Before(cutoff)
 }
 
 type Stop struct {
@@ -125,7 +138,7 @@ func progressStage(t *Task) Stage {
 				return StageInReview
 			}
 		case "MERGED":
-			if t.JiraDone || t.JiraMissing {
+			if t.JiraDone || t.JiraMissing || t.NoTicket {
 				return StageDone
 			}
 			return StageMergedJiraPending
@@ -155,6 +168,7 @@ func preferPR(candidate, current *PR) bool {
 
 type sources struct {
 	issues    map[string]JiraIssue
+	resolved  map[string]bool
 	missing   map[string]bool
 	prs       []PR
 	plans     []Plan
@@ -184,6 +198,8 @@ func buildTasks(cfg *Config, s sources, now time.Time) []Task {
 	for i := range s.prs {
 		pr := &s.prs[i]
 		if pr.Key == "" {
+			key := pr.Repo + "#" + strconv.Itoa(pr.Number)
+			byKey[key] = &Task{Key: key, NoTicket: true, PR: pr}
 			continue
 		}
 		if t := get(pr.Key); preferPR(pr, t.PR) {
@@ -224,7 +240,7 @@ func buildTasks(cfg *Config, s sources, now time.Time) []Task {
 		}
 		t.JiraMissing = s.missing[t.Key]
 		t.Stage = stageFor(t)
-		if t.Stage == StageDone && t.doneAt().Before(doneCutoff) {
+		if t.Stage == StageDone && !t.doneSince(doneCutoff, s.resolved[t.Key]) {
 			continue
 		}
 		tasks = append(tasks, *t)

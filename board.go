@@ -82,6 +82,7 @@ func (b *Board) refresh(ctx context.Context) {
 	var (
 		wg        sync.WaitGroup
 		issues    []JiraIssue
+		resolved  []JiraIssue
 		jiraErr   error
 		sessions  []Session
 		reviews   []PRLink
@@ -93,6 +94,10 @@ func (b *Board) refresh(ctx context.Context) {
 	go func() {
 		defer wg.Done()
 		issues, jiraErr = jiraSearch(ctx, b.cfg.Jira.JQL)
+		if jiraErr != nil {
+			return
+		}
+		resolved, jiraErr = jiraSearch(ctx, fmt.Sprintf("assignee = currentUser() AND statusCategory = Done AND resolved >= -%dd", b.cfg.DoneDays))
 	}()
 	go func() {
 		defer wg.Done()
@@ -111,7 +116,7 @@ func (b *Board) refresh(ctx context.Context) {
 	wg.Wait()
 
 	var errs []string
-	s := sources{issues: map[string]JiraIssue{}, missing: b.missingIssues, sessions: sessions}
+	s := sources{issues: map[string]JiraIssue{}, resolved: map[string]bool{}, missing: b.missingIssues, sessions: sessions}
 	if jiraErr != nil {
 		errs = append(errs, "Jira search: "+jiraErr.Error())
 	}
@@ -120,6 +125,10 @@ func (b *Board) refresh(ctx context.Context) {
 	}
 	for _, is := range issues {
 		s.issues[is.Key] = is
+	}
+	for _, is := range resolved {
+		s.issues[is.Key] = is
+		s.resolved[is.Key] = true
 	}
 	for _, r := range repos {
 		s.prs = append(s.prs, r.prs...)
@@ -166,13 +175,27 @@ func (b *Board) refresh(ctx context.Context) {
 
 func (b *Board) scanRepo(ctx context.Context, repo RepoConfig) repoResult {
 	var r repoResult
-	open, err := listPRs(ctx, b.cfg, repo.Name, "open", 100)
+	open, err := listPRs(ctx, b.cfg, repo.Name, "open", 100, "")
 	if err != nil {
 		r.errs = append(r.errs, fmt.Sprintf("%s open PRs: %v", repo.Name, err))
 	}
-	merged, err := listPRs(ctx, b.cfg, repo.Name, "merged", b.cfg.MergedPRLimit)
+	merged, err := listPRs(ctx, b.cfg, repo.Name, "merged", b.cfg.MergedPRLimit, "")
 	if err != nil {
 		r.errs = append(r.errs, fmt.Sprintf("%s merged PRs: %v", repo.Name, err))
+	}
+	cutoff := time.Now().AddDate(0, 0, -b.cfg.DoneDays).Format("2006-01-02")
+	recent, err := listPRs(ctx, b.cfg, repo.Name, "merged", 100, "merged:>="+cutoff)
+	if err != nil {
+		r.errs = append(r.errs, fmt.Sprintf("%s recently merged PRs: %v", repo.Name, err))
+	}
+	seen := map[int]bool{}
+	for _, pr := range merged {
+		seen[pr.Number] = true
+	}
+	for _, pr := range recent {
+		if !seen[pr.Number] {
+			merged = append(merged, pr)
+		}
 	}
 	r.prs = append(open, merged...)
 

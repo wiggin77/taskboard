@@ -87,6 +87,7 @@ func TestStageFor(t *testing.T) {
 		{"merged, jira open", Task{PR: &PR{State: "MERGED"}}, StageMergedJiraPending},
 		{"merged, jira done", Task{PR: &PR{State: "MERGED"}, JiraDone: true}, StageDone},
 		{"merged, jira not found", Task{PR: &PR{State: "MERGED"}, JiraMissing: true}, StageDone},
+		{"merged, no ticket", Task{PR: &PR{State: "MERGED"}, NoTicket: true}, StageDone},
 		{"merged, leftover worktree", Task{PR: &PR{State: "MERGED"}, JiraDone: true, Worktree: &Worktree{}}, StageCleanup},
 		{"done ticket, open session", Task{JiraDone: true, Session: &Session{}}, StageCleanup},
 		{"merged, jira open, leftover worktree", Task{PR: &PR{State: "MERGED"}, Worktree: &Worktree{}}, StageMergedJiraPending},
@@ -112,7 +113,7 @@ func TestBuildTasks(t *testing.T) {
 			{Key: "MM-1", Number: 10, State: "MERGED", UpdatedAt: now},
 			{Key: "MM-1", Number: 11, State: "OPEN", CI: CIFailing, UpdatedAt: now.Add(-time.Hour)},
 			{Key: "MM-3", Number: 12, State: "OPEN", Title: "PR title fallback"},
-			{Number: 13, State: "OPEN"},
+			{Repo: "mattermost/logr", Number: 13, State: "OPEN", Title: "No ticket"},
 		},
 		plans: []Plan{
 			{Key: "MM-2", ModTime: now.Add(-time.Hour), Approved: true},
@@ -122,13 +123,13 @@ func TestBuildTasks(t *testing.T) {
 		sessions: []Session{{Key: "MM-2", Target: "work:1"}},
 	}, now)
 
-	if len(tasks) != 3 {
-		t.Fatalf("got %d tasks, want 3: %+v", len(tasks), tasks)
+	if len(tasks) != 4 {
+		t.Fatalf("got %d tasks, want 4: %+v", len(tasks), tasks)
 	}
 	want := []struct {
 		key   string
 		stage Stage
-	}{{"MM-1", StageCIFailing}, {"MM-2", StagePlanning}, {"MM-3", StageInReview}}
+	}{{"MM-1", StageCIFailing}, {"MM-2", StagePlanning}, {"MM-3", StageInReview}, {"mattermost/logr#13", StageInReview}}
 	for i, w := range want {
 		if tasks[i].Key != w.key || tasks[i].Stage != w.stage {
 			t.Errorf("tasks[%d] = %s %s, want %s %s", i, tasks[i].Key, tasks[i].StageLabel(), w.key, stageInfo[w.stage].label)
@@ -142,6 +143,9 @@ func TestBuildTasks(t *testing.T) {
 	}
 	if tasks[2].Summary != "PR title fallback" {
 		t.Errorf("MM-3 summary = %q", tasks[2].Summary)
+	}
+	if k := tasks[3]; !k.NoTicket || k.DisplayKey() != "logr#13" || k.Summary != "No ticket" {
+		t.Errorf("keyless task = %+v", k)
 	}
 }
 
@@ -354,11 +358,14 @@ func TestDoneWindow(t *testing.T) {
 			"MM-3": {Key: "MM-3", Done: true, Updated: daysAgo(90)},
 			"MM-4": {Key: "MM-4", Done: true, Updated: daysAgo(5)},
 			"MM-5": {Key: "MM-5", Done: true, Updated: daysAgo(90)},
+			"MM-6": {Key: "MM-6", Done: true, Updated: daysAgo(3)},
 		},
+		resolved: map[string]bool{"MM-6": true},
 		prs: []PR{
 			{Key: "MM-1", State: "MERGED", MergedAt: daysAgo(10), UpdatedAt: daysAgo(1)},
 			{Key: "MM-2", State: "MERGED", MergedAt: daysAgo(40), UpdatedAt: daysAgo(1)},
 			{Key: "MM-3", State: "MERGED", MergedAt: daysAgo(400)},
+			{Key: "MM-6", State: "MERGED", MergedAt: daysAgo(60)},
 		},
 		worktrees: []Worktree{{Key: "MM-3", Path: "/src/mm-MM-3"}},
 	}, now)
@@ -366,7 +373,7 @@ func TestDoneWindow(t *testing.T) {
 	for _, task := range tasks {
 		got[task.Key] = task.Stage
 	}
-	want := map[string]Stage{"MM-1": StageDone, "MM-3": StageCleanup, "MM-4": StageDone}
+	want := map[string]Stage{"MM-1": StageDone, "MM-3": StageCleanup, "MM-4": StageDone, "MM-6": StageDone}
 	if !maps.Equal(got, want) {
 		t.Errorf("stages = %v, want %v", got, want)
 	}

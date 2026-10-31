@@ -4,7 +4,7 @@ A local dashboard that shows every in-flight task by stage, keyed by Jira ticket
 
 Stages: Ticket, Plan, Code, Review, Ready, Merged, Done. Tasks are grouped so the ones waiting on you come first: CI failing, changes requested, ready to merge, plan needs review, and merged but Jira not yet updated.
 
-Done tasks that still have a worktree or a tmux window go to "Needs clean-up" instead of Done. Done shows only PRs merged in the last `done_days` days (default 30), or for tasks without a merged PR, tickets updated in that window.
+Done tasks that still have a worktree or a tmux window go to "Needs clean-up" instead of Done. Done shows tasks whose PR merged in the last `done_days` days (default 30) or whose ticket was resolved in that window (`assignee = currentUser() AND statusCategory = Done`).
 
 ## Requirements
 
@@ -30,7 +30,7 @@ Everything is joined on the Jira key (any key matching `project_keys`, case-inse
 | Source | Where the key must appear |
 |---|---|
 | Jira | Tickets returned by `jira.jql`, plus any key found below |
-| PR | Branch name, or PR title as a fallback |
+| PR | Branch name, or PR title as a fallback. A PR without a key becomes its own task, shown as `repo#number` with no Jira link |
 | Worktree | Branch name |
 | Plan | File name in `plans_dir`, e.g. `plans/MM-1234.md` |
 | Session | tmux window name |

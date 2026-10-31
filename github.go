@@ -65,12 +65,13 @@ type ghPR struct {
 	MergedAt          time.Time `json:"mergedAt"`
 }
 
-func listPRs(ctx context.Context, cfg *Config, repo, state string, limit int) ([]PR, error) {
+func listPRs(ctx context.Context, cfg *Config, repo, state string, limit int, search string) ([]PR, error) {
 	out, err := runCmd(ctx, "", "gh", "pr", "list",
 		"--repo", repo,
 		"--author", "@me",
 		"--state", state,
 		"--limit", strconv.Itoa(limit),
+		"--search", search,
 		"--json", "number,title,url,headRefName,state,isDraft,reviewDecision,statusCheckRollup,updatedAt,mergedAt")
 	if err != nil {
 		return nil, err
