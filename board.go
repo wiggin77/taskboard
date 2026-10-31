@@ -21,7 +21,8 @@ type Snapshot struct {
 type Board struct {
 	cfg *Config
 
-	doneIssues map[string]JiraIssue
+	doneIssues    map[string]JiraIssue
+	missingIssues map[string]bool
 
 	jiraUpdated  map[string]time.Time
 	updatedCheck time.Time
@@ -31,7 +32,12 @@ type Board struct {
 }
 
 func NewBoard(cfg *Config) *Board {
-	return &Board{cfg: cfg, doneIssues: map[string]JiraIssue{}, jiraUpdated: map[string]time.Time{}}
+	return &Board{
+		cfg:           cfg,
+		doneIssues:    map[string]JiraIssue{},
+		missingIssues: map[string]bool{},
+		jiraUpdated:   map[string]time.Time{},
+	}
 }
 
 func (b *Board) Snapshot() Snapshot {
@@ -105,7 +111,7 @@ func (b *Board) refresh(ctx context.Context) {
 	wg.Wait()
 
 	var errs []string
-	s := sources{issues: map[string]JiraIssue{}, sessions: sessions}
+	s := sources{issues: map[string]JiraIssue{}, missing: b.missingIssues, sessions: sessions}
 	if jiraErr != nil {
 		errs = append(errs, "Jira search: "+jiraErr.Error())
 	}
@@ -127,16 +133,21 @@ func (b *Board) refresh(ctx context.Context) {
 			s.issues[key] = is
 			continue
 		}
+		if b.missingIssues[key] {
+			continue
+		}
 		is, ok, err := jiraGet(ctx, key)
 		if err != nil {
 			errs = append(errs, fmt.Sprintf("Jira %s: %v", key, err))
 			continue
 		}
-		if ok {
-			s.issues[key] = is
-			if is.Done {
-				b.doneIssues[key] = is
-			}
+		if !ok {
+			b.missingIssues[key] = true
+			continue
+		}
+		s.issues[key] = is
+		if is.Done {
+			b.doneIssues[key] = is
 		}
 	}
 
@@ -144,7 +155,7 @@ func (b *Board) refresh(ctx context.Context) {
 		errs = append(errs, "Jira updated dates: "+err.Error())
 	}
 
-	snap := Snapshot{Tasks: buildTasks(b.cfg, s), Reviews: reviews, OtherPRs: otherPRs, Errors: errs, Updated: time.Now()}
+	snap := Snapshot{Tasks: buildTasks(b.cfg, s, time.Now()), Reviews: reviews, OtherPRs: otherPRs, Errors: errs, Updated: time.Now()}
 	for _, e := range errs {
 		log.Print(e)
 	}

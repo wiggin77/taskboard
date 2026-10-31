@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -14,6 +15,7 @@ func testConfig(t *testing.T) *Config {
 	t.Helper()
 	cfg := &Config{
 		PollInterval: Duration{time.Minute},
+		DoneDays:     30,
 		ProjectKeys:  []string{"MM"},
 		Jira:         JiraConfig{BaseURL: "https://example.atlassian.net/"},
 		Repos:        []RepoConfig{{Name: "mattermost/mattermost"}},
@@ -84,6 +86,11 @@ func TestStageFor(t *testing.T) {
 		{"ready", Task{PR: &PR{State: "OPEN", Review: "APPROVED", CI: CIPassing}}, StageReadyToMerge},
 		{"merged, jira open", Task{PR: &PR{State: "MERGED"}}, StageMergedJiraPending},
 		{"merged, jira done", Task{PR: &PR{State: "MERGED"}, JiraDone: true}, StageDone},
+		{"merged, jira not found", Task{PR: &PR{State: "MERGED"}, JiraMissing: true}, StageDone},
+		{"merged, leftover worktree", Task{PR: &PR{State: "MERGED"}, JiraDone: true, Worktree: &Worktree{}}, StageCleanup},
+		{"done ticket, open session", Task{JiraDone: true, Session: &Session{}}, StageCleanup},
+		{"merged, jira open, leftover worktree", Task{PR: &PR{State: "MERGED"}, Worktree: &Worktree{}}, StageMergedJiraPending},
+		{"open PR, jira not found", Task{PR: &PR{State: "OPEN"}, JiraMissing: true}, StageInReview},
 		{"open PR beats done ticket", Task{PR: &PR{State: "OPEN"}, JiraDone: true}, StageInReview},
 	}
 	for _, c := range cases {
@@ -113,7 +120,7 @@ func TestBuildTasks(t *testing.T) {
 			{Key: "MM-99", ModTime: now},
 		},
 		sessions: []Session{{Key: "MM-2", Target: "work:1"}},
-	})
+	}, now)
 
 	if len(tasks) != 3 {
 		t.Fatalf("got %d tasks, want 3: %+v", len(tasks), tasks)
@@ -260,11 +267,11 @@ func TestMergePRLinks(t *testing.T) {
 			}
 		}
 	}
-	check("reviews", reviews, []want{{1, RoleRequested}, {7, RoleReviewed}, {5, RoleReviewed}})
+	check("reviews", reviews, []want{{1, RoleRequested}, {5, RoleReviewed}, {7, RoleReviewed}})
 	check("others", others, []want{{2, RoleRequested}, {4, RoleAuthor}, {6, RoleReviewed}})
 }
 
-func TestTaskOrderOldestFirst(t *testing.T) {
+func TestTaskOrderNewestFirst(t *testing.T) {
 	now := time.Now()
 	ago := func(h int) time.Time { return now.Add(-time.Duration(h) * time.Hour) }
 	tasks := buildTasks(testConfig(t), sources{
@@ -279,17 +286,17 @@ func TestTaskOrderOldestFirst(t *testing.T) {
 			{Key: "MM-4", State: "OPEN", UpdatedAt: ago(3)},
 			{Key: "MM-5", State: "OPEN", UpdatedAt: ago(200)},
 		},
-	})
+	}, now)
 	var got []string
 	for _, task := range tasks {
 		got = append(got, task.Key)
 	}
-	want := []string{"MM-4", "MM-5", "MM-2", "MM-1", "MM-3"}
+	want := []string{"MM-5", "MM-4", "MM-1", "MM-2", "MM-3"}
 	if !slices.Equal(got, want) {
 		t.Errorf("order = %v, want %v", got, want)
 	}
-	if !tasks[0].Updated.Equal(ago(3)) {
-		t.Errorf("MM-4 updated = %v, want the newer PR time", tasks[0].Updated)
+	if !tasks[1].Updated.Equal(ago(3)) {
+		t.Errorf("MM-4 updated = %v, want the newer PR time", tasks[1].Updated)
 	}
 }
 
@@ -334,5 +341,33 @@ func TestJiraUpdatedParse(t *testing.T) {
 	want := time.Date(2026, 10, 27, 13, 51, 35, 697e6, time.UTC)
 	if got := raw.issue().Updated; !got.Equal(want) {
 		t.Errorf("updated = %v, want %v", got, want)
+	}
+}
+
+func TestDoneWindow(t *testing.T) {
+	now := time.Now()
+	daysAgo := func(d int) time.Time { return now.AddDate(0, 0, -d) }
+	tasks := buildTasks(testConfig(t), sources{
+		issues: map[string]JiraIssue{
+			"MM-1": {Key: "MM-1", Done: true, Updated: daysAgo(1)},
+			"MM-2": {Key: "MM-2", Done: true, Updated: daysAgo(1)},
+			"MM-3": {Key: "MM-3", Done: true, Updated: daysAgo(90)},
+			"MM-4": {Key: "MM-4", Done: true, Updated: daysAgo(5)},
+			"MM-5": {Key: "MM-5", Done: true, Updated: daysAgo(90)},
+		},
+		prs: []PR{
+			{Key: "MM-1", State: "MERGED", MergedAt: daysAgo(10), UpdatedAt: daysAgo(1)},
+			{Key: "MM-2", State: "MERGED", MergedAt: daysAgo(40), UpdatedAt: daysAgo(1)},
+			{Key: "MM-3", State: "MERGED", MergedAt: daysAgo(400)},
+		},
+		worktrees: []Worktree{{Key: "MM-3", Path: "/src/mm-MM-3"}},
+	}, now)
+	got := map[string]Stage{}
+	for _, task := range tasks {
+		got[task.Key] = task.Stage
+	}
+	want := map[string]Stage{"MM-1": StageDone, "MM-3": StageCleanup, "MM-4": StageDone}
+	if !maps.Equal(got, want) {
+		t.Errorf("stages = %v, want %v", got, want)
 	}
 }

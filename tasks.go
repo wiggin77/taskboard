@@ -17,6 +17,7 @@ const (
 	StageInReview
 	StageCoding
 	StageTicket
+	StageCleanup
 	StageDone
 )
 
@@ -36,6 +37,7 @@ var stageInfo = map[Stage]stageMeta{
 	StageInReview:          {"In review", "active", groupWaiting, 3},
 	StageCoding:            {"Coding", "active", groupInProgress, 2},
 	StageTicket:            {"Not started", "idle", groupNotStarted, 0},
+	StageCleanup:           {"Done, clean up", "needs", groupCleanup, 6},
 	StageDone:              {"Done", "ok", groupDone, 6},
 }
 
@@ -44,30 +46,39 @@ const (
 	groupWaiting    = "Waiting on others"
 	groupInProgress = "In progress"
 	groupNotStarted = "Not started"
+	groupCleanup    = "Needs clean-up"
 	groupDone       = "Done"
 )
 
-var groupOrder = []string{groupNeedsYou, groupWaiting, groupInProgress, groupNotStarted, groupDone}
+var groupOrder = []string{groupNeedsYou, groupWaiting, groupInProgress, groupCleanup, groupNotStarted, groupDone}
 
 var stations = []string{"Ticket", "Plan", "Code", "Review", "Ready", "Merged", "Done"}
 
 type Task struct {
-	Key        string
-	Summary    string
-	JiraURL    string
-	JiraStatus string
-	JiraDone   bool
-	Updated    time.Time
-	Stage      Stage
-	PR         *PR
-	Plan       *Plan
-	Session    *Session
-	Worktree   *Worktree
+	Key         string
+	Summary     string
+	JiraURL     string
+	JiraStatus  string
+	JiraDone    bool
+	JiraMissing bool
+	Updated     time.Time
+	Stage       Stage
+	PR          *PR
+	Plan        *Plan
+	Session     *Session
+	Worktree    *Worktree
 }
 
 func (t Task) StageLabel() string { return stageInfo[t.Stage].label }
 func (t Task) Tone() string       { return stageInfo[t.Stage].tone }
 func (t Task) Group() string      { return stageInfo[t.Stage].group }
+
+func (t Task) doneAt() time.Time {
+	if t.PR != nil && t.PR.State == "MERGED" {
+		return t.PR.MergedAt
+	}
+	return t.Updated
+}
 
 type Stop struct {
 	Label string
@@ -90,6 +101,14 @@ func (t Task) Track() []Stop {
 }
 
 func stageFor(t *Task) Stage {
+	st := progressStage(t)
+	if st == StageDone && (t.Worktree != nil || t.Session != nil) {
+		return StageCleanup
+	}
+	return st
+}
+
+func progressStage(t *Task) Stage {
 	if pr := t.PR; pr != nil {
 		switch pr.State {
 		case "OPEN":
@@ -106,7 +125,7 @@ func stageFor(t *Task) Stage {
 				return StageInReview
 			}
 		case "MERGED":
-			if t.JiraDone {
+			if t.JiraDone || t.JiraMissing {
 				return StageDone
 			}
 			return StageMergedJiraPending
@@ -136,6 +155,7 @@ func preferPR(candidate, current *PR) bool {
 
 type sources struct {
 	issues    map[string]JiraIssue
+	missing   map[string]bool
 	prs       []PR
 	plans     []Plan
 	worktrees []Worktree
@@ -143,7 +163,7 @@ type sources struct {
 }
 
 // Plans only attach to tasks found elsewhere, so old plan files for long-closed tickets stay off the board.
-func buildTasks(cfg *Config, s sources) []Task {
+func buildTasks(cfg *Config, s sources, now time.Time) []Task {
 	byKey := map[string]*Task{}
 	get := func(key string) *Task {
 		t, ok := byKey[key]
@@ -193,6 +213,7 @@ func buildTasks(cfg *Config, s sources) []Task {
 		}
 	}
 
+	doneCutoff := now.AddDate(0, 0, -cfg.DoneDays)
 	tasks := make([]Task, 0, len(byKey))
 	for _, t := range byKey {
 		if t.Summary == "" && t.PR != nil {
@@ -201,7 +222,11 @@ func buildTasks(cfg *Config, s sources) []Task {
 		if t.PR != nil && t.PR.UpdatedAt.After(t.Updated) {
 			t.Updated = t.PR.UpdatedAt
 		}
+		t.JiraMissing = s.missing[t.Key]
 		t.Stage = stageFor(t)
+		if t.Stage == StageDone && t.doneAt().Before(doneCutoff) {
+			continue
+		}
 		tasks = append(tasks, *t)
 	}
 	sort.Slice(tasks, func(i, j int) bool {
@@ -210,7 +235,7 @@ func buildTasks(cfg *Config, s sources) []Task {
 			return a.Stage < b.Stage
 		}
 		if !a.Updated.Equal(b.Updated) {
-			return olderFirst(a.Updated, b.Updated)
+			return newerFirst(a.Updated, b.Updated)
 		}
 		return a.Key < b.Key
 	})
@@ -218,9 +243,9 @@ func buildTasks(cfg *Config, s sources) []Task {
 }
 
 // Unknown (zero) times sort last.
-func olderFirst(a, b time.Time) bool {
+func newerFirst(a, b time.Time) bool {
 	if a.IsZero() || b.IsZero() {
 		return b.IsZero() && !a.IsZero()
 	}
-	return a.Before(b)
+	return a.After(b)
 }

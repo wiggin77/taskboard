@@ -31,6 +31,8 @@ type Plan struct {
 	ModTime  time.Time
 }
 
+func (w *Worktree) Dir() string { return filepath.Base(w.Path) }
+
 func (p *Plan) GitHubURL() string {
 	if p.Branch == "" {
 		return ""

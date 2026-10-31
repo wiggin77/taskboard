@@ -100,8 +100,9 @@ a:hover,button.link:hover{text-decoration:underline}
         </ol>
       </div>
       <div class="links">
-        <a href="{{.JiraURL}}" target="_blank" rel="noopener">Jira{{with .JiraStatus}} <span class="meta">{{.}}</span>{{end}}</a>
+        <a href="{{.JiraURL}}" target="_blank" rel="noopener">Jira{{with .JiraStatus}} <span class="meta">{{.}}</span>{{end}}{{if .JiraMissing}} <span class="meta">not found</span>{{end}}</a>
         {{with .PR}}<a href="{{.URL}}" target="_blank" rel="noopener">PR #{{.Number}}{{with .CI.String}} <span class="meta">{{.}}</span>{{end}}</a>{{end}}
+        {{with .Worktree}}<span class="meta" title="{{.Path}}">worktree {{.Dir}}</span>{{end}}
         {{with .Plan}}<a href="/plan/{{.Key}}">Plan{{if .Approved}} <span class="meta">approved</span>{{end}}</a>{{end}}
         {{with .Session}}
           <button class="link" type="button" data-copy="{{.AttachCmd}}">Copy session command</button>

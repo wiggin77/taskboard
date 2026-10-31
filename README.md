@@ -4,6 +4,8 @@ A local dashboard that shows every in-flight task by stage, keyed by Jira ticket
 
 Stages: Ticket, Plan, Code, Review, Ready, Merged, Done. Tasks are grouped so the ones waiting on you come first: CI failing, changes requested, ready to merge, plan needs review, and merged but Jira not yet updated.
 
+Done tasks that still have a worktree or a tmux window go to "Needs clean-up" instead of Done. Done shows only PRs merged in the last `done_days` days (default 30), or for tasks without a merged PR, tickets updated in that window.
+
 ## Requirements
 
 - Go 1.22+
@@ -73,9 +75,9 @@ If you bind to a LAN or Tailscale address instead, requests by IP work as is. Ad
 ## Notes
 
 - Jira is read through `acli`, so taskboard uses whatever account acli is logged in as. `jira.base_url` is only used to build ticket links.
-- Within each section, items are sorted by stage, then least recently updated first. A task's date is the later of its Jira ticket's and its PR's last update. Dates turn orange after 2 days and red after a week.
+- Within each section, items are sorted by stage, then most recently updated first. A task's date is the later of its Jira ticket's and its PR's last update. Dates turn orange after 2 days and red after a week.
 - `acli` search cannot return a ticket's updated date, so the first refresh fetches each ticket with `acli jira workitem view` (about 30s for 100 tickets). Later refreshes only re-fetch tickets that a search reports as changed since the last check.
-- Jira tickets in a done status category are cached for the life of the process, since merged PRs are rechecked every poll.
+- Jira tickets in a done status category are cached for the life of the process, since merged PRs are rechecked every poll. So are tickets acli cannot find (deleted, or not visible to you); a merged PR whose ticket cannot be found counts as Done.
 - The Reviews section lists open PRs in the configured repos where your review is requested, then ones you have already reviewed (GitHub drops the request once you submit a review). Other repos lists the same for every repo not in `repos`, plus open PRs you authored there. Neither section is joined on Jira keys.
-- `merged_pr_limit` controls how many recent merged PRs per repo are checked for the "merged, update Jira" stage.
+- `merged_pr_limit` controls how many recent merged PRs per repo are checked for the "merged, update Jira" stage. It is independent of `done_days`, so a merged PR older than the Done window still shows when its ticket needs updating.
 - Source failures show in a banner at the top of the page and in the log; the rest of the board still renders.

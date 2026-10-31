@@ -42,6 +42,7 @@ type PR struct {
 	Review    string
 	CI        CIState
 	UpdatedAt time.Time
+	MergedAt  time.Time
 }
 
 type ghCheck struct {
@@ -61,6 +62,7 @@ type ghPR struct {
 	ReviewDecision    string    `json:"reviewDecision"`
 	StatusCheckRollup []ghCheck `json:"statusCheckRollup"`
 	UpdatedAt         time.Time `json:"updatedAt"`
+	MergedAt          time.Time `json:"mergedAt"`
 }
 
 func listPRs(ctx context.Context, cfg *Config, repo, state string, limit int) ([]PR, error) {
@@ -69,7 +71,7 @@ func listPRs(ctx context.Context, cfg *Config, repo, state string, limit int) ([
 		"--author", "@me",
 		"--state", state,
 		"--limit", strconv.Itoa(limit),
-		"--json", "number,title,url,headRefName,state,isDraft,reviewDecision,statusCheckRollup,updatedAt")
+		"--json", "number,title,url,headRefName,state,isDraft,reviewDecision,statusCheckRollup,updatedAt,mergedAt")
 	if err != nil {
 		return nil, err
 	}
@@ -95,6 +97,7 @@ func listPRs(ctx context.Context, cfg *Config, repo, state string, limit int) ([
 			Review:    r.ReviewDecision,
 			CI:        rollupCI(r.StatusCheckRollup),
 			UpdatedAt: r.UpdatedAt,
+			MergedAt:  r.MergedAt,
 		})
 	}
 	return prs, nil
@@ -240,7 +243,7 @@ func mergePRLinks(found [3][]ghSearchPR) []PRLink {
 		if links[i].Role != links[j].Role {
 			return links[i].Role < links[j].Role
 		}
-		return links[i].UpdatedAt.Before(links[j].UpdatedAt)
+		return links[i].UpdatedAt.After(links[j].UpdatedAt)
 	})
 	return links
 }

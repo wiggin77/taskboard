@@ -16,6 +16,7 @@ type Config struct {
 	PollInterval  Duration     `json:"poll_interval"`
 	ProjectKeys   []string     `json:"project_keys"`
 	MergedPRLimit int          `json:"merged_pr_limit"`
+	DoneDays      int          `json:"done_days"`
 	SSHHost       string       `json:"ssh_host"`
 	AttachCommand []string     `json:"attach_command"`
 	Jira          JiraConfig   `json:"jira"`
@@ -59,6 +60,7 @@ func LoadConfig(path string) (*Config, error) {
 		Listen:        "127.0.0.1:8484",
 		PollInterval:  Duration{time.Minute},
 		MergedPRLimit: 20,
+		DoneDays:      30,
 		Jira: JiraConfig{
 			JQL: "assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC",
 		},
@@ -91,6 +93,9 @@ func (c *Config) validate() error {
 		if r.PlansDir == "" {
 			r.PlansDir = "plans"
 		}
+	}
+	if c.DoneDays < 1 {
+		return errors.New("done_days must be at least 1")
 	}
 	if c.PollInterval.Duration < 10*time.Second {
 		return errors.New("poll_interval must be at least 10s")
