@@ -16,7 +16,7 @@ Single `main` package, standard library only (Go 1.22, uses `ServeMux` method/pa
 
 ## Architecture
 
-A local dashboard that joins Jira tickets, GitHub PRs, git worktrees, plan files and tmux sessions on the Jira key. README.md documents user-facing behaviour and config; keep it in sync when behaviour changes.
+A local dashboard for multitasking across many parallel coding-agent sessions. It joins Jira tickets, GitHub PRs, git worktrees, plan files and tmux sessions on the ticket key; Jira is the only tracker today, but others (e.g. GitHub issues) may be added, so avoid baking in Jira-only assumptions where it's cheap. README.md documents user-facing behaviour and config; keep it in sync when behaviour changes.
 
 Data flow:
 
