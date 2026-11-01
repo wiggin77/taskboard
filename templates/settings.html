@@ -27,16 +27,26 @@ textarea{resize:vertical;min-height:4.5rem}
 input:focus,textarea:focus{outline:2px solid var(--link);outline-offset:-1px}
 .row3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:0 .75rem;align-items:end}
 .row2{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 .75rem;align-items:end}
-.repo{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(0,1.6fr) minmax(0,.7fr) auto;gap:.5rem;align-items:end;padding:.6rem 0;border-top:1px solid var(--line)}
+.repo{display:grid;grid-template-columns:minmax(0,1fr) 12rem auto;grid-template-areas:"name plans remove" "path path .";gap:.45rem .5rem;
+  align-items:end;padding:.75rem 0;border-top:1px solid var(--line)}
 .repo:first-of-type{border-top:0;padding-top:0}
 .repo label{margin-top:0}
+.repo .repo-name{grid-area:name}
+.repo .repo-plans{grid-area:plans}
+.repo .repo-path{grid-area:path}
+.repo .remove{grid-area:remove;margin-bottom:2px}
+.repo:not(.removed) .remove:hover{border-color:color-mix(in srgb,var(--fail) 50%,var(--line));color:var(--fail)}
+.remove .undo,.removed .remove .trash{display:none}
+.removed .remove .undo{display:block}
+.repo.removed label{color:var(--muted)}
+.repo.removed input{text-decoration:line-through;opacity:.6}
+.repo.removed::after{content:"Removed when you save.";grid-column:1 / -1;color:var(--muted);font-size:.75rem}
 button{padding:.35rem .85rem;border:1px solid var(--line);border-radius:999px;background:var(--surface);color:var(--ink);
   font:inherit;font-size:.8125rem;font-weight:550;cursor:pointer;transition:border-color .12s}
 button:hover:not(:disabled){border-color:var(--muted)}
 button:disabled{color:var(--muted);cursor:default}
 button.primary{background:var(--link);border-color:var(--link);color:var(--surface)}
-button.remove{padding:.35rem .6rem;margin-bottom:.1rem}
-.add{margin-top:.75rem}
+.add{display:grid;margin:.75rem 0 0 auto}
 .actions{position:sticky;bottom:0;display:flex;align-items:center;gap:1rem;padding:.9rem 0;background:color-mix(in srgb,var(--bg) 85%,transparent);
   -webkit-backdrop-filter:blur(12px);backdrop-filter:blur(12px)}
 #status{margin:0;font-size:.8125rem;white-space:pre-wrap}
@@ -44,7 +54,7 @@ button.remove{padding:.35rem .6rem;margin-bottom:.1rem}
 #status.ok{color:var(--ok)}
 @media (max-width:40rem){
   .row3,.row2{grid-template-columns:minmax(0,1fr)}
-  .repo{grid-template-columns:minmax(0,1fr)}
+  .repo{grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"name remove" "path path" "plans ."}
 }
 </style>
 </head>
@@ -80,7 +90,7 @@ button.remove{padding:.35rem .6rem;margin-bottom:.1rem}
   <legend>Repos</legend>
   <span class="hint">Your PRs in these repos become tasks; PRs elsewhere go under Other repos. With a local checkout, the board also shows its worktrees and the plan files in each worktree's plans folder (default plans), named after the ticket, like MM-1234.md.</span>
   {{range .Repos}}{{template "repo" .}}{{end}}
-  <button class="add" type="button" id="add-repo">Add repo</button>
+  <button class="icon add" type="button" id="add-repo" title="Add repo" aria-label="Add repo"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M12 5v14"/></svg></button>
 </fieldset>
 
 <fieldset>
@@ -127,12 +137,31 @@ const status = document.getElementById("status");
 const repos = document.getElementById("repos");
 const val = name => form.elements[name].value.trim();
 const lines = name => val(name).split("\n").map(s => s.trim()).filter(Boolean);
-document.getElementById("add-repo").addEventListener("click", e => {
-  e.target.before(document.getElementById("repo-row").content.cloneNode(true));
-  e.target.previousElementSibling.querySelector("input").focus();
+const addRepo = document.getElementById("add-repo");
+addRepo.addEventListener("click", () => {
+  addRepo.before(document.getElementById("repo-row").content.cloneNode(true));
+  addRepo.previousElementSibling.querySelector("input").focus();
+});
+function labelRemove(row) {
+  const name = row.querySelector("[data-field=name]").value.trim() || "this repo";
+  const label = row.classList.contains("removed") ? "Keep " + name : "Remove " + name;
+  const button = row.querySelector(".remove");
+  button.title = label;
+  button.setAttribute("aria-label", label);
+}
+repos.addEventListener("input", e => {
+  if (!e.target.dataset.field) return;
+  e.target.title = e.target.value;
+  if (e.target.dataset.field === "name") labelRemove(e.target.closest(".repo"));
 });
 repos.addEventListener("click", e => {
-  if (e.target.closest(".remove")) e.target.closest(".repo").remove();
+  if (!e.target.closest(".remove")) return;
+  const row = e.target.closest(".repo");
+  const inputs = row.querySelectorAll("input");
+  if (![...inputs].some(i => i.value.trim())) return row.remove();
+  const removed = row.classList.toggle("removed");
+  for (const i of inputs) i.disabled = removed;
+  labelRemove(row);
 });
 form.addEventListener("submit", async e => {
   e.preventDefault();
@@ -148,7 +177,7 @@ form.addEventListener("submit", async e => {
     ssh_host: val("ssh_host"),
     attach_command: lines("attach_command"),
     jira: { base_url: val("jira.base_url"), jql: val("jira.jql") },
-    repos: [...repos.querySelectorAll(".repo")].map(row => {
+    repos: [...repos.querySelectorAll(".repo:not(.removed)")].map(row => {
       const f = n => row.querySelector(`[data-field=${n}]`).value.trim();
       return { name: f("name"), path: f("path"), plans_dir: f("plans_dir") };
     }).filter(r => r.name || r.path),
@@ -165,6 +194,7 @@ form.addEventListener("submit", async e => {
     });
     if (!res.ok) throw new Error((await res.text()).trim() || res.statusText);
     const { restart } = await res.json();
+    for (const row of repos.querySelectorAll(".repo.removed")) row.remove();
     status.className = "ok";
     status.textContent = "Saved. The board is refreshing." + (restart ? " Restart taskboard to use the new listen address." : "");
   } catch (err) {
@@ -178,9 +208,12 @@ form.addEventListener("submit", async e => {
 </body>
 </html>
 
-{{define "repo"}}<div class="repo">
-  <label>GitHub repo<input data-field="name" placeholder="owner/repo" value="{{.Name}}"></label>
-  <label>Local checkout<input data-field="path" placeholder="/path/to/checkout, optional" value="{{.Path}}"></label>
-  <label>Plans folder<input data-field="plans_dir" placeholder="plans" value="{{.PlansDir}}"></label>
-  <button class="remove" type="button" aria-label="Remove repo">Remove</button>
+{{define "repo"}}{{$plans := .PlansDir}}{{if eq $plans "plans"}}{{$plans = ""}}{{end}}<div class="repo">
+  <label class="repo-name">GitHub repo<input data-field="name" placeholder="owner/repo" value="{{.Name}}" title="{{.Name}}"></label>
+  <label class="repo-plans">Plans folder<input data-field="plans_dir" placeholder="plans" value="{{$plans}}" title="{{$plans}}"></label>
+  <button class="icon remove" type="button" title="Remove {{or .Name "this repo"}}" aria-label="Remove {{or .Name "this repo"}}">
+    <svg class="trash" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><path d="M10 11v6M14 11v6"/></svg>
+    <svg class="undo" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></svg>
+  </button>
+  <label class="repo-path">Local checkout<input data-field="path" placeholder="/path/to/checkout, optional" value="{{.Path}}" title="{{.Path}}"></label>
 </div>{{end}}
