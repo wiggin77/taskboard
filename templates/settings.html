@@ -122,12 +122,12 @@ button.primary{background:var(--link);border-color:var(--link);color:var(--surfa
   <label>Resume command<span class="hint">Typed instead when a task or review already has a worktree. Default claude --continue, or the agent command if you changed it.</span>
     <input name="agent_resume_command" placeholder="claude --continue" value="{{.AgentResume}}"></label>
   <div class="row2">
-    <label>tmux session<span class="hint">New windows go here. Created if it isn't running. Default work.</span>
+    <label>tmux session name<span class="hint">A name, not a folder: the tmux session new task and review windows are added to. taskboard starts it if it isn't running. Default work.</span>
       <input name="tmux_session" placeholder="work" value="{{.TmuxSession}}"></label>
-    <label>Worktree folder<span class="hint">New worktrees go here, as repo-KEY. Leave empty to put each next to its repo's checkout.</span>
+    <label>Worktree folder<span class="hint">Full path, or starting with ~/ for your home folder. New worktrees go here, as repo-KEY. Leave empty to put each next to its repo's checkout.</span>
       <input name="worktree_dir" placeholder="next to each checkout" value="{{shortHome .WorktreeDir}}"></label>
   </div>
-  <label>Links in the worktree folder<span class="hint">One path per line. Each is linked into the worktree folder under its own name, for builds that expect a sibling checkout, e.g. ../enterprise.</span>
+  <label>Links in the worktree folder<span class="hint">One full path (or ~/ path) per line. Each is linked into the worktree folder under its own name, for builds that expect a sibling checkout, e.g. ../enterprise.</span>
     <textarea name="worktree_links" rows="2" placeholder="e.g. ~/src/enterprise">{{range $i, $l := .WorktreeLinks}}{{if $i}}{{"\n"}}{{end}}{{shortHome $l}}{{end}}</textarea></label>
 </fieldset>
 
@@ -140,7 +140,7 @@ button.primary{background:var(--link);border-color:var(--link);color:var(--surfa
   <label>Remote access address<span class="hint">host:port for HTTPS that requires a client certificate, so other machines can use the board, sessions and browser terminal without SSH, e.g. 0.0.0.0:8443 or a Tailscale address. Create the certificates first with taskboard certs init. Leave empty for none. Takes effect after a restart{{with $.TLSListen}}; running on {{.}}{{end}}.</span>
     <input name="tls_listen" placeholder="e.g. 0.0.0.0:8443" value="{{.TLSListen}}"></label>
   <div class="row2">
-    <label>Certificate folder<span class="hint">Default certs, next to the config file. Takes effect after a restart.</span>
+    <label>Certificate folder<span class="hint">Relative to the config file's folder, or a full path. Default certs. Takes effect after a restart.</span>
       <input name="tls_dir" placeholder="certs" value="{{.TLSDir}}"></label>
     <label>Revoked certificates<span class="hint">Serials from taskboard certs client, one per line. Refused right away.</span>
       <textarea name="revoked_certs" rows="2" placeholder="e.g. 1f3a…">{{join .RevokedCerts "\n"}}</textarea></label>
