@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"flag"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -14,6 +15,13 @@ import (
 )
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "certs" {
+		if err := runCerts(os.Args[2:]); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
 	configPath := flag.String("config", "taskboard.json", "path to the config file")
 	flag.Parse()
 
@@ -31,22 +39,41 @@ func main() {
 	defer stop()
 
 	board := NewBoard(cfg)
+	handler := newServer(board, *configPath)
+	servers := []*http.Server{{Addr: cfg.Listen, Handler: handler, ReadHeaderTimeout: 10 * time.Second}}
+	if cfg.TLSListen != "" {
+		tlsConfig, err := serverTLS(cfg.tlsDir(*configPath), func() []string { return board.Config().RevokedCerts })
+		if err != nil {
+			log.Fatal(err)
+		}
+		servers = append(servers, &http.Server{Addr: cfg.TLSListen, Handler: handler, TLSConfig: tlsConfig, ReadHeaderTimeout: 10 * time.Second})
+	}
 	go board.Run(ctx)
 
-	srv := &http.Server{
-		Addr:              cfg.Listen,
-		Handler:           newServer(board, *configPath),
-		ReadHeaderTimeout: 10 * time.Second,
+	errs := make(chan error, len(servers))
+	for _, srv := range servers {
+		go func() {
+			var err error
+			if srv.TLSConfig != nil {
+				log.Printf("taskboard listening on https://%s (client certificate required)", srv.Addr)
+				err = srv.ListenAndServeTLS("", "")
+			} else {
+				log.Printf("taskboard listening on http://%s", srv.Addr)
+				err = srv.ListenAndServe()
+			}
+			if !errors.Is(err, http.ErrServerClosed) {
+				errs <- err
+			}
+		}()
 	}
-	go func() {
-		<-ctx.Done()
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_ = srv.Shutdown(shutdownCtx)
-	}()
-
-	log.Printf("taskboard listening on http://%s", cfg.Listen)
-	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+	select {
+	case err := <-errs:
 		log.Fatal(err)
+	case <-ctx.Done():
+	}
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	for _, srv := range servers {
+		_ = srv.Shutdown(shutdownCtx)
 	}
 }

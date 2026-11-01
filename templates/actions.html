@@ -1,0 +1,84 @@
+{{define "actionstyle"}}
+dialog{width:min(34rem,calc(100vw - 2rem));padding:1.1rem 1.2rem 1rem;border:1px solid var(--line);border-radius:12px;background:var(--surface);color:var(--ink);
+  box-shadow:0 12px 32px rgba(0,0,0,.25)}
+dialog::backdrop{background:rgb(0 0 0 / .35)}
+dialog h3{margin:0 0 .6rem;font-size:1rem;font-weight:650;overflow-wrap:anywhere}
+dialog p{margin:0 0 .5rem;color:var(--muted);font-size:.875rem}
+dialog pre{margin:0 0 .75rem;padding:.5rem .6rem;max-height:12rem;overflow:auto;border:1px solid var(--line);border-radius:6px;background:var(--bg);
+  font:12.5px/1.45 ui-monospace,"JetBrains Mono","SF Mono",Menlo,monospace;white-space:pre-wrap;overflow-wrap:anywhere}
+dialog label{display:block;margin:.7rem 0 0;font-size:.8125rem;font-weight:600}
+dialog input,dialog select{display:block;width:100%;margin-top:.3rem;padding:.4rem .55rem;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--ink);
+  font:13.5px/1.45 ui-monospace,"JetBrains Mono","SF Mono",Menlo,monospace}
+.buttons{display:flex;justify-content:flex-end;gap:.5rem;margin-top:1.1rem}
+.buttons button{padding:.35rem .9rem;border:1px solid var(--line);border-radius:999px;background:var(--surface);color:var(--ink);
+  font:inherit;font-size:.8125rem;font-weight:550;cursor:pointer}
+.buttons button:hover{border-color:var(--muted)}
+.buttons .primary{background:var(--link);border-color:var(--link);color:var(--surface)}
+.buttons .primary.danger{background:var(--fail);border-color:var(--fail)}
+.buttons .primary:hover{border-color:var(--ink)}
+{{end}}
+
+{{define "actions"}}
+<dialog id="ask">
+  <form method="dialog">
+    <h3></h3>
+    <div class="body"></div>
+    <div class="buttons"><button value="cancel" formnovalidate>Cancel</button><button value="ok" class="primary">OK</button></div>
+  </form>
+</dialog>
+<script>
+let pending = 0;
+let afterDialog = () => {};
+const dialog = document.getElementById("ask");
+function el(tag, props, ...children) {
+  const node = Object.assign(document.createElement(tag), props);
+  node.append(...children);
+  return node;
+}
+function ask(title, body, confirm, danger) {
+  dialog.querySelector("h3").textContent = title;
+  dialog.querySelector(".body").replaceChildren(...body);
+  const ok = dialog.querySelector("[value=ok]");
+  ok.hidden = !confirm;
+  ok.textContent = confirm ?? "";
+  ok.classList.toggle("danger", !!danger);
+  dialog.querySelector("[value=cancel]").textContent = confirm ? "Cancel" : "Close";
+  dialog.returnValue = "";
+  dialog.showModal();
+  return new Promise(resolve => dialog.addEventListener("close", () => {
+    resolve(dialog.returnValue === "ok" ? new FormData(dialog.querySelector("form")) : null);
+    afterDialog();
+  }, { once: true }));
+}
+const showError = (title, message) => ask(title, [el("pre", { textContent: message || "No details." })]);
+async function post(path, data) {
+  pending++;
+  try {
+    const res = await fetch(path, { method: "POST", headers: { "X-Taskboard": "1" }, body: new URLSearchParams(data ?? {}) });
+    const json = (res.headers.get("Content-Type") ?? "").includes("json");
+    return { status: res.status, ok: res.ok, body: json ? await res.json() : (await res.text()).trim() };
+  } catch (err) {
+    return { status: 0, ok: false, body: "Could not reach taskboard: " + err.message };
+  } finally {
+    pending--;
+  }
+}
+const route = (button, verb, id) => (button.dataset.path ?? "") + "/" + verb + "/" + encodeURIComponent(id);
+const needsAnswer = r => r.status === 409 && typeof r.body === "object";
+const repoKey = key => "taskboard.repo." + key.split("-")[0];
+async function askNewBranch(key, plan) {
+  let saved = null;
+  try { saved = localStorage.getItem(repoKey(key)); } catch {}
+  const fields = [el("p", { textContent: "Nothing for " + key + " exists locally yet, so this creates a worktree on a new branch from the repo's base branch." })];
+  if (plan.repos.length > 1) {
+    const chosen = plan.repos.includes(saved) ? saved : plan.repo;
+    fields.push(el("label", { textContent: "Repo" },
+      el("select", { name: "repo" }, ...plan.repos.map(name => el("option", { value: name, textContent: name, selected: name === chosen })))));
+  }
+  fields.push(el("label", { textContent: "Branch" }, el("input", { name: "branch", value: plan.branch, required: true, spellcheck: false, autocomplete: "off" })));
+  const data = await ask("Start " + key, fields, "Start");
+  if (data?.get("repo")) try { localStorage.setItem(repoKey(key), data.get("repo")); } catch {}
+  return data;
+}
+</script>
+{{end}}

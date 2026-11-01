@@ -115,9 +115,7 @@ button.primary{background:var(--link);border-color:var(--link);color:var(--surfa
 
 <fieldset>
   <legend>Sessions</legend>
-  <label>SSH host for copied commands<span class="hint">Copy session command gives ssh -t HOST followed by the tmux command that opens the window, to paste on another machine. Leave empty to copy just the tmux command.</span>
-    <input name="ssh_host" placeholder="devbox" value="{{.SSHHost}}"></label>
-  <label>Open session command<span class="hint">Runs on this machine when you press Open session, e.g. a new terminal attached to the window. One argument per line; {target} becomes a tmux session showing the task's window, so tmux attach -t {target} opens it. Leave empty to hide the button.</span>
+  <label>Terminal command<span class="hint">Runs on this machine for Start or Open in a terminal, which only a browser on this machine is offered, e.g. a new terminal window. One argument per line; {target} becomes a tmux session showing the task's window, so tmux attach -t {target} opens it. Leave empty to offer only the browser terminal.</span>
     <textarea name="attach_command" rows="4" placeholder="gnome-terminal&#10;--&#10;tmux&#10;attach&#10;-t&#10;{target}">{{join .AttachCommand "\n"}}</textarea></label>
   <label>Agent command<span class="hint">Typed into a new tmux window when you press Start session, e.g. claude. {key} becomes the ticket key. Leave empty to hide the Start session button. Start review on a PR in Reviews uses it too.</span>
     <input name="agent_command" placeholder="claude" value="{{.AgentCommand}}"></label>
@@ -135,10 +133,18 @@ button.primary{background:var(--link);border-color:var(--link);color:var(--surfa
 
 <fieldset>
   <legend>Server</legend>
-  <label>Listen address<span class="hint">host:port. There is no login, so keep 127.0.0.1 and use an SSH tunnel unless you trust the network. Takes effect after a restart; running on {{$.Listen}}.</span>
+  <label>Listen address<span class="hint">host:port. There is no login on this address, so keep 127.0.0.1 and use the remote access address for other machines. Takes effect after a restart; running on {{$.Listen}}.</span>
     <input name="listen" required placeholder="127.0.0.1:8484" value="{{.Listen}}"></label>
   <label>Extra hostnames<span class="hint">One per line, e.g. a Tailscale MagicDNS name. IP addresses and localhost always work; other hostnames are refused to block DNS rebinding.</span>
     <textarea name="allowed_hosts" rows="2" placeholder="devbox.tailnet.ts.net">{{join .AllowedHosts "\n"}}</textarea></label>
+  <label>Remote access address<span class="hint">host:port for HTTPS that requires a client certificate, so other machines can use the board, sessions and browser terminal without SSH, e.g. 0.0.0.0:8443 or a Tailscale address. Create the certificates first with taskboard certs init. Leave empty for none. Takes effect after a restart{{with $.TLSListen}}; running on {{.}}{{end}}.</span>
+    <input name="tls_listen" placeholder="0.0.0.0:8443" value="{{.TLSListen}}"></label>
+  <div class="row2">
+    <label>Certificate folder<span class="hint">Default certs, next to the config file. Takes effect after a restart.</span>
+      <input name="tls_dir" placeholder="certs" value="{{.TLSDir}}"></label>
+    <label>Revoked certificates<span class="hint">Serials from taskboard certs client, one per line. Refused right away.</span>
+      <textarea name="revoked_certs" rows="2" placeholder="1f3a…">{{join .RevokedCerts "\n"}}</textarea></label>
+  </div>
 </fieldset>
 
 <div class="actions">
@@ -187,13 +193,15 @@ form.addEventListener("submit", async e => {
   const cfg = {
     listen: val("listen"),
     allowed_hosts: lines("allowed_hosts"),
+    tls_listen: val("tls_listen"),
+    tls_dir: val("tls_dir"),
+    revoked_certs: lines("revoked_certs"),
     poll_interval: val("poll_interval"),
     idle_poll_interval: val("idle_poll_interval") || "0s",
     refresh_timeout: val("refresh_timeout"),
     project_keys: val("project_keys").split(/[\s,]+/).filter(Boolean),
     merged_pr_limit: Number(val("merged_pr_limit")),
     done_days: Number(val("done_days")),
-    ssh_host: val("ssh_host"),
     attach_command: lines("attach_command"),
     agent_command: val("agent_command"),
     agent_resume_command: val("agent_resume_command"),

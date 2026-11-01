@@ -8,6 +8,7 @@
 <title>Task board</title>
 <style>
 {{template "tokens"}}
+{{template "actionstyle"}}
 .top{position:sticky;top:0;z-index:10;margin:0 0 1.75rem;padding:1rem 0 .8rem;border-bottom:1px solid var(--line);
   background:color-mix(in srgb,var(--bg) 85%,transparent);-webkit-backdrop-filter:blur(12px);backdrop-filter:blur(12px)}
 .bar{display:flex;align-items:center;justify-content:space-between;gap:1rem}
@@ -96,23 +97,6 @@ a:hover{text-decoration:underline}
 .icon.busy{cursor:progress}
 @media (prefers-reduced-motion:reduce){.icon.busy .wait{animation:none}}
 .icon.stop:hover:not(:disabled),.icon.clean:hover:not(:disabled){border-color:color-mix(in srgb,var(--fail) 50%,var(--line));color:var(--fail)}
-dialog{width:min(34rem,calc(100vw - 2rem));padding:1.1rem 1.2rem 1rem;border:1px solid var(--line);border-radius:12px;background:var(--surface);color:var(--ink);
-  box-shadow:0 12px 32px rgba(0,0,0,.25)}
-dialog::backdrop{background:rgb(0 0 0 / .35)}
-dialog h3{margin:0 0 .6rem;font-size:1rem;font-weight:650;overflow-wrap:anywhere}
-dialog p{margin:0 0 .5rem;color:var(--muted);font-size:.875rem}
-dialog pre{margin:0 0 .75rem;padding:.5rem .6rem;max-height:12rem;overflow:auto;border:1px solid var(--line);border-radius:6px;background:var(--bg);
-  font:12.5px/1.45 ui-monospace,"JetBrains Mono","SF Mono",Menlo,monospace;white-space:pre-wrap;overflow-wrap:anywhere}
-dialog label{display:block;margin:.7rem 0 0;font-size:.8125rem;font-weight:600}
-dialog input,dialog select{display:block;width:100%;margin-top:.3rem;padding:.4rem .55rem;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--ink);
-  font:13.5px/1.45 ui-monospace,"JetBrains Mono","SF Mono",Menlo,monospace}
-.buttons{display:flex;justify-content:flex-end;gap:.5rem;margin-top:1.1rem}
-.buttons button{padding:.35rem .9rem;border:1px solid var(--line);border-radius:999px;background:var(--surface);color:var(--ink);
-  font:inherit;font-size:.8125rem;font-weight:550;cursor:pointer}
-.buttons button:hover{border-color:var(--muted)}
-.buttons .primary{background:var(--link);border-color:var(--link);color:var(--surface)}
-.buttons .primary.danger{background:var(--fail);border-color:var(--fail)}
-.buttons .primary:hover{border-color:var(--ink)}
 @media (max-width:40rem){
   .legend{display:none}
   .task{grid-template-columns:minmax(0,1fr)}
@@ -130,7 +114,7 @@ dialog input,dialog select{display:block;width:100%;margin-top:.3rem;padding:.4r
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></svg>
       </button>
       {{template "themebutton"}}
-      {{if .Local}}<a class="icon" href="/settings" title="Settings" aria-label="Settings">
+      {{if .CanAct}}<a class="icon" href="/settings" title="Settings" aria-label="Settings">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
       </a>{{end}}
     </div>
@@ -185,13 +169,7 @@ dialog input,dialog select{display:block;width:100%;margin-top:.3rem;padding:.4r
 {{if and (eq $i 0) (not $.PRsFirst)}}{{template "prsections" $}}{{end}}
 {{end}}
 
-<dialog id="ask">
-  <form method="dialog">
-    <h3></h3>
-    <div class="body"></div>
-    <div class="buttons"><button value="cancel" formnovalidate>Cancel</button><button value="ok" class="primary">OK</button></div>
-  </form>
-</dialog>
+{{template "actions"}}
 
 <script>
 // Checking only while visible lets the server slow its polling when nobody is looking.
@@ -275,16 +253,6 @@ document.addEventListener("click", async (e) => {
     document.querySelector(jump.getAttribute("href") + " details")?.setAttribute("open", "");
     return;
   }
-  const copy = e.target.closest("[data-copy]");
-  if (copy) {
-    try {
-      await navigator.clipboard.writeText(copy.dataset.copy);
-      flashIcon(copy, "ok", "Copied");
-    } catch {
-      prompt("Copy this command:", copy.dataset.copy);
-    }
-    return;
-  }
   const start = e.target.closest("[data-start]");
   if (start) return startSession(start);
   const stop = e.target.closest("[data-stop]");
@@ -306,44 +274,8 @@ document.addEventListener("click", async (e) => {
 });
 
 // A reload would drop an open dialog or the result of a running action.
-let pending = 0;
-const dialog = document.getElementById("ask");
 const holdReload = () => pending > 0 || dialog.open;
-function el(tag, props, ...children) {
-  const node = Object.assign(document.createElement(tag), props);
-  node.append(...children);
-  return node;
-}
-function ask(title, body, confirm, danger) {
-  dialog.querySelector("h3").textContent = title;
-  dialog.querySelector(".body").replaceChildren(...body);
-  const ok = dialog.querySelector("[value=ok]");
-  ok.hidden = !confirm;
-  ok.textContent = confirm ?? "";
-  ok.classList.toggle("danger", !!danger);
-  dialog.querySelector("[value=cancel]").textContent = confirm ? "Cancel" : "Close";
-  dialog.returnValue = "";
-  dialog.showModal();
-  return new Promise(resolve => dialog.addEventListener("close", () => {
-    resolve(dialog.returnValue === "ok" ? new FormData(dialog.querySelector("form")) : null);
-    check();
-  }, { once: true }));
-}
-const showError = (title, message) => ask(title, [el("pre", { textContent: message || "No details." })]);
-async function post(path, data) {
-  pending++;
-  try {
-    const res = await fetch(path, { method: "POST", headers: { "X-Taskboard": "1" }, body: new URLSearchParams(data ?? {}) });
-    const json = (res.headers.get("Content-Type") ?? "").includes("json");
-    return { status: res.status, ok: res.ok, body: json ? await res.json() : (await res.text()).trim() };
-  } catch (err) {
-    return { status: 0, ok: false, body: "Could not reach taskboard: " + err.message };
-  } finally {
-    pending--;
-  }
-}
-const route = (button, verb, id) => (button.dataset.path ?? "") + "/" + verb + "/" + encodeURIComponent(id);
-const needsAnswer = r => r.status === 409 && typeof r.body === "object";
+afterDialog = check;
 function setBusy(button, busy) {
   button.classList.toggle("busy", busy);
   button.disabled = busy;
@@ -361,28 +293,14 @@ async function action(button, title, run) {
   flashIcon(button, "ok", r.done);
   check();
 }
-const repoKey = key => "taskboard.repo." + key.split("-")[0];
-async function askNewBranch(key, plan) {
-  let saved = null;
-  try { saved = localStorage.getItem(repoKey(key)); } catch {}
-  const fields = [el("p", { textContent: "Nothing for " + key + " exists locally yet, so this creates a worktree on a new branch from the repo's base branch." })];
-  if (plan.repos.length > 1) {
-    const chosen = plan.repos.includes(saved) ? saved : plan.repo;
-    fields.push(el("label", { textContent: "Repo" },
-      el("select", { name: "repo" }, ...plan.repos.map(name => el("option", { value: name, textContent: name, selected: name === chosen })))));
-  }
-  fields.push(el("label", { textContent: "Branch" }, el("input", { name: "branch", value: plan.branch, required: true, spellcheck: false, autocomplete: "off" })));
-  const data = await ask("Start " + key, fields, "Start");
-  if (data?.get("repo")) try { localStorage.setItem(repoKey(key), data.get("repo")); } catch {}
-  return data;
-}
 function startSession(button) {
   const key = button.dataset.start;
   return action(button, "Could not start " + key, async () => {
-    let r = await post(route(button, "start", key));
+    let r = await post(route(button, "start", key), { open: "terminal" });
     if (needsAnswer(r)) {
       const data = await askNewBranch(key, r.body);
       if (!data) return null;
+      data.set("open", "terminal");
       r = await post(route(button, "start", key), data);
     }
     if (r.ok) r.done = r.body.opened ? "Started and opened" : "Started in " + r.body.target;
@@ -427,9 +345,13 @@ function cleanUp(button) {
 {{define "marks"}}<svg class="ok" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg><svg class="wait" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>{{end}}
 
 {{define "controls"}}{{if .ID}}{{$c := .}}
-        {{with .Session}}<button class="icon" type="button" data-copy="{{.AttachCmd}}" title="Copy session command" aria-label="Copy session command"><svg class="main" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect width="14" height="14" x="8" y="8" rx="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg><svg class="ok" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg></button>{{end}}
-        {{if .Attach}}<button class="icon" type="button" data-attach="{{.ID}}"{{with .Path}} data-path="{{.}}"{{end}} title="Open session" aria-label="Open session"><svg class="main" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m7 11 2-2-2-2"/><path d="M11 13h4"/><rect width="18" height="18" x="3" y="3" rx="2"/></svg><svg class="ok" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg><svg class="err" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg></button>{{end}}
-        {{if .Stop}}<button class="icon stop" type="button" data-stop="{{.ID}}"{{with .Path}} data-path="{{.}}"{{end}} title="Stop session" aria-label="Stop session"><svg class="main" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><rect x="9" y="9" width="6" height="6" rx="1"/></svg>{{template "marks"}}</button>{{end}}
-        {{with .Start}}<button class="icon" type="button" data-start="{{$c.ID}}"{{with $c.Path}} data-path="{{.}}"{{end}} title="{{.}}" aria-label="{{.}}"><svg class="main" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="6 3 20 12 6 21 6 3"/></svg>{{template "marks"}}</button>{{end}}
+        {{if .Session}}
+        {{if .Native}}<button class="icon" type="button" data-attach="{{.ID}}"{{with $c.Path}} data-path="{{.}}"{{end}} title="Open in a terminal" aria-label="Open in a terminal"><svg class="main" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m7 11 2-2-2-2"/><path d="M11 13h4"/><rect width="18" height="18" x="3" y="3" rx="2"/></svg><svg class="ok" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg><svg class="err" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg></button>{{end}}
+        {{if .Web}}<a class="icon" href="/term/{{.ID}}" target="term-{{.ID}}" title="Open in the browser" aria-label="Open in the browser"><svg class="main" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M2 8h20"/><path d="M6 4v4"/><path d="M10 4v4"/></svg></a>{{end}}
+        {{if .Stop}}<button class="icon stop" type="button" data-stop="{{.ID}}"{{with $c.Path}} data-path="{{.}}"{{end}} title="Stop session" aria-label="Stop session"><svg class="main" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><rect x="9" y="9" width="6" height="6" rx="1"/></svg>{{template "marks"}}</button>{{end}}
+        {{else}}{{with .Start}}
+        {{if $c.Native}}<button class="icon" type="button" data-start="{{$c.ID}}"{{with $c.Path}} data-path="{{.}}"{{end}} title="{{.}} in a terminal" aria-label="{{.}} in a terminal"><svg class="main" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="6 3 20 12 6 21 6 3"/></svg>{{template "marks"}}</button>{{end}}
+        {{if $c.Web}}<a class="icon" href="/term/{{$c.ID}}?start=1" target="term-{{$c.ID}}" title="{{.}} in the browser" aria-label="{{.}} in the browser"><svg class="main" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/><path d="m10 7 5 3-5 3z"/></svg></a>{{end}}
+        {{end}}{{end}}
         {{with .Clean}}<button class="icon clean" type="button" data-cleanup="{{$c.ID}}"{{with $c.Path}} data-path="{{.}}"{{end}} title="{{.}}" aria-label="Clean up"><svg class="main" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>{{template "marks"}}</button>{{end}}
 {{end}}{{end}}

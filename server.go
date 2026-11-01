@@ -71,6 +71,8 @@ type server struct {
 	board      *Board
 	configPath string
 	listen     string
+	tlsListen  string
+	tlsDir     string
 
 	mu   sync.Mutex
 	busy map[string]bool
@@ -102,35 +104,37 @@ type indexData struct {
 	Refreshing     bool
 	Version        string
 	RefreshSeconds int
-	CanAttach      bool
+	Native         bool
+	CanAct         bool
 	CanStart       bool
-	Local          bool
 	Stations       []string
 }
 
-// controls says which session buttons a row shows; an empty ID shows none.
+// controls says which session buttons a row shows; an empty ID shows none. Native buttons open a terminal
+// on the taskboard machine; web ones open the browser terminal.
 type controls struct {
 	ID      string
 	Path    string
-	Session *Session
-	Attach  bool
+	Session bool
+	Native  bool
+	Web     bool
 	Stop    bool
 	Start   string
 	Clean   string
 }
 
 func taskControls(t Task, d indexData) controls {
-	c := controls{ID: t.Key, Session: t.Session}
-	if t.Session != nil {
-		c.Attach, c.Stop = d.CanAttach, d.Local
-	}
-	if d.CanStart && t.CanStart() {
+	c := controls{ID: t.Key, Session: t.Session != nil}
+	if c.Session {
+		c.Native, c.Web, c.Stop = d.Native, d.CanAct, d.CanAct
+	} else if d.CanStart && t.CanStart() {
+		c.Native, c.Web = d.Native, true
 		c.Start = "Start session"
 		if t.Worktree != nil {
 			c.Start = "Resume session"
 		}
 	}
-	if d.Local && t.NeedsCleanup() {
+	if d.CanAct && t.NeedsCleanup() {
 		c.Clean = "Clean up: close the session, remove the worktree and branch"
 	}
 	return c
@@ -143,17 +147,18 @@ func prControls(p PRLink, d indexData) controls {
 	c := controls{ID: p.ReviewName, Path: "/review"}
 	var wt *Worktree
 	if p.Review != nil {
-		c.Session, wt = p.Review.Session, p.Review.Worktree
+		c.Session, wt = p.Review.Session != nil, p.Review.Worktree
 	}
-	if c.Session != nil {
-		c.Attach, c.Stop = d.CanAttach, d.Local
+	if c.Session {
+		c.Native, c.Web, c.Stop = d.Native, d.CanAct, d.CanAct
 	} else if d.CanStart && p.Role != RoleLeftover {
+		c.Native, c.Web = d.Native, true
 		c.Start = "Start review"
 		if wt != nil {
 			c.Start = "Resume review"
 		}
 	}
-	if d.Local && p.Review != nil {
+	if d.CanAct && p.Review != nil {
 		c.Clean = "Clean up: close the session and remove the review worktree"
 	}
 	return c
@@ -163,6 +168,7 @@ type settingsData struct {
 	Config     *Config
 	ConfigPath string
 	Listen     string
+	TLSListen  string
 	NewRepo    RepoConfig
 }
 
@@ -172,7 +178,8 @@ type planData struct {
 }
 
 func newServer(board *Board, configPath string) http.Handler {
-	s := &server{board: board, configPath: configPath, listen: board.Config().Listen, busy: map[string]bool{}}
+	cfg := board.Config()
+	s := &server{board: board, configPath: configPath, listen: cfg.Listen, tlsListen: cfg.TLSListen, tlsDir: cfg.TLSDir, busy: map[string]bool{}}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", s.index)
 	mux.HandleFunc("GET /version", s.version)
@@ -186,14 +193,22 @@ func newServer(board *Board, configPath string) http.Handler {
 	mux.HandleFunc("POST /review/stop/{name}", s.reviewStop)
 	mux.HandleFunc("POST /review/cleanup/{name}", s.reviewCleanup)
 	mux.HandleFunc("POST /refresh", s.refresh)
+	mux.HandleFunc("GET /term/{id}", s.termPage)
+	mux.HandleFunc("GET /term/{id}/ws", s.termSocket)
+	mux.HandleFunc("GET /static/{file}", s.static)
 	mux.HandleFunc("GET /settings", s.settings)
 	mux.HandleFunc("POST /settings", s.saveSettings)
 	return s.checkHost(mux)
 }
 
-// Rejecting unknown hostnames blocks DNS rebinding, since this server has no auth and can open terminals.
+// Rejecting unknown hostnames blocks DNS rebinding on the plain listener. TLS requests skip it: a browser
+// only completes the handshake for names in the server certificate, which a rebinding attacker can't use.
 func (s *server) checkHost(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.TLS != nil {
+			next.ServeHTTP(w, r)
+			return
+		}
 		host, _, err := net.SplitHostPort(r.Host)
 		if err != nil {
 			host = r.Host
@@ -221,9 +236,9 @@ func (s *server) index(w http.ResponseWriter, r *http.Request) {
 		RefreshSeconds: int(cfg.PollInterval.Seconds()),
 		Refreshing:     s.board.Refreshing(),
 		Version:        snap.Version,
-		CanAttach:      len(cfg.AttachCommand) > 0 && isLoopback(r),
-		CanStart:       cfg.AgentCommand != "" && isLoopback(r),
-		Local:          isLoopback(r),
+		Native:         len(cfg.AttachCommand) > 0 && s.accessOf(r) == local,
+		CanAct:         s.accessOf(r) >= remote,
+		CanStart:       cfg.AgentCommand != "" && s.accessOf(r) >= remote,
 		Stations:       stations,
 	}
 	for _, name := range groupOrder {
@@ -295,9 +310,7 @@ func (s *server) plan(w http.ResponseWriter, r *http.Request) {
 
 // The custom header forces a CORS preflight, which this server never answers, so other sites cannot trigger it.
 func (s *server) attach(w http.ResponseWriter, r *http.Request) {
-	cfg := s.board.Config()
-	if r.Header.Get("X-Taskboard") != "1" || !isLoopback(r) || len(cfg.AttachCommand) == 0 {
-		http.Error(w, "forbidden", http.StatusForbidden)
+	if !s.allowNative(w, r) {
 		return
 	}
 	t, ok := s.board.Task(r.PathValue("key"))
@@ -305,7 +318,32 @@ func (s *server) attach(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	if err := runAttach(cfg, t.Session.Target); err != nil {
+	s.openNative(w, t.Session.Target)
+}
+
+func (s *server) reviewAttach(w http.ResponseWriter, r *http.Request) {
+	if !s.allowNative(w, r) {
+		return
+	}
+	l, ok := s.board.Review(r.PathValue("name"))
+	if !ok || l.Review == nil || l.Review.Session == nil {
+		http.NotFound(w, r)
+		return
+	}
+	s.openNative(w, l.Review.Session.Target)
+}
+
+// Native terminals open on the taskboard machine, so only a browser on that machine may ask for one.
+func (s *server) allowNative(w http.ResponseWriter, r *http.Request) bool {
+	if r.Header.Get("X-Taskboard") != "1" || s.accessOf(r) != local || len(s.board.Config().AttachCommand) == 0 {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return false
+	}
+	return true
+}
+
+func (s *server) openNative(w http.ResponseWriter, target string) {
+	if err := runAttach(s.board.Config(), target); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -332,8 +370,8 @@ func runAttach(cfg *Config, target string) error {
 	return nil
 }
 
-func allowAction(w http.ResponseWriter, r *http.Request) bool {
-	if r.Header.Get("X-Taskboard") != "1" || !isLoopback(r) {
+func (s *server) allowAction(w http.ResponseWriter, r *http.Request) bool {
+	if r.Header.Get("X-Taskboard") != "1" || s.accessOf(r) < remote {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return false
 	}
@@ -357,7 +395,7 @@ func (s *server) claim(w http.ResponseWriter, id string) (func(), bool) {
 }
 
 func (s *server) action(w http.ResponseWriter, r *http.Request) (*Config, Task, func(), bool) {
-	if !allowAction(w, r) {
+	if !s.allowAction(w, r) {
 		return nil, Task{}, nil, false
 	}
 	t, ok := s.board.Task(r.PathValue("key"))
@@ -370,7 +408,7 @@ func (s *server) action(w http.ResponseWriter, r *http.Request) (*Config, Task, 
 }
 
 func (s *server) reviewAction(w http.ResponseWriter, r *http.Request) (*Config, PRLink, func(), bool) {
-	if !allowAction(w, r) {
+	if !s.allowAction(w, r) {
 		return nil, PRLink{}, nil, false
 	}
 	l, ok := s.board.Review(r.PathValue("name"))
@@ -440,7 +478,12 @@ func (s *server) start(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	opened := len(cfg.AttachCommand) > 0 && runAttach(cfg, target) == nil
+	s.startDone(w, r, cfg, target)
+}
+
+func (s *server) startDone(w http.ResponseWriter, r *http.Request, cfg *Config, target string) {
+	opened := r.FormValue("open") == "terminal" && s.accessOf(r) == local && len(cfg.AttachCommand) > 0 &&
+		runAttach(cfg, target) == nil
 	writeJSON(w, http.StatusOK, map[string]any{"target": target, "opened": opened})
 }
 
@@ -498,27 +541,6 @@ func (s *server) cleanup(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, rm)
 }
 
-func (s *server) reviewAttach(w http.ResponseWriter, r *http.Request) {
-	cfg := s.board.Config()
-	if !allowAction(w, r) {
-		return
-	}
-	if len(cfg.AttachCommand) == 0 {
-		http.Error(w, "set the open session command in Settings first", http.StatusForbidden)
-		return
-	}
-	l, ok := s.board.Review(r.PathValue("name"))
-	if !ok || l.Review == nil || l.Review.Session == nil {
-		http.NotFound(w, r)
-		return
-	}
-	if err := runAttach(cfg, l.Review.Session.Target); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	w.WriteHeader(http.StatusNoContent)
-}
-
 func (s *server) reviewStart(w http.ResponseWriter, r *http.Request) {
 	cfg, l, release, ok := s.reviewAction(w, r)
 	if !ok {
@@ -546,8 +568,7 @@ func (s *server) reviewStart(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	opened := len(cfg.AttachCommand) > 0 && runAttach(cfg, target) == nil
-	writeJSON(w, http.StatusOK, map[string]any{"target": target, "opened": opened})
+	s.startDone(w, r, cfg, target)
 }
 
 func (s *server) reviewStop(w http.ResponseWriter, r *http.Request) {
@@ -620,17 +641,17 @@ func (s *server) refresh(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// Settings are loopback-only because attach_command runs on this machine.
+// Settings can change commands taskboard runs, so viewers cannot open them.
 func (s *server) settings(w http.ResponseWriter, r *http.Request) {
-	if !isLoopback(r) {
-		http.Error(w, "settings can only be changed from the machine running taskboard", http.StatusForbidden)
+	if s.accessOf(r) < remote {
+		http.Error(w, "settings need a browser on the taskboard machine or a client certificate", http.StatusForbidden)
 		return
 	}
-	render(w, r, "settings.html", settingsData{Config: s.board.Config(), ConfigPath: s.configPath, Listen: s.listen})
+	render(w, r, "settings.html", settingsData{Config: s.board.Config(), ConfigPath: s.configPath, Listen: s.listen, TLSListen: s.tlsListen})
 }
 
 func (s *server) saveSettings(w http.ResponseWriter, r *http.Request) {
-	if r.Header.Get("X-Taskboard") != "1" || !isLoopback(r) {
+	if r.Header.Get("X-Taskboard") != "1" || s.accessOf(r) < remote {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
@@ -650,7 +671,31 @@ func (s *server) saveSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	s.board.SetConfig(cfg)
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]bool{"restart": cfg.Listen != s.listen})
+	restart := cfg.Listen != s.listen || cfg.TLSListen != s.tlsListen || cfg.TLSDir != s.tlsDir
+	json.NewEncoder(w).Encode(map[string]bool{"restart": restart})
+}
+
+type access int
+
+const (
+	viewer access = iota
+	remote
+	local
+)
+
+// accessOf: local is a browser on this machine using the plain listener; remote is one presenting a
+// client certificate on the TLS listener, re-checked here so revoking cuts off kept-alive connections.
+func (s *server) accessOf(r *http.Request) access {
+	if r.TLS != nil {
+		if len(r.TLS.VerifiedChains) > 0 && !isRevoked(s.board.Config().RevokedCerts, r.TLS.PeerCertificates[0]) {
+			return remote
+		}
+		return viewer
+	}
+	if isLoopback(r) {
+		return local
+	}
+	return viewer
 }
 
 func isLoopback(r *http.Request) bool {

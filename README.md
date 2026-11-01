@@ -15,14 +15,14 @@ Done tasks that still have a worktree or a tmux window go to "Needs clean-up" in
 - Go 1.22+
 - `gh`, authenticated (`gh auth login`)
 - `acli`, logged in to your Jira site (`acli jira auth login`)
-- `git`, and `tmux` if you want session links
+- `git`, and `tmux` if you want sessions
 - Linux or macOS. On Windows, run taskboard and its tools inside WSL, since tmux has no native Windows build.
 
 ## Run
 
 ```sh
 go build -o taskboard .
-cp config.example.json taskboard.json   # edit repos and ssh_host
+cp config.example.json taskboard.json   # edit jira, project_keys and repos
 ./taskboard -config taskboard.json
 ```
 
@@ -36,7 +36,7 @@ The theme button (on every page) cycles between matching the system's light or d
 
 The Settings link in the header opens a form for every config option. Saving checks the config, writes it back to the `-config` file and applies it right away, then refreshes the board; only `listen` waits for a restart. Saving rewrites the file in a standard layout, so hand formatting and unknown keys are not kept.
 
-Like the session buttons, Settings is only available from the machine running taskboard (or through an SSH tunnel to it), since `attach_command` and `agent_command` run commands there.
+Like the session buttons, Settings is only available to a browser on the machine running taskboard or one with a client certificate (see [Remote access](#remote-access)), since `attach_command` and `agent_command` run commands there.
 
 ## Conventions
 
@@ -63,7 +63,12 @@ Plan files only attach to tasks found through Jira, a PR, a worktree or a sessio
 
 ## Sessions
 
-Set `agent_command` (for example `claude`) to get a **Start session** button (the play icon) on every task that hasn't merged and has no session. Pressing it works out where the work lives:
+Set `agent_command` (for example `claude`) to get start buttons on every task that hasn't merged and has no session:
+
+- **Start in the browser** (the monitor icon) opens a new tab with the session in a terminal in the browser. It's offered to a browser on the taskboard machine and to [remote](#remote-access) browsers.
+- **Start in a terminal** (the play icon) opens the session in a terminal window on the taskboard machine, using `attach_command`. It's only offered to a browser on that machine, and only when `attach_command` is set.
+
+Either way, taskboard works out where the work lives:
 
 1. If the task already has a worktree, it opens a window there and types `agent_resume_command` (for example `claude --continue`; defaults to `agent_command`).
 2. Otherwise, if a local branch contains the ticket key, it adds a worktree for that branch.
@@ -104,20 +109,35 @@ git -C ~/src/mattermost worktree add ../mattermost-MM-1234 -b MM-1234-short-name
 tmux new-window -n MM-1234 -c ~/src/mattermost-MM-1234 <agent>
 ```
 
-Each session gets two links. Both attach through a new linked tmux session, which shares the windows of the task's session but has its own current window. Several terminals can then be attached at once, each on a different task, without switching each other's window. The linked session closes when its terminal detaches, and the board ignores linked sessions.
+Rows with a session get matching open buttons, plus Stop:
 
-- **Copy session command** (the copy icon) copies a command that creates the linked session and opens the task's window, prefixed with `ssh -t <ssh_host>`. Paste it on the Mac or phone. Leave `ssh_host` empty to copy the bare `tmux` command.
-- **Open session** (the terminal icon) appears only when the page is opened from the box itself and `attach_command` is set. taskboard creates the linked session, then runs that command on the box with `{target}` set to the linked session's name, so the usual `tmux attach -t {target}` works (by default in a new gnome-terminal). Through an SSH tunnel the browser also looks local, so this button would open the terminal on the box, not on the remote machine. A linked session whose terminal never attaches is removed on a later refresh.
+- **Open in the browser** (the window icon) opens `/term/<key>` in a tab of its own, one per session. The terminal shows the full tmux window, and closing the tab just detaches. If the connection drops, the page offers Reconnect.
+- **Open in a terminal** (the terminal icon) runs `attach_command` on the taskboard machine, with the same rules as Start in a terminal.
 
-## Reaching it from other devices
+Both attach through a new linked tmux session, which shares the windows of the task's session but has its own current window. Several terminals can then be attached at once, each on a different task, without switching each other's window. The linked session closes when its terminal detaches, and the board ignores linked sessions. For `attach_command`, taskboard creates the linked session first and sets `{target}` to its name, so the usual `tmux attach -t {target}` works (by default in a new gnome-terminal). A linked session whose terminal never attaches is removed on a later refresh.
 
-The server has no authentication, so keep `listen` on 127.0.0.1 and tunnel:
+## Remote access
 
-```sh
-ssh -N -L 8484:127.0.0.1:8484 ubuntu
-```
+To use the board from another machine, for example a browser on a Mac with taskboard running on an Ubuntu box, turn on the HTTPS listener. It requires a client certificate that taskboard issued, so only your devices get in, and it covers the board, the session buttons, Settings and the browser terminal. Native terminals stay local: a remote browser never gets Start or Open in a terminal, since those would open on the taskboard machine.
 
-If you bind to a LAN or Tailscale address instead, requests by IP work as is. Add any hostname you use (for example a Tailscale MagicDNS name) to `allowed_hosts`; other hostnames are rejected to block DNS rebinding.
+1. Create a certificate authority and a server certificate for every name and address browsers will use. Certificates go in `tls_dir` (default `certs`, next to the config file):
+
+   ```sh
+   ./taskboard certs init -host ubuntu,ubuntu.tailnet.ts.net,100.64.0.5
+   ```
+
+2. Issue a client certificate for each device. It's written as a password-protected `.p12` file, and the command prints the password and the certificate's serial:
+
+   ```sh
+   ./taskboard certs client mac-laptop
+   ```
+
+3. On the Mac, double-click `ca.crt` to add it to Keychain, open it in Keychain Access and set it to Always Trust, then double-click `mac-laptop.p12` and enter its password. Chrome, Edge and Safari all use Keychain. Firefox and iOS have their own certificate stores.
+4. Set `tls_listen` (for example `0.0.0.0:8443`, or the Tailscale address) and restart taskboard. Then open `https://ubuntu:8443`. The browser asks which certificate to use the first time.
+
+A browser without a valid certificate gets a TLS error rather than a page. Names the server certificate covers are accepted, so `allowed_hosts` only matters for the plain `listen` address. When the box gets a new name, re-issue the server certificate with `./taskboard certs server -host ...` and restart; client certificates stay valid. To cut off a lost device, add its serial to `revoked_certs`; that takes effect immediately, even on open connections.
+
+Keep `listen` on 127.0.0.1. It has no login, so a browser that reaches it from another machine can only view the board.
 
 ## Notes
 

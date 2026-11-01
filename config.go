@@ -14,6 +14,9 @@ import (
 
 type Config struct {
 	Listen           string       `json:"listen"`
+	TLSListen        string       `json:"tls_listen,omitempty"`
+	TLSDir           string       `json:"tls_dir,omitempty"`
+	RevokedCerts     []string     `json:"revoked_certs,omitempty"`
 	AllowedHosts     []string     `json:"allowed_hosts,omitempty"`
 	PollInterval     Duration     `json:"poll_interval"`
 	IdlePollInterval Duration     `json:"idle_poll_interval"`
@@ -21,7 +24,6 @@ type Config struct {
 	ProjectKeys      []string     `json:"project_keys"`
 	MergedPRLimit    int          `json:"merged_pr_limit"`
 	DoneDays         int          `json:"done_days"`
-	SSHHost          string       `json:"ssh_host,omitempty"`
 	AttachCommand    []string     `json:"attach_command,omitempty"`
 	TmuxSession      string       `json:"tmux_session"`
 	AgentCommand     string       `json:"agent_command,omitempty"`
@@ -188,6 +190,9 @@ func (c *Config) validate() error {
 			return fmt.Errorf("repos[%d].base_branch must name a remote branch, like origin/main", i)
 		}
 	}
+	for i, serial := range c.RevokedCerts {
+		c.RevokedCerts[i] = normalizeSerial(serial)
+	}
 	if c.TmuxSession == "" {
 		c.TmuxSession = "work"
 	}
@@ -240,6 +245,22 @@ func (c *Config) findKey(s string) string {
 
 func (c *Config) issueURL(key string) string {
 	return c.Jira.BaseURL + "/browse/" + key
+}
+
+func normalizeSerial(s string) string {
+	return strings.ToLower(strings.NewReplacer(":", "", " ", "").Replace(strings.TrimSpace(s)))
+}
+
+// tlsDir resolves tls_dir, default "certs", relative to the config file's folder.
+func (c *Config) tlsDir(configPath string) string {
+	dir := expandHome(c.TLSDir)
+	if dir == "" {
+		dir = "certs"
+	}
+	if !filepath.IsAbs(dir) {
+		dir = filepath.Join(filepath.Dir(configPath), dir)
+	}
+	return dir
 }
 
 func (c *Config) repo(name string) (RepoConfig, bool) {

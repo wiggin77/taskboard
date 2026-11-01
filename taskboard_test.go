@@ -3,10 +3,15 @@ package main
 import (
 	"compress/gzip"
 	"context"
+	"crypto"
+	"crypto/ecdsa"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"io"
 	"maps"
+	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -15,6 +20,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/coder/websocket"
+	"software.sslmate.com/src/go-pkcs12"
 )
 
 func testConfig(t *testing.T) *Config {
@@ -191,27 +199,15 @@ func TestPlanApproved(t *testing.T) {
 	}
 }
 
-func TestAttachCommand(t *testing.T) {
-	const linked = ` \; set-option @taskboard 1 \; set-option destroy-unattached on \; select-window -t `
-	cases := []struct{ host, target, want string }{
-		{"", "work:1", "tmux new-session -t =work" + linked + ":1"},
-		{"ubuntu", "work:1", "ssh -t ubuntu 'tmux new-session -t =work" + linked + ":1'"},
-		{"", "my work:1", "tmux new-session -t '=my work'" + linked + ":1"},
-		{"ubuntu", "a:b:2", "ssh -t ubuntu 'tmux new-session -t =a:b" + linked + ":2'"},
-	}
-	for _, c := range cases {
-		if got := attachCommand(c.host, c.target); got != c.want {
-			t.Errorf("attachCommand(%q, %q) =\n %s\nwant\n %s", c.host, c.target, got, c.want)
-		}
-	}
-}
-
 func TestParseWindows(t *testing.T) {
 	cfg := testConfig(t)
 	out := []byte("tb-1a2b:0\tMM-1\t@0\t1\nwork:0\tMM-1\t@0\t\nwork:1\tnotes\t@1\t\nmine:1\tnotes\t@1\t\n")
 	got := parseWindows(cfg, out)
 	if len(got) != 2 || got[0].Target != "work:0" || got[0].Key != "MM-1" || got[1].Target != "work:1" || got[1].Key != "" {
 		t.Errorf("windows = %+v; want each window once, from unmarked sessions", got)
+	}
+	if got := parseWindows(cfg, []byte("work:0\tnotes\t@0\t\nwork:1\tMM-2\t@1\t\n")); len(got) != 2 || got[1].Key != "MM-2" {
+		t.Errorf("the last window must not be dropped: %+v", got)
 	}
 }
 
@@ -1018,27 +1014,31 @@ func TestReviewCommand(t *testing.T) {
 }
 
 func TestControls(t *testing.T) {
-	d := indexData{CanAttach: true, CanStart: true, Local: true}
+	local := indexData{Native: true, CanAct: true, CanStart: true}
+	remote := indexData{CanAct: true, CanStart: true}
 	sess := &Session{Target: "work:1"}
-	if c := taskControls(Task{Key: "MM-1", Stage: StageTicket}, d); c.Start != "Start session" || c.Stop || c.Clean != "" {
-		t.Errorf("not started task: %+v", c)
+	if c := taskControls(Task{Key: "MM-1", Stage: StageTicket}, local); c.Start != "Start session" || !c.Native || !c.Web || c.Stop || c.Clean != "" {
+		t.Errorf("not started task, local browser: %+v", c)
 	}
-	if c := taskControls(Task{Key: "MM-1", Stage: StageCleanup, Session: sess}, d); c.Start != "" || !c.Stop || !c.Attach || c.Clean == "" {
+	if c := taskControls(Task{Key: "MM-1", Stage: StageTicket}, remote); c.Start != "Start session" || c.Native || !c.Web {
+		t.Errorf("not started task, remote browser gets only the browser terminal: %+v", c)
+	}
+	if c := taskControls(Task{Key: "MM-1", Stage: StageCleanup, Session: sess}, local); c.Start != "" || !c.Session || !c.Stop || !c.Native || !c.Web || c.Clean == "" {
 		t.Errorf("clean-up task with a session: %+v", c)
 	}
-	if c := taskControls(Task{Key: "MM-1", Stage: StageTicket}, indexData{}); c.Start != "" || c.Stop || c.Clean != "" {
-		t.Errorf("remote viewer gets no actions: %+v", c)
+	if c := taskControls(Task{Key: "MM-1", Stage: StageCoding, Session: sess}, indexData{}); c.Native || c.Web || c.Stop || c.Start != "" {
+		t.Errorf("viewer gets no actions: %+v", c)
 	}
-	if c := prControls(PRLink{Number: 1}, d); c.ID != "" {
+	if c := prControls(PRLink{Number: 1}, local); c.ID != "" {
 		t.Errorf("PR without a local checkout: %+v", c)
 	}
-	if c := prControls(PRLink{ReviewName: "mm-pr1", Role: RoleRequested}, d); c.Start != "Start review" || c.Path != "/review" || c.Clean != "" {
-		t.Errorf("new review: %+v", c)
+	if c := prControls(PRLink{ReviewName: "mm-pr1", Role: RoleRequested}, remote); c.Start != "Start review" || c.Path != "/review" || !c.Web || c.Native || c.Clean != "" {
+		t.Errorf("new review, remote browser: %+v", c)
 	}
-	if c := prControls(PRLink{ReviewName: "mm-pr1", Role: RoleReviewed, Review: &Review{Worktree: &Worktree{}}}, d); c.Start != "Resume review" || c.Clean == "" {
+	if c := prControls(PRLink{ReviewName: "mm-pr1", Role: RoleReviewed, Review: &Review{Worktree: &Worktree{}}}, local); c.Start != "Resume review" || c.Clean == "" {
 		t.Errorf("review with a worktree: %+v", c)
 	}
-	if c := prControls(PRLink{ReviewName: "mm-pr1", Role: RoleLeftover, Review: &Review{Worktree: &Worktree{}}}, d); c.Start != "" || c.Clean == "" {
+	if c := prControls(PRLink{ReviewName: "mm-pr1", Role: RoleLeftover, Review: &Review{Worktree: &Worktree{}}}, local); c.Start != "" || c.Clean == "" {
 		t.Errorf("leftover review: %+v", c)
 	}
 }
@@ -1081,5 +1081,204 @@ func TestReviewEndpointGuards(t *testing.T) {
 		if got := post(c.path, c.remote, c.header); got != c.want {
 			t.Errorf("POST %s from %s (header %v): %d, want %d", c.path, c.remote, c.header, got, c.want)
 		}
+	}
+}
+
+type testPKI struct {
+	dir    string
+	ca     *x509.Certificate
+	caKey  crypto.Signer
+	client tls.Certificate
+	serial string
+}
+
+func newTestPKI(t *testing.T) testPKI {
+	t.Helper()
+	dir := t.TempDir()
+	now := time.Now()
+	ca, caKey, err := newCA(now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeCertAndKey(dir, "ca", ca, caKey); err != nil {
+		t.Fatal(err)
+	}
+	server, serverKey, err := issue(ca, caKey, serverTemplate([]string{"devbox", "100.64.0.5"}, now))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writeCertAndKey(dir, "server", server, serverKey); err != nil {
+		t.Fatal(err)
+	}
+	cert, key, err := issue(ca, caKey, clientTemplate("laptop", now))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return testPKI{dir: dir, ca: ca, caKey: caKey, client: tls.Certificate{Certificate: [][]byte{cert.Raw}, PrivateKey: key}, serial: serialHex(cert.SerialNumber)}
+}
+
+func TestCertificates(t *testing.T) {
+	pki := newTestPKI(t)
+	server, err := tls.LoadX509KeyPair(pki.dir+"/server.crt", pki.dir+"/server.key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	leaf, _ := x509.ParseCertificate(server.Certificate[0])
+	roots := x509.NewCertPool()
+	roots.AddCert(pki.ca)
+	for _, host := range []string{"devbox", "100.64.0.5", "localhost", "127.0.0.1"} {
+		if _, err := leaf.Verify(x509.VerifyOptions{Roots: roots, DNSName: host}); err != nil {
+			t.Errorf("server certificate for %s: %v", host, err)
+		}
+	}
+	if leaf.NotAfter.Sub(leaf.NotBefore) > serverValidity+2*time.Hour {
+		t.Errorf("server certificate valid for %v, longer than Apple allows", leaf.NotAfter.Sub(leaf.NotBefore))
+	}
+	client, _ := x509.ParseCertificate(pki.client.Certificate[0])
+	if _, err := client.Verify(x509.VerifyOptions{Roots: roots, KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}}); err != nil {
+		t.Errorf("client certificate: %v", err)
+	}
+	p12, err := encodeP12(pki.client.PrivateKey.(*ecdsa.PrivateKey), client, pki.ca, "secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, cert, chain, err := pkcs12.DecodeChain(p12, "secret"); err != nil || !cert.Equal(client) || len(chain) != 1 || !chain[0].Equal(pki.ca) {
+		t.Errorf("p12 round trip: %v", err)
+	}
+	if err := certsInit(pki.dir, []string{"devbox"}, time.Now()); err == nil {
+		t.Error("certs init must not replace an existing CA")
+	}
+	for _, bad := range []string{"", "../x", ".hidden", "a/b"} {
+		if err := certsClient(pki.dir, bad, time.Now()); err == nil {
+			t.Errorf("client name %q should be rejected", bad)
+		}
+	}
+}
+
+func TestTLSListener(t *testing.T) {
+	pki := newTestPKI(t)
+	cfg := testConfig(t)
+	board := NewBoard(cfg)
+	tlsConfig, err := serverTLS(pki.dir, func() []string { return board.Config().RevokedCerts })
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewUnstartedServer(newServer(board, ""))
+	srv.TLS = tlsConfig
+	srv.StartTLS()
+	defer srv.Close()
+
+	roots := x509.NewCertPool()
+	roots.AddCert(pki.ca)
+	get := func(withCert bool) (int, error) {
+		tc := &tls.Config{RootCAs: roots}
+		if withCert {
+			tc.Certificates = []tls.Certificate{pki.client}
+		}
+		client := &http.Client{Transport: &http.Transport{TLSClientConfig: tc}}
+		res, err := client.Get(srv.URL + "/settings")
+		if err != nil {
+			return 0, err
+		}
+		res.Body.Close()
+		return res.StatusCode, nil
+	}
+	if code, err := get(true); err != nil || code != http.StatusOK {
+		t.Errorf("with a client certificate: %d %v, want 200 (remote access to settings)", code, err)
+	}
+	if _, err := get(false); err == nil {
+		t.Error("without a client certificate the handshake should fail")
+	}
+	revoked := *cfg
+	revoked.RevokedCerts = []string{pki.serial}
+	board.SetConfig(&revoked)
+	if _, err := get(true); err == nil {
+		t.Error("a revoked certificate should be refused")
+	}
+}
+
+func TestAccessOf(t *testing.T) {
+	cfg := testConfig(t)
+	s := &server{board: NewBoard(cfg)}
+	cert := &x509.Certificate{SerialNumber: big.NewInt(0xabc)}
+	req := func(remote string, state *tls.ConnectionState) *http.Request {
+		r := httptest.NewRequest("GET", "/", nil)
+		r.RemoteAddr = remote
+		r.TLS = state
+		return r
+	}
+	verified := &tls.ConnectionState{PeerCertificates: []*x509.Certificate{cert}, VerifiedChains: [][]*x509.Certificate{{cert}}}
+	cases := []struct {
+		name string
+		r    *http.Request
+		want access
+	}{
+		{"plain loopback", req("127.0.0.1:5000", nil), local},
+		{"plain LAN", req("192.0.2.1:5000", nil), viewer},
+		{"TLS with a verified client certificate", req("192.0.2.1:5000", verified), remote},
+		{"TLS on loopback is still remote", req("127.0.0.1:5000", verified), remote},
+		{"TLS without a verified chain", req("192.0.2.1:5000", &tls.ConnectionState{}), viewer},
+	}
+	for _, c := range cases {
+		if got := s.accessOf(c.r); got != c.want {
+			t.Errorf("%s: %d, want %d", c.name, got, c.want)
+		}
+	}
+	revoked := *cfg
+	revoked.RevokedCerts = []string{"abc"}
+	s.board.SetConfig(&revoked)
+	if got := s.accessOf(req("192.0.2.1:5000", verified)); got != viewer {
+		t.Errorf("revoked certificate on a kept-alive connection: %d, want viewer", got)
+	}
+}
+
+func TestTerminalEndpoints(t *testing.T) {
+	cfg := testConfig(t)
+	board := NewBoard(cfg)
+	board.snap.Tasks = []Task{{Key: "MM-1", Summary: "Fix it", Stage: StageTicket}}
+	board.snap.Reviews = []PRLink{{Repo: "mattermost/mattermost", Number: 7, ReviewName: "mattermost-pr7"}}
+	srv := httptest.NewServer(newServer(board, ""))
+	defer srv.Close()
+	get := func(path string) (int, string) {
+		res, err := http.Get(srv.URL + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer res.Body.Close()
+		body, _ := io.ReadAll(res.Body)
+		return res.StatusCode, string(body)
+	}
+	if code, body := get("/term/MM-1?start=1"); code != http.StatusOK || !strings.Contains(body, `"/start/MM-1"`) || !strings.Contains(body, "start();") {
+		t.Errorf("task terminal page: %d", code)
+	}
+	if code, body := get("/term/mattermost-pr7"); code != http.StatusOK || !strings.Contains(body, `"/review/start/mattermost-pr7"`) || !strings.Contains(body, "connect();") {
+		t.Errorf("review terminal page: %d", code)
+	}
+	if code, _ := get("/term/MM-9"); code != http.StatusNotFound {
+		t.Errorf("unknown id: %d, want 404", code)
+	}
+	if code, _ := get("/static/xterm.js"); code != http.StatusOK {
+		t.Errorf("xterm.js: %d", code)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/term/MM-1/ws"
+	_, res, err := websocket.Dial(ctx, wsURL, &websocket.DialOptions{HTTPHeader: http.Header{"Origin": {"https://evil.example.com"}}})
+	if err == nil || res == nil || res.StatusCode != http.StatusForbidden {
+		t.Errorf("cross-origin upgrade: %v, want 403", err)
+	}
+	_, res, err = websocket.Dial(ctx, "ws"+strings.TrimPrefix(srv.URL, "http")+"/term/MM-9/ws", nil)
+	if err == nil || res == nil || res.StatusCode != http.StatusNotFound {
+		t.Errorf("unknown id upgrade: %v, want 404", err)
+	}
+
+	viewer := httptest.NewRequest("GET", "/term/MM-1", nil)
+	viewer.Host = "localhost"
+	viewer.RemoteAddr = "192.0.2.1:5000"
+	rec := httptest.NewRecorder()
+	newServer(board, "").ServeHTTP(rec, viewer)
+	if rec.Code != http.StatusForbidden {
+		t.Errorf("viewer terminal page: %d, want 403", rec.Code)
 	}
 }

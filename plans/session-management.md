@@ -1,6 +1,6 @@
 # Session management
 
-Status: phases 1, 1b and 2 implemented.
+Status: phases 1, 1b, 2 and 3 implemented.
 
 Taskboard goes from watching sessions to managing them: start work on a ticket (creating or reusing a worktree and opening a tmux window running the agent), stop a session, clean up finished work, and later attach to a session from the browser.
 
@@ -154,17 +154,50 @@ Two clients on the same tmux session mirror each other's current window, so ever
 - Copy session command: a one-liner run by the attaching client (`tmux new-session -t =<session> \; set-option @taskboard 1 \; set-option destroy-unattached on \; select-window -t :<index>`), prefixed with ssh when `ssh_host` is set.
 - `listWindows` skips windows in marked sessions and de-duplicates by window ID, so linked windows never show up twice.
 
-## Phase 3: terminal in the browser
+## Phase 3: remote access and the browser terminal (implemented)
 
-Dependencies: `github.com/creack/pty`, `github.com/coder/websocket`, and xterm.js plus its fit addon vendored under `static/` and embedded, so the page works offline. Update the "standard library only" line in CLAUDE.md.
+Goal: run taskboard on one machine (e.g. the Ubuntu box) and use it fully from a browser on another (e.g. the Mac), with no SSH tunnel, including a terminal in the browser. Two kinds of browser:
 
-- **Server.** `GET /term/{key}` upgrades to a WebSocket and runs the phase 2 linked-session attach under a PTY. It copies PTY output to binary messages and input messages to the PTY. A small JSON control message (`{"cols":..,"rows":..}`) calls `pty.Setsize`. On disconnect it kills the attach process, and `destroy-unattached` removes the linked session.
-- **Security**, the part that matters most:
-  - Loopback only.
-  - Check that `Origin` matches the request host and passes `checkHost`. Browsers can't set `X-Taskboard` on a WebSocket and WebSockets bypass CORS, so without this check any website you visit could open a shell.
-  - The key must resolve to a snapshot task with a session. The server only ever attaches to that window, never runs an arbitrary command.
-- **UI.** The terminal icon opens a panel: a full-height drawer on desktop, full screen on phones. It has a close button and reconnects if the page reloads after a `/version` change, which also means the reload must not kill an open terminal. Either skip auto-reload while the panel is open, or open the terminal at `/term/{key}` as its own page. The own page is simpler and recommended, so the panel can come later.
-- **Tests.** The origin check, and the guards for loopback, missing session and unknown key. The PTY bridge itself is checked by hand.
+- **Local:** a browser on the taskboard machine, arriving on the plain `listen` address from loopback. No authentication, as today.
+- **Remote:** a browser arriving on the new `tls_listen` address with a client certificate taskboard issued (mutual TLS). Anything else (no certificate, an unknown CA, or a revoked certificate) is refused during the TLS handshake.
+
+A non-loopback browser on the plain listener keeps today's view-only access. The TLS listener skips the `allowed_hosts` check: browsers only complete the handshake for names in the server certificate, which defeats DNS rebinding.
+
+### Access rules
+
+| | Local | Remote (client cert) | Other |
+|---|---|---|---|
+| View the board and plans | yes | yes | yes |
+| Start in terminal, Open in terminal (`attach_command`, opens on the taskboard machine) | yes | no | no |
+| Start in browser, Open in browser (`/term/<id>`) | yes | yes | no |
+| Stop, Clean up, Refresh, Settings | yes | yes | Refresh only |
+
+The guards from phase 1 stay: the `X-Taskboard` header on every POST, the hostname check, and the per-key claim. Client certificates are ambient credentials like cookies, so the header (which forces a CORS preflight that is never answered) and the WebSocket origin check are what stop other websites from using them.
+
+### Certificates (`taskboard certs`)
+
+Generated with `crypto/x509`, ECDSA P-256, into `tls_dir` (default `certs` next to the config file):
+
+- `taskboard certs init -host ubuntu,ubuntu.tailnet.ts.net,100.64.0.5` creates `ca.crt`/`ca.key` (10 years) and `server.crt`/`server.key` (825 days, the Apple maximum, with the given names and IPs plus localhost).
+- `taskboard certs server -host ...` re-issues the server certificate when names change; client certificates stay valid.
+- `taskboard certs client mac-laptop` issues a client certificate (2 years) as `mac-laptop.p12` with a generated password, encoded with the legacy algorithms macOS and iOS Keychain can import (`software.sslmate.com/src/go-pkcs12`). It prints the password and the certificate's serial.
+- `revoked_certs` lists serials to refuse, checked live during each handshake.
+
+### Browser terminal
+
+- `GET /term/{id}` serves a page with xterm.js and its fit addon, embedded in the binary so it works offline. `{id}` is a ticket key or a review name. With `?start=1` the page starts the session itself (showing the new-branch dialog when needed), so the board's Start in the browser is a plain link to a named tab and popup blockers never interfere.
+- `GET /term/{id}/ws` upgrades to a WebSocket (`github.com/coder/websocket`, which rejects cross-origin upgrades by default). It finds the id's tmux window live, creates a linked session with `openLinked`, and runs `tmux attach` to it under a PTY (`github.com/creack/pty`), with `TMUX` removed from the environment so it works when taskboard itself runs inside tmux. Binary messages carry bytes both ways; a JSON text message `{"cols":..,"rows":..}` resizes the PTY. When the socket closes, the attach process is killed and the linked session closed.
+- Each terminal is its own tab titled with the id, so board reloads never disturb it. When the connection drops, the page offers Reconnect.
+
+### Buttons
+
+- Rows without a session: **Start in terminal** (local, `attach_command` set) and **Start in browser** (local and remote). Both need `agent_command`. `POST /start` takes `open=terminal` to run `attach_command`; Start in browser links to `/term/<id>?start=1`.
+- Rows with a session: **Open in terminal** (local) and **Open in browser** (a link to `/term/<id>`), plus Stop.
+- Copy session command and `ssh_host` are removed; remote access goes through `tls_listen` instead of SSH.
+
+### Tests
+
+Access classification; certificate generation (server SANs, client chain verifies against the CA, `.p12` decodes); a TLS listener accepting a valid client certificate and refusing none and revoked; the WebSocket refusing a cross-origin upgrade, viewers, and unknown ids; the button rules.
 
 ## Later ideas (not planned)
 

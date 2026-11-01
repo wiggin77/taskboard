@@ -42,10 +42,9 @@ func (p *Plan) GitHubURL() string {
 }
 
 type Session struct {
-	Key       string
-	Target    string
-	Name      string
-	AttachCmd string
+	Key    string
+	Target string
+	Name   string
 }
 
 func runCmd(ctx context.Context, dir, name string, args ...string) ([]byte, error) {
@@ -165,17 +164,17 @@ func listWindows(ctx context.Context, cfg *Config) []Session {
 func parseWindows(cfg *Config, out []byte) []Session {
 	var windows []Session
 	seen := map[string]bool{}
-	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+	// Only newlines are trimmed: the last field is empty for unmarked sessions, and TrimSpace would eat its tab.
+	for _, line := range strings.Split(strings.TrimRight(string(out), "\r\n"), "\n") {
 		f := strings.Split(line, "\t")
 		if len(f) != 4 || f[3] != "" || seen[f[2]] {
 			continue
 		}
 		seen[f[2]] = true
 		windows = append(windows, Session{
-			Key:       cfg.findKey(f[1]),
-			Target:    f[0],
-			Name:      f[1],
-			AttachCmd: attachCommand(cfg.SSHHost, f[0]),
+			Key:    cfg.findKey(f[1]),
+			Target: f[0],
+			Name:   f[1],
 		})
 	}
 	return windows
@@ -191,35 +190,10 @@ func ticketSessions(windows []Session) []Session {
 	return sessions
 }
 
-// attachCommand attaches through a new linked session, so the terminal can switch windows without moving
-// other clients of the same session.
-func attachCommand(sshHost, target string) string {
-	session, index := splitTarget(target)
-	tmux := "tmux new-session -t " + shellQuote("="+session) + ` \; set-option ` + linkedMark + ` 1 \; set-option destroy-unattached on \; select-window -t ` + shellQuote(":"+index)
-	if sshHost == "" {
-		return tmux
-	}
-	return "ssh -t " + shellQuote(sshHost) + " " + shellQuote(tmux)
-}
-
 func splitTarget(target string) (session, index string) {
 	i := strings.LastIndexByte(target, ':')
 	if i < 0 {
 		return target, ""
 	}
 	return target[:i], target[i+1:]
-}
-
-func shellQuote(s string) string {
-	safe := s != ""
-	for _, r := range s {
-		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || strings.ContainsRune("_-.:@/=+", r)) {
-			safe = false
-			break
-		}
-	}
-	if safe {
-		return s
-	}
-	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }

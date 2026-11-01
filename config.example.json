@@ -1,12 +1,12 @@
 {
   "listen": "127.0.0.1:8484",
+  "tls_listen": "",
   "poll_interval": "120s",
   "idle_poll_interval": "0s",
   "refresh_timeout": "5m",
   "project_keys": ["MM"],
   "merged_pr_limit": 20,
   "done_days": 30,
-  "ssh_host": "ubuntu",
   "attach_command": ["gnome-terminal", "--", "tmux", "attach", "-t", "{target}"],
   "agent_command": "claude",
   "agent_resume_command": "claude --continue",
