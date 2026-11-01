@@ -19,6 +19,7 @@ type Worktree struct {
 	Path   string
 	Branch string
 	Key    string
+	Main   bool
 }
 
 type Plan struct {
@@ -82,7 +83,7 @@ func parseWorktrees(out []byte) []Worktree {
 		line := sc.Text()
 		switch {
 		case strings.HasPrefix(line, "worktree "):
-			wts = append(wts, Worktree{Path: strings.TrimPrefix(line, "worktree ")})
+			wts = append(wts, Worktree{Path: strings.TrimPrefix(line, "worktree "), Main: len(wts) == 0})
 		case strings.HasPrefix(line, "branch ") && len(wts) > 0:
 			wts[len(wts)-1].Branch = strings.TrimPrefix(line, "branch refs/heads/")
 		}
@@ -150,30 +151,37 @@ func planApproved(content []byte) bool {
 	return false
 }
 
-func listSessions(ctx context.Context, cfg *Config) ([]Session, error) {
+// listWindows returns every tmux window; Key is set only for windows named after a ticket.
+func listWindows(ctx context.Context, cfg *Config) []Session {
 	out, err := runCmd(ctx, "", "tmux", "list-windows", "-a", "-F", "#{session_name}:#{window_index}\t#{window_name}")
 	if err != nil {
 		// tmux exits non-zero when no server is running, which just means no sessions.
-		return nil, nil
+		return nil
 	}
-	var sessions []Session
+	var windows []Session
 	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
 		target, name, ok := strings.Cut(line, "\t")
 		if !ok {
 			continue
 		}
-		key := cfg.findKey(name)
-		if key == "" {
-			continue
-		}
-		sessions = append(sessions, Session{
-			Key:       key,
+		windows = append(windows, Session{
+			Key:       cfg.findKey(name),
 			Target:    target,
 			Name:      name,
 			AttachCmd: attachCommand(cfg.SSHHost, target),
 		})
 	}
-	return sessions, nil
+	return windows
+}
+
+func ticketSessions(windows []Session) []Session {
+	var sessions []Session
+	for _, w := range windows {
+		if w.Key != "" {
+			sessions = append(sessions, w)
+		}
+	}
+	return sessions
 }
 
 func attachCommand(sshHost, target string) string {

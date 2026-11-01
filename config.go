@@ -23,6 +23,11 @@ type Config struct {
 	DoneDays         int          `json:"done_days"`
 	SSHHost          string       `json:"ssh_host,omitempty"`
 	AttachCommand    []string     `json:"attach_command,omitempty"`
+	TmuxSession      string       `json:"tmux_session"`
+	AgentCommand     string       `json:"agent_command,omitempty"`
+	AgentResume      string       `json:"agent_resume_command,omitempty"`
+	WorktreeDir      string       `json:"worktree_dir,omitempty"`
+	WorktreeLinks    []string     `json:"worktree_links,omitempty"`
 	Jira             JiraConfig   `json:"jira"`
 	Repos            []RepoConfig `json:"repos"`
 
@@ -35,9 +40,10 @@ type JiraConfig struct {
 }
 
 type RepoConfig struct {
-	Name     string `json:"name"`
-	Path     string `json:"path,omitempty"`
-	PlansDir string `json:"plans_dir"`
+	Name       string `json:"name"`
+	Path       string `json:"path,omitempty"`
+	PlansDir   string `json:"plans_dir"`
+	BaseBranch string `json:"base_branch,omitempty"`
 }
 
 func (r RepoConfig) Dir() string { return expandHome(r.Path) }
@@ -178,6 +184,23 @@ func (c *Config) validate() error {
 		if r.PlansDir == "" {
 			r.PlansDir = "plans"
 		}
+		if r.BaseBranch != "" && !strings.Contains(strings.Trim(r.BaseBranch, "/"), "/") {
+			return fmt.Errorf("repos[%d].base_branch must name a remote branch, like origin/main", i)
+		}
+	}
+	if c.TmuxSession == "" {
+		c.TmuxSession = "work"
+	}
+	if strings.ContainsAny(c.TmuxSession, ":. ") {
+		return errors.New("tmux_session cannot contain ':', '.' or spaces")
+	}
+	if c.WorktreeDir != "" && !filepath.IsAbs(expandHome(c.WorktreeDir)) {
+		return errors.New("worktree_dir must be an absolute path or start with ~/")
+	}
+	for _, l := range c.WorktreeLinks {
+		if !filepath.IsAbs(expandHome(l)) {
+			return fmt.Errorf("worktree_links: %q must be an absolute path or start with ~/", l)
+		}
 	}
 	if c.MergedPRLimit < 1 {
 		return errors.New("merged_pr_limit must be at least 1")
@@ -217,6 +240,15 @@ func (c *Config) findKey(s string) string {
 
 func (c *Config) issueURL(key string) string {
 	return c.Jira.BaseURL + "/browse/" + key
+}
+
+func (c *Config) repo(name string) (RepoConfig, bool) {
+	for _, r := range c.Repos {
+		if strings.EqualFold(r.Name, name) {
+			return r, true
+		}
+	}
+	return RepoConfig{}, false
 }
 
 func (c *Config) hasRepo(name string) bool {

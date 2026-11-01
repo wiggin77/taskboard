@@ -2,6 +2,7 @@ package main
 
 import (
 	"compress/gzip"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -9,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -167,6 +169,9 @@ func TestParseWorktrees(t *testing.T) {
 	}
 	if wts[2].Branch != "" {
 		t.Errorf("detached worktree branch = %q", wts[2].Branch)
+	}
+	if !wts[0].Main || wts[1].Main || wts[2].Main {
+		t.Error("only the first worktree is the main checkout")
 	}
 }
 
@@ -661,6 +666,402 @@ func TestHomePaths(t *testing.T) {
 	} {
 		if got := shortenHome(in); got != want {
 			t.Errorf("shortenHome(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func sessionConfig(t *testing.T) *Config {
+	t.Helper()
+	cfg := testConfig(t)
+	cfg.Repos = []RepoConfig{
+		{Name: "mattermost/mattermost", Path: "/src/mattermost"},
+		{Name: "mattermost/logr"},
+		{Name: "mattermost/mmetl", Path: "/src/mmetl/"},
+	}
+	if err := cfg.validate(); err != nil {
+		t.Fatal(err)
+	}
+	return cfg
+}
+
+func TestStartPlan(t *testing.T) {
+	cfg := sessionConfig(t)
+	openPR := &PR{Repo: "mattermost/mmetl", Number: 7, State: "OPEN", Branch: "fix-import"}
+	cases := []struct {
+		name     string
+		task     Task
+		branches map[string][]string
+		want     StartPlan
+	}{
+		{"existing worktree resumes", Task{Key: "MM-1", Worktree: &Worktree{Repo: "mattermost/mattermost", Path: "/wt/x", Branch: "MM-1-x"}, PR: openPR},
+			nil, StartPlan{Mode: StartResume, Repo: "mattermost/mattermost", Path: "/wt/x", Branch: "MM-1-x"}},
+		{"local branch", Task{Key: "MM-1"}, map[string][]string{"mattermost/mattermost": {"master", "mm-1-old"}},
+			StartPlan{Mode: StartBranch, Repo: "mattermost/mattermost", Path: "/src/mattermost-MM-1", Branch: "mm-1-old"}},
+		{"PR repo's branch wins", Task{Key: "MM-1", PR: openPR}, map[string][]string{"mattermost/mattermost": {"MM-1-a"}, "mattermost/mmetl": {"MM-1-b"}},
+			StartPlan{Mode: StartBranch, Repo: "mattermost/mmetl", Path: "/src/mmetl-MM-1", Branch: "MM-1-b"}},
+		{"branch for another key", Task{Key: "MM-1"}, map[string][]string{"mattermost/mattermost": {"MM-12-other"}},
+			StartPlan{Mode: StartNew, Repo: "mattermost/mattermost", Path: "/src/mattermost-MM-1", Branch: "MM-1", Repos: []string{"mattermost/mattermost", "mattermost/mmetl"}}},
+		{"open PR", Task{Key: "MM-1", PR: openPR}, nil,
+			StartPlan{Mode: StartPR, Repo: "mattermost/mmetl", Path: "/src/mmetl-MM-1", Branch: "fix-import", PR: 7}},
+		{"PR in a repo without a checkout", Task{Key: "MM-1", Summary: "Fix it", PR: &PR{Repo: "mattermost/logr", State: "OPEN"}}, nil,
+			StartPlan{Mode: StartNew, Repo: "mattermost/mattermost", Path: "/src/mattermost-MM-1", Branch: "MM-1-fix-it", Repos: []string{"mattermost/mattermost", "mattermost/mmetl"}}},
+	}
+	for _, c := range cases {
+		got, err := startPlan(cfg, c.task, c.branches)
+		if err != nil {
+			t.Errorf("%s: %v", c.name, err)
+			continue
+		}
+		if !reflect.DeepEqual(got, c.want) {
+			t.Errorf("%s:\n got %+v\nwant %+v", c.name, got, c.want)
+		}
+	}
+
+	cfg.WorktreeDir = "/wt"
+	if got, _ := startPlan(cfg, Task{Key: "MM-2"}, nil); got.Path != "/wt/mattermost-MM-2" {
+		t.Errorf("with worktree_dir: path = %s", got.Path)
+	}
+	cfg.Repos = []RepoConfig{{Name: "mattermost/logr"}}
+	if _, err := startPlan(cfg, Task{Key: "MM-2"}, nil); err == nil {
+		t.Error("no local checkout should be an error")
+	}
+}
+
+func TestChooseNew(t *testing.T) {
+	cfg := sessionConfig(t)
+	p := StartPlan{Mode: StartNew, Repo: "mattermost/mattermost", Path: "/src/mattermost-MM-1"}
+	if err := chooseNew(cfg, &p, "MM-1", "mattermost/mmetl", "mm-1-custom"); err != nil || p.Repo != "mattermost/mmetl" || p.Path != "/src/mmetl-MM-1" || p.Branch != "mm-1-custom" {
+		t.Errorf("chooseNew = %v %+v", err, p)
+	}
+	for _, c := range []struct{ repo, branch string }{
+		{"mattermost/logr", "MM-1-x"},
+		{"other/repo", "MM-1-x"},
+		{"", "MM-12-x"},
+		{"", "fix-things"},
+		{"", "-MM-1"},
+	} {
+		if err := chooseNew(cfg, &p, "MM-1", c.repo, c.branch); err == nil {
+			t.Errorf("chooseNew(%q, %q) should fail", c.repo, c.branch)
+		}
+	}
+}
+
+func TestDefaultBranch(t *testing.T) {
+	for _, c := range []struct{ summary, want string }{
+		{"", "MM-1"},
+		{"Fix the bug!", "MM-1-fix-the-bug"},
+		{"  Ünïcode — and/or SPACES  ", "MM-1-n-code-and-or-spaces"},
+		{"Make the plugin API return a useful error when the channel is archived", "MM-1-make-the-plugin-api-return-a-useful-error"},
+		{strings.Repeat("x", 80), "MM-1-" + strings.Repeat("x", 45)},
+	} {
+		if got := defaultBranch("MM-1", c.summary); got != c.want || len(got) > maxBranchLen {
+			t.Errorf("defaultBranch(%q) = %q, want %q", c.summary, got, c.want)
+		}
+	}
+}
+
+func TestRemovalCheck(t *testing.T) {
+	status := []byte(" M server/app.go\n?? notes.txt\n")
+	unpushed := []byte("abc123 WIP\n")
+	merged := &PR{State: "MERGED", HeadSHA: "head1"}
+	if r := removalCheck(nil, nil, "head1", nil); !r.Clean() {
+		t.Errorf("clean worktree: %+v", r)
+	}
+	if r := removalCheck(status, nil, "head1", nil); r.Clean() || !slices.Equal(r.Uncommitted, []string{" M server/app.go", "?? notes.txt"}) {
+		t.Errorf("dirty worktree: %+v", r)
+	}
+	if r := removalCheck(nil, unpushed, "head1", nil); r.Clean() || r.Unpushed[0] != "abc123 WIP" {
+		t.Errorf("unpushed: %+v", r)
+	}
+	if r := removalCheck(nil, unpushed, "head1", merged); !r.Clean() {
+		t.Errorf("HEAD is the merged PR's head, so nothing is unpushed: %+v", r)
+	}
+	if r := removalCheck(nil, unpushed, "head2", merged); r.Clean() {
+		t.Error("commits after the merged head are unpushed")
+	}
+	if r := removalCheck(nil, unpushed, "head1", &PR{State: "OPEN", HeadSHA: "head1"}); r.Clean() {
+		t.Error("only a merged PR vouches for deleted remote branches")
+	}
+	var many strings.Builder
+	for i := 0; i < 25; i++ {
+		fmt.Fprintf(&many, "?? f%d\n", i)
+	}
+	if r := removalCheck([]byte(many.String()), nil, "", nil); len(r.Uncommitted) != maxListed+1 || r.Uncommitted[maxListed] != "and 5 more" {
+		t.Errorf("long list = %d lines, last %q", len(r.Uncommitted), r.Uncommitted[len(r.Uncommitted)-1])
+	}
+}
+
+func TestCleanupNeverRemovesMainCheckout(t *testing.T) {
+	cfg := sessionConfig(t)
+	task := Task{Key: "MM-1", Worktree: &Worktree{Repo: "mattermost/mattermost", Path: "/src/mattermost", Branch: "MM-1-x", Main: true}}
+	if _, err := cleanup(context.Background(), cfg, task, true); err == nil || !strings.Contains(err.Error(), "main checkout") {
+		t.Errorf("cleanup of the main checkout: %v", err)
+	}
+}
+
+func TestEnsureLinks(t *testing.T) {
+	root := t.TempDir()
+	dir := root + "/worktrees"
+	enterprise := root + "/src/enterprise"
+	for _, d := range []string{dir, enterprise, root + "/src/other/enterprise"} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := ensureLinks(dir, []string{enterprise}); err != nil {
+		t.Fatal(err)
+	}
+	if target, err := os.Readlink(dir + "/enterprise"); err != nil || target != enterprise {
+		t.Fatalf("link = %q, %v", target, err)
+	}
+	if err := ensureLinks(dir, []string{enterprise + "/"}); err != nil {
+		t.Errorf("an existing link to the same place should be accepted: %v", err)
+	}
+	if err := ensureLinks(root+"/src", []string{enterprise}); err != nil {
+		t.Errorf("linking a checkout into its own folder should be a no-op: %v", err)
+	}
+	if err := ensureLinks(dir, []string{root + "/src/other/enterprise"}); err == nil {
+		t.Error("a name taken by a different target should be an error")
+	}
+	if err := ensureLinks(dir, []string{root + "/missing"}); err == nil {
+		t.Error("a missing target should be an error")
+	}
+	if err := os.Symlink(root+"/gone", dir+"/gone"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(root+"/src/gone", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := ensureLinks(dir, []string{root + "/src/gone"}); err == nil {
+		t.Error("a broken link in the way should be an error")
+	}
+}
+
+func TestSessionEndpointGuards(t *testing.T) {
+	cfg := testConfig(t)
+	board := NewBoard(cfg)
+	board.snap.Tasks = []Task{
+		{Key: "MM-1", Stage: StageTicket},
+		{Key: "MM-2", Stage: StageCoding, Session: &Session{Key: "MM-2", Target: "work:1"}},
+		{Key: "mattermost/logr#3", NoTicket: true, Stage: StageInReview},
+	}
+	h := newServer(board, "")
+	post := func(path, remote string, header bool) *httptest.ResponseRecorder {
+		req := httptest.NewRequest("POST", path, nil)
+		req.Host = "localhost"
+		req.RemoteAddr = remote
+		if header {
+			req.Header.Set("X-Taskboard", "1")
+		}
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec
+	}
+	const local = "127.0.0.1:1234"
+	cases := []struct {
+		path, remote string
+		header       bool
+		want         int
+	}{
+		{"/start/MM-1", local, false, http.StatusForbidden},
+		{"/start/MM-1", "192.0.2.1:1234", true, http.StatusForbidden},
+		{"/stop/MM-2", local, false, http.StatusForbidden},
+		{"/cleanup/MM-1", "192.0.2.1:1234", true, http.StatusForbidden},
+		{"/start/MM-9", local, true, http.StatusNotFound},
+		{"/start/mattermost%2Flogr%233", local, true, http.StatusNotFound},
+		{"/start/MM-1", local, true, http.StatusBadRequest},
+		{"/stop/MM-1", local, true, http.StatusNotFound},
+		{"/cleanup/MM-2", local, true, http.StatusConflict},
+	}
+	for _, c := range cases {
+		if rec := post(c.path, c.remote, c.header); rec.Code != c.want {
+			t.Errorf("POST %s from %s (header %v): %d %s, want %d", c.path, c.remote, c.header, rec.Code, strings.TrimSpace(rec.Body.String()), c.want)
+		}
+	}
+
+	cfg.AgentCommand = "claude"
+	board.snap.Tasks = append(board.snap.Tasks, Task{Key: "MM-4", Stage: StageDone})
+	if rec := post("/start/MM-4", local, true); rec.Code != http.StatusConflict {
+		t.Errorf("starting a done task: %d, want 409", rec.Code)
+	}
+
+	s := &server{board: board, busy: map[string]bool{"MM-1": true}}
+	req := httptest.NewRequest("POST", "/start/MM-1", nil)
+	req.RemoteAddr = local
+	req.Header.Set("X-Taskboard", "1")
+	req.SetPathValue("key", "MM-1")
+	rec := httptest.NewRecorder()
+	s.start(rec, req)
+	if rec.Code != http.StatusLocked || !s.busy["MM-1"] {
+		t.Errorf("action already running: %d, want 423 and the claim kept", rec.Code)
+	}
+}
+
+func TestSessionConfig(t *testing.T) {
+	base := `"project_keys":["MM"],"jira":{"base_url":"https://x.atlassian.net"}`
+	cfg, err := parseConfig([]byte(`{` + base + `,"repos":[{"name":"a/b","base_branch":"upstream/main"}],"worktree_dir":"~/wt","worktree_links":["~/src/enterprise"]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.TmuxSession != "work" {
+		t.Errorf("tmux_session default = %q", cfg.TmuxSession)
+	}
+	for _, bad := range []string{
+		`"repos":[{"name":"a/b","base_branch":"main"}]`,
+		`"repos":[{"name":"a/b"}],"tmux_session":"my:work"`,
+		`"repos":[{"name":"a/b"}],"worktree_dir":"wt"`,
+		`"repos":[{"name":"a/b"}],"worktree_links":["enterprise"]`,
+	} {
+		if _, err := parseConfig([]byte(`{` + base + `,` + bad + `}`)); err == nil {
+			t.Errorf("config %s should be rejected", bad)
+		}
+	}
+}
+
+func TestParseReviewName(t *testing.T) {
+	mm := RepoConfig{Name: "mattermost/mattermost", Path: "/src/mattermost"}
+	weave := RepoConfig{Name: "mattermost/mattermost-plugin-weave", Path: "/src/mattermost-plugin-weave/"}
+	if got := reviewName(weave, 297); got != "mattermost-plugin-weave-pr297" {
+		t.Errorf("reviewName = %s", got)
+	}
+	for _, c := range []struct {
+		repo RepoConfig
+		name string
+		want int
+	}{
+		{mm, "mattermost-pr39290", 39290},
+		{mm, "mattermost-plugin-weave-pr297", 0},
+		{weave, "mattermost-plugin-weave-pr297", 297},
+		{mm, "mattermost-pr", 0},
+		{mm, "mattermost-pr12x", 0},
+		{mm, "mattermost-pr0", 0},
+		{mm, "mattermost-MM-12", 0},
+	} {
+		if n, ok := parseReviewName(c.repo, c.name); n != c.want || ok != (c.want > 0) {
+			t.Errorf("parseReviewName(%s, %s) = %d %v, want %d", c.repo.Name, c.name, n, ok, c.want)
+		}
+	}
+}
+
+func TestAttachReviews(t *testing.T) {
+	cfg := sessionConfig(t)
+	links := []PRLink{
+		{Repo: "mattermost/mattermost", Number: 10, Role: RoleRequested},
+		{Repo: "mattermost/mattermost", Number: 11, Role: RoleReviewed},
+		{Repo: "mattermost/logr", Number: 12, Role: RoleRequested},
+	}
+	wts := []Worktree{
+		{Repo: "mattermost/mattermost", Path: "/src/mattermost", Main: true},
+		{Repo: "mattermost/mattermost", Path: "/wt/mattermost-pr10"},
+		{Repo: "mattermost/mattermost", Path: "/wt/mattermost-pr99"},
+		{Repo: "mattermost/mattermost", Path: "/wt/mattermost-MM-5", Branch: "MM-5-x", Key: "MM-5"},
+	}
+	windows := []Session{
+		{Name: "mattermost-pr10", Target: "work:1"},
+		{Name: "mmetl-pr3", Target: "work:2"},
+		{Name: "MM-5", Key: "MM-5", Target: "work:3"},
+	}
+	got, leftovers := attachReviews(cfg, links, wts, windows)
+	if r := got[0].Review; got[0].ReviewName != "mattermost-pr10" || r == nil || r.Worktree.Path != "/wt/mattermost-pr10" || r.Session.Target != "work:1" {
+		t.Errorf("PR 10 = %+v", got[0])
+	}
+	if got[1].ReviewName != "mattermost-pr11" || got[1].Review != nil {
+		t.Errorf("PR 11 should be startable with nothing attached: %+v", got[1])
+	}
+	if got[2].ReviewName != "" {
+		t.Errorf("a repo without a checkout cannot be reviewed locally: %+v", got[2])
+	}
+	if len(leftovers) != 2 {
+		t.Fatalf("leftovers = %+v", leftovers)
+	}
+	for _, l := range leftovers {
+		if l.Role != RoleLeftover || l.Review == nil || !strings.Contains(l.URL, "/pull/") {
+			t.Errorf("leftover = %+v", l)
+		}
+	}
+	if leftovers[0].ReviewName != "mattermost-pr99" || leftovers[1].ReviewName != "mmetl-pr3" {
+		t.Errorf("leftover names = %s, %s", leftovers[0].ReviewName, leftovers[1].ReviewName)
+	}
+}
+
+func TestReviewCommand(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.AgentCommand = "claude {key}"
+	if got := reviewCommand(cfg, false); got != "claude " {
+		t.Errorf("start: %q", got)
+	}
+	if got := reviewCommand(cfg, true); got != "claude " {
+		t.Errorf("resume falls back to the agent command: %q", got)
+	}
+	cfg.AgentResume = "claude --continue"
+	if got := reviewCommand(cfg, true); got != "claude --continue" {
+		t.Errorf("resume: %q", got)
+	}
+}
+
+func TestControls(t *testing.T) {
+	d := indexData{CanAttach: true, CanStart: true, Local: true}
+	sess := &Session{Target: "work:1"}
+	if c := taskControls(Task{Key: "MM-1", Stage: StageTicket}, d); c.Start != "Start session" || c.Stop || c.Clean != "" {
+		t.Errorf("not started task: %+v", c)
+	}
+	if c := taskControls(Task{Key: "MM-1", Stage: StageCleanup, Session: sess}, d); c.Start != "" || !c.Stop || !c.Attach || c.Clean == "" {
+		t.Errorf("clean-up task with a session: %+v", c)
+	}
+	if c := taskControls(Task{Key: "MM-1", Stage: StageTicket}, indexData{}); c.Start != "" || c.Stop || c.Clean != "" {
+		t.Errorf("remote viewer gets no actions: %+v", c)
+	}
+	if c := prControls(PRLink{Number: 1}, d); c.ID != "" {
+		t.Errorf("PR without a local checkout: %+v", c)
+	}
+	if c := prControls(PRLink{ReviewName: "mm-pr1", Role: RoleRequested}, d); c.Start != "Start review" || c.Path != "/review" || c.Clean != "" {
+		t.Errorf("new review: %+v", c)
+	}
+	if c := prControls(PRLink{ReviewName: "mm-pr1", Role: RoleReviewed, Review: &Review{Worktree: &Worktree{}}}, d); c.Start != "Resume review" || c.Clean == "" {
+		t.Errorf("review with a worktree: %+v", c)
+	}
+	if c := prControls(PRLink{ReviewName: "mm-pr1", Role: RoleLeftover, Review: &Review{Worktree: &Worktree{}}}, d); c.Start != "" || c.Clean == "" {
+		t.Errorf("leftover review: %+v", c)
+	}
+}
+
+func TestReviewEndpointGuards(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.AgentCommand = "claude"
+	board := NewBoard(cfg)
+	board.snap.Reviews = []PRLink{
+		{Repo: "mattermost/mattermost", Number: 1, ReviewName: "mattermost-pr1", Role: RoleRequested},
+		{Repo: "mattermost/mattermost", Number: 2, ReviewName: "mattermost-pr2", Role: RoleLeftover, Review: &Review{}},
+	}
+	h := newServer(board, "")
+	post := func(path, remote string, header bool) int {
+		req := httptest.NewRequest("POST", path, nil)
+		req.Host = "localhost"
+		req.RemoteAddr = remote
+		if header {
+			req.Header.Set("X-Taskboard", "1")
+		}
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec.Code
+	}
+	const local = "127.0.0.1:1234"
+	for _, c := range []struct {
+		path, remote string
+		header       bool
+		want         int
+	}{
+		{"/review/start/mattermost-pr1", local, false, http.StatusForbidden},
+		{"/review/start/mattermost-pr1", "192.0.2.1:1234", true, http.StatusForbidden},
+		{"/review/cleanup/mattermost-pr1", "192.0.2.1:1234", true, http.StatusForbidden},
+		{"/review/start/mattermost-pr9", local, true, http.StatusNotFound},
+		{"/review/start/mattermost-pr2", local, true, http.StatusConflict},
+		{"/review/stop/mattermost-pr1", local, true, http.StatusNotFound},
+		{"/review/cleanup/mattermost-pr1", local, true, http.StatusNotFound},
+		{"/review/attach/mattermost-pr1", local, true, http.StatusForbidden},
+	} {
+		if got := post(c.path, c.remote, c.header); got != c.want {
+			t.Errorf("POST %s from %s (header %v): %d, want %d", c.path, c.remote, c.header, got, c.want)
 		}
 	}
 }

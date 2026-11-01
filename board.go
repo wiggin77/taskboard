@@ -87,6 +87,13 @@ func (b *Board) Refresh() {
 	}
 }
 
+// Invalidate requests a refresh even during one, since that refresh may have missed a change just made.
+func (b *Board) Invalidate() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.requestLocked()
+}
+
 func (b *Board) requestLocked() {
 	b.requested = true
 	select {
@@ -126,6 +133,15 @@ func (b *Board) Task(key string) (Task, bool) {
 		}
 	}
 	return Task{}, false
+}
+
+func (b *Board) Review(name string) (PRLink, bool) {
+	for _, l := range b.Snapshot().Reviews {
+		if l.ReviewName != "" && l.ReviewName == name {
+			return l, true
+		}
+	}
+	return PRLink{}, false
 }
 
 func (b *Board) Run(ctx context.Context) {
@@ -187,7 +203,7 @@ func (b *Board) refresh(ctx context.Context) {
 		issues    []JiraIssue
 		resolved  []JiraIssue
 		jiraErr   error
-		sessions  []Session
+		windows   []Session
 		reviews   []PRLink
 		otherPRs  []PRLink
 		prLinkErr error
@@ -204,7 +220,7 @@ func (b *Board) refresh(ctx context.Context) {
 	}()
 	go func() {
 		defer wg.Done()
-		sessions, _ = listSessions(ctx, cfg)
+		windows = listWindows(ctx, cfg)
 	}()
 	go func() {
 		defer wg.Done()
@@ -219,7 +235,7 @@ func (b *Board) refresh(ctx context.Context) {
 	wg.Wait()
 
 	var errs []string
-	s := sources{issues: map[string]JiraIssue{}, resolved: map[string]bool{}, missing: b.missingIssues, sessions: sessions}
+	s := sources{issues: map[string]JiraIssue{}, resolved: map[string]bool{}, missing: b.missingIssues, sessions: ticketSessions(windows)}
 	if jiraErr != nil {
 		errs = append(errs, "Jira search: "+jiraErr.Error())
 	}
@@ -262,6 +278,14 @@ func (b *Board) refresh(ctx context.Context) {
 			b.doneIssues[key] = is
 		}
 	}
+
+	reviews, leftovers := attachReviews(cfg, reviews, s.worktrees, windows)
+	for i := range leftovers {
+		if err := viewPR(ctx, &leftovers[i]); err != nil {
+			errs = append(errs, fmt.Sprintf("%s #%d: %v", leftovers[i].Repo, leftovers[i].Number, err))
+		}
+	}
+	reviews = append(reviews, leftovers...)
 
 	if err := b.fillJiraUpdated(ctx, s.issues); err != nil {
 		errs = append(errs, "Jira updated dates: "+err.Error())

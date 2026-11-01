@@ -3,8 +3,10 @@ package main
 import (
 	"bytes"
 	"compress/gzip"
+	"context"
 	"embed"
 	"encoding/json"
+	"errors"
 	"html/template"
 	"io"
 	"log"
@@ -13,7 +15,9 @@ import (
 	"os"
 	"os/exec"
 	"slices"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -21,13 +25,15 @@ import (
 var templateFS embed.FS
 
 var templates = template.Must(template.New("").Funcs(template.FuncMap{
-	"ageTone":   func(t time.Time) string { return ageTone(t, time.Now()) },
-	"dateLabel": func(t time.Time) string { return dateLabel(t, time.Now()) },
-	"isToday":   func(t time.Time) bool { return isToday(t, time.Now()) },
-	"iso":       func(t time.Time) string { return t.Format(time.RFC3339) },
-	"slug":      slug,
-	"join":      strings.Join,
-	"shortHome": shortenHome,
+	"ageTone":      func(t time.Time) string { return ageTone(t, time.Now()) },
+	"dateLabel":    func(t time.Time) string { return dateLabel(t, time.Now()) },
+	"isToday":      func(t time.Time) bool { return isToday(t, time.Now()) },
+	"iso":          func(t time.Time) string { return t.Format(time.RFC3339) },
+	"slug":         slug,
+	"join":         strings.Join,
+	"shortHome":    shortenHome,
+	"taskControls": taskControls,
+	"prControls":   prControls,
 }).ParseFS(templateFS, "templates/*.html"))
 
 func slug(name string) string {
@@ -65,6 +71,9 @@ type server struct {
 	board      *Board
 	configPath string
 	listen     string
+
+	mu   sync.Mutex
+	busy map[string]bool
 }
 
 type group struct {
@@ -94,8 +103,60 @@ type indexData struct {
 	Version        string
 	RefreshSeconds int
 	CanAttach      bool
+	CanStart       bool
 	Local          bool
 	Stations       []string
+}
+
+// controls says which session buttons a row shows; an empty ID shows none.
+type controls struct {
+	ID      string
+	Path    string
+	Session *Session
+	Attach  bool
+	Stop    bool
+	Start   string
+	Clean   string
+}
+
+func taskControls(t Task, d indexData) controls {
+	c := controls{ID: t.Key, Session: t.Session}
+	if t.Session != nil {
+		c.Attach, c.Stop = d.CanAttach, d.Local
+	}
+	if d.CanStart && t.CanStart() {
+		c.Start = "Start session"
+		if t.Worktree != nil {
+			c.Start = "Resume session"
+		}
+	}
+	if d.Local && t.NeedsCleanup() {
+		c.Clean = "Clean up: close the session, remove the worktree and branch"
+	}
+	return c
+}
+
+func prControls(p PRLink, d indexData) controls {
+	if p.ReviewName == "" {
+		return controls{}
+	}
+	c := controls{ID: p.ReviewName, Path: "/review"}
+	var wt *Worktree
+	if p.Review != nil {
+		c.Session, wt = p.Review.Session, p.Review.Worktree
+	}
+	if c.Session != nil {
+		c.Attach, c.Stop = d.CanAttach, d.Local
+	} else if d.CanStart && p.Role != RoleLeftover {
+		c.Start = "Start review"
+		if wt != nil {
+			c.Start = "Resume review"
+		}
+	}
+	if d.Local && p.Review != nil {
+		c.Clean = "Clean up: close the session and remove the review worktree"
+	}
+	return c
 }
 
 type settingsData struct {
@@ -111,12 +172,19 @@ type planData struct {
 }
 
 func newServer(board *Board, configPath string) http.Handler {
-	s := &server{board: board, configPath: configPath, listen: board.Config().Listen}
+	s := &server{board: board, configPath: configPath, listen: board.Config().Listen, busy: map[string]bool{}}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", s.index)
 	mux.HandleFunc("GET /version", s.version)
 	mux.HandleFunc("GET /plan/{key}", s.plan)
 	mux.HandleFunc("POST /attach/{key}", s.attach)
+	mux.HandleFunc("POST /start/{key}", s.start)
+	mux.HandleFunc("POST /stop/{key}", s.stop)
+	mux.HandleFunc("POST /cleanup/{key}", s.cleanup)
+	mux.HandleFunc("POST /review/attach/{name}", s.reviewAttach)
+	mux.HandleFunc("POST /review/start/{name}", s.reviewStart)
+	mux.HandleFunc("POST /review/stop/{name}", s.reviewStop)
+	mux.HandleFunc("POST /review/cleanup/{name}", s.reviewCleanup)
 	mux.HandleFunc("POST /refresh", s.refresh)
 	mux.HandleFunc("GET /settings", s.settings)
 	mux.HandleFunc("POST /settings", s.saveSettings)
@@ -154,6 +222,7 @@ func (s *server) index(w http.ResponseWriter, r *http.Request) {
 		Refreshing:     s.board.Refreshing(),
 		Version:        snap.Version,
 		CanAttach:      len(cfg.AttachCommand) > 0 && isLoopback(r),
+		CanStart:       cfg.AgentCommand != "" && isLoopback(r),
 		Local:          isLoopback(r),
 		Stations:       stations,
 	}
@@ -236,17 +305,302 @@ func (s *server) attach(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	args := make([]string, len(cfg.AttachCommand))
-	for i, a := range cfg.AttachCommand {
-		args[i] = strings.ReplaceAll(a, "{target}", t.Session.Target)
-	}
-	cmd := exec.Command(args[0], args[1:]...)
-	if err := cmd.Start(); err != nil {
+	if err := runAttach(cfg, t.Session.Target); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	go cmd.Wait()
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func runAttach(cfg *Config, target string) error {
+	args := make([]string, len(cfg.AttachCommand))
+	for i, a := range cfg.AttachCommand {
+		args[i] = strings.ReplaceAll(a, "{target}", target)
+	}
+	cmd := exec.Command(args[0], args[1:]...)
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	go cmd.Wait()
+	return nil
+}
+
+func allowAction(w http.ResponseWriter, r *http.Request) bool {
+	if r.Header.Get("X-Taskboard") != "1" || !isLoopback(r) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return false
+	}
+	return true
+}
+
+// claim stops a double click from running the same action twice at once.
+func (s *server) claim(w http.ResponseWriter, id string) (func(), bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.busy[id] {
+		http.Error(w, "already working on "+id, http.StatusLocked)
+		return nil, false
+	}
+	s.busy[id] = true
+	return func() {
+		s.mu.Lock()
+		delete(s.busy, id)
+		s.mu.Unlock()
+	}, true
+}
+
+func (s *server) action(w http.ResponseWriter, r *http.Request) (*Config, Task, func(), bool) {
+	if !allowAction(w, r) {
+		return nil, Task{}, nil, false
+	}
+	t, ok := s.board.Task(r.PathValue("key"))
+	if !ok || t.NoTicket {
+		http.NotFound(w, r)
+		return nil, Task{}, nil, false
+	}
+	release, ok := s.claim(w, t.Key)
+	return s.board.Config(), t, release, ok
+}
+
+func (s *server) reviewAction(w http.ResponseWriter, r *http.Request) (*Config, PRLink, func(), bool) {
+	if !allowAction(w, r) {
+		return nil, PRLink{}, nil, false
+	}
+	l, ok := s.board.Review(r.PathValue("name"))
+	if !ok {
+		http.NotFound(w, r)
+		return nil, PRLink{}, nil, false
+	}
+	release, ok := s.claim(w, l.ReviewName)
+	return s.board.Config(), l, release, ok
+}
+
+// Actions use their own context because a page reload must not abort a half-made worktree.
+func actionContext() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), actionTimeout)
+}
+
+func (s *server) start(w http.ResponseWriter, r *http.Request) {
+	cfg, t, release, ok := s.action(w, r)
+	if !ok {
+		return
+	}
+	defer release()
+	if cfg.AgentCommand == "" {
+		http.Error(w, "set the agent command in Settings first", http.StatusBadRequest)
+		return
+	}
+	if !t.CanStart() && t.Session == nil {
+		http.Error(w, t.Key+" is "+strings.ToLower(t.StageLabel())+", so there is nothing to start", http.StatusConflict)
+		return
+	}
+	ctx, cancel := actionContext()
+	defer cancel()
+	t, err := liveTask(ctx, cfg, t)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	target := ""
+	if t.Session != nil {
+		target = t.Session.Target
+	} else {
+		branches, err := listBranches(ctx, cfg)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		plan, err := startPlan(cfg, t, branches)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if plan.Mode == StartNew {
+			branch := strings.TrimSpace(r.FormValue("branch"))
+			if branch == "" {
+				writeJSON(w, http.StatusConflict, plan)
+				return
+			}
+			if err := chooseNew(cfg, &plan, t.Key, r.FormValue("repo"), branch); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+		}
+		target, err = startSession(ctx, cfg, t.Key, plan)
+		s.board.Invalidate()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
+	opened := len(cfg.AttachCommand) > 0 && runAttach(cfg, target) == nil
+	writeJSON(w, http.StatusOK, map[string]any{"target": target, "opened": opened})
+}
+
+func (s *server) stop(w http.ResponseWriter, r *http.Request) {
+	cfg, t, release, ok := s.action(w, r)
+	if !ok {
+		return
+	}
+	defer release()
+	if t.Session == nil {
+		http.Error(w, t.Key+" has no session", http.StatusNotFound)
+		return
+	}
+	ctx, cancel := actionContext()
+	defer cancel()
+	t, err := liveTask(ctx, cfg, t)
+	if err == nil && t.Session != nil {
+		err = stopSession(ctx, t.Session)
+	}
+	s.board.Invalidate()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *server) cleanup(w http.ResponseWriter, r *http.Request) {
+	cfg, t, release, ok := s.action(w, r)
+	if !ok {
+		return
+	}
+	defer release()
+	if !t.NeedsCleanup() {
+		http.Error(w, t.Key+" is not done, so taskboard will not clean it up", http.StatusConflict)
+		return
+	}
+	ctx, cancel := actionContext()
+	defer cancel()
+	t, err := liveTask(ctx, cfg, t)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	rm, err := cleanup(ctx, cfg, t, r.FormValue("force") == "1")
+	if errors.Is(err, errUnsafe) {
+		writeJSON(w, http.StatusConflict, rm)
+		return
+	}
+	s.board.Invalidate()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, rm)
+}
+
+func (s *server) reviewAttach(w http.ResponseWriter, r *http.Request) {
+	cfg := s.board.Config()
+	if !allowAction(w, r) {
+		return
+	}
+	if len(cfg.AttachCommand) == 0 {
+		http.Error(w, "set the open session command in Settings first", http.StatusForbidden)
+		return
+	}
+	l, ok := s.board.Review(r.PathValue("name"))
+	if !ok || l.Review == nil || l.Review.Session == nil {
+		http.NotFound(w, r)
+		return
+	}
+	if err := runAttach(cfg, l.Review.Session.Target); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *server) reviewStart(w http.ResponseWriter, r *http.Request) {
+	cfg, l, release, ok := s.reviewAction(w, r)
+	if !ok {
+		return
+	}
+	defer release()
+	if cfg.AgentCommand == "" {
+		http.Error(w, "set the agent command in Settings first", http.StatusBadRequest)
+		return
+	}
+	if l.Role == RoleLeftover {
+		http.Error(w, l.Repo+" #"+strconv.Itoa(l.Number)+" is no longer awaiting your review", http.StatusConflict)
+		return
+	}
+	ctx, cancel := actionContext()
+	defer cancel()
+	l, err := liveReview(ctx, cfg, l)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	target, err := startReview(ctx, cfg, l)
+	s.board.Invalidate()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	opened := len(cfg.AttachCommand) > 0 && runAttach(cfg, target) == nil
+	writeJSON(w, http.StatusOK, map[string]any{"target": target, "opened": opened})
+}
+
+func (s *server) reviewStop(w http.ResponseWriter, r *http.Request) {
+	cfg, l, release, ok := s.reviewAction(w, r)
+	if !ok {
+		return
+	}
+	defer release()
+	if l.Review == nil || l.Review.Session == nil {
+		http.Error(w, l.ReviewName+" has no session", http.StatusNotFound)
+		return
+	}
+	ctx, cancel := actionContext()
+	defer cancel()
+	l, err := liveReview(ctx, cfg, l)
+	if err == nil && l.Review != nil && l.Review.Session != nil {
+		err = stopSession(ctx, l.Review.Session)
+	}
+	s.board.Invalidate()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *server) reviewCleanup(w http.ResponseWriter, r *http.Request) {
+	cfg, l, release, ok := s.reviewAction(w, r)
+	if !ok {
+		return
+	}
+	defer release()
+	if l.Review == nil {
+		http.Error(w, l.ReviewName+" has no worktree or session to clean up", http.StatusNotFound)
+		return
+	}
+	ctx, cancel := actionContext()
+	defer cancel()
+	l, err := liveReview(ctx, cfg, l)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	rm, err := cleanupReview(ctx, cfg, l, r.FormValue("force") == "1")
+	if errors.Is(err, errUnsafe) {
+		writeJSON(w, http.StatusConflict, rm)
+		return
+	}
+	s.board.Invalidate()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, rm)
+}
+
+func writeJSON(w http.ResponseWriter, code int, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(code)
+	json.NewEncoder(w).Encode(v)
 }
 
 // Same CORS-preflight guard as attach, so other sites cannot make this server spend API calls.

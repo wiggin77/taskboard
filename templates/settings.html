@@ -29,7 +29,7 @@ input:focus,textarea:focus{outline:2px solid var(--link);outline-offset:-1px}
 .row2{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 .75rem;align-items:end}
 input::placeholder,textarea::placeholder{color:var(--faint)}
 .repo{--rail:oklch(var(--repo-l) var(--repo-c) 250);
-  display:grid;grid-template-columns:minmax(0,1fr) 12rem auto;grid-template-areas:"name plans remove" "path path .";gap:.5rem .6rem;
+  display:grid;grid-template-columns:minmax(0,1fr) 12rem auto;grid-template-areas:"name plans remove" "path base .";gap:.5rem .6rem;
   align-items:end;padding:.65rem .8rem .8rem;background:color-mix(in oklch,var(--rail) var(--repo-tint),var(--bg));
   border:1px solid color-mix(in oklch,var(--rail) 30%,var(--line));border-left:4px solid var(--rail);border-radius:8px}
 .repo+.repo{margin-top:.6rem}
@@ -40,6 +40,7 @@ input::placeholder,textarea::placeholder{color:var(--faint)}
 .repo .repo-name{grid-area:name}
 .repo .repo-plans{grid-area:plans}
 .repo .repo-path{grid-area:path}
+.repo .repo-base{grid-area:base}
 .repo .remove{grid-area:remove;margin-bottom:2px}
 .repo:not(.removed) .remove:hover{border-color:color-mix(in srgb,var(--fail) 50%,var(--line));color:var(--fail)}
 .remove .undo,.removed .remove .trash{display:none}
@@ -60,7 +61,7 @@ button.primary{background:var(--link);border-color:var(--link);color:var(--surfa
 #status.ok{color:var(--ok)}
 @media (max-width:40rem){
   .row3,.row2{grid-template-columns:minmax(0,1fr)}
-  .repo{grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"name remove" "path path" "plans ."}
+  .repo{grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"name remove" "path path" "plans ." "base ."}
 }
 </style>
 </head>
@@ -118,6 +119,18 @@ button.primary{background:var(--link);border-color:var(--link);color:var(--surfa
     <input name="ssh_host" placeholder="devbox" value="{{.SSHHost}}"></label>
   <label>Open session command<span class="hint">Runs on this machine when you press Open session, e.g. a new terminal attached to the window. One argument per line; {target} becomes the tmux window. Leave empty to hide the button.</span>
     <textarea name="attach_command" rows="4" placeholder="gnome-terminal&#10;--&#10;tmux&#10;attach&#10;-t&#10;{target}">{{join .AttachCommand "\n"}}</textarea></label>
+  <label>Agent command<span class="hint">Typed into a new tmux window when you press Start session, e.g. claude. {key} becomes the ticket key. Leave empty to hide the Start session button. Start review on a PR in Reviews uses it too.</span>
+    <input name="agent_command" placeholder="claude" value="{{.AgentCommand}}"></label>
+  <label>Resume command<span class="hint">Typed instead when a task or review already has a worktree, e.g. claude --continue. Defaults to the agent command.</span>
+    <input name="agent_resume_command" placeholder="claude --continue" value="{{.AgentResume}}"></label>
+  <div class="row2">
+    <label>tmux session<span class="hint">New windows go here. Created if it isn't running. Default work.</span>
+      <input name="tmux_session" placeholder="work" value="{{.TmuxSession}}"></label>
+    <label>Worktree folder<span class="hint">New worktrees go here, as repo-KEY. Leave empty to put each next to its repo's checkout.</span>
+      <input name="worktree_dir" placeholder="~/worktrees" value="{{shortHome .WorktreeDir}}"></label>
+  </div>
+  <label>Links in the worktree folder<span class="hint">One path per line. Each is linked into the worktree folder under its own name, for builds that expect a sibling checkout, e.g. ../enterprise.</span>
+    <textarea name="worktree_links" rows="2" placeholder="~/src/enterprise">{{range $i, $l := .WorktreeLinks}}{{if $i}}{{"\n"}}{{end}}{{shortHome $l}}{{end}}</textarea></label>
 </fieldset>
 
 <fieldset>
@@ -182,10 +195,15 @@ form.addEventListener("submit", async e => {
     done_days: Number(val("done_days")),
     ssh_host: val("ssh_host"),
     attach_command: lines("attach_command"),
+    agent_command: val("agent_command"),
+    agent_resume_command: val("agent_resume_command"),
+    tmux_session: val("tmux_session"),
+    worktree_dir: val("worktree_dir"),
+    worktree_links: lines("worktree_links"),
     jira: { base_url: val("jira.base_url"), jql: val("jira.jql") },
     repos: [...repos.querySelectorAll(".repo:not(.removed)")].map(row => {
       const f = n => row.querySelector(`[data-field=${n}]`).value.trim();
-      return { name: f("name"), path: f("path"), plans_dir: f("plans_dir") };
+      return { name: f("name"), path: f("path"), plans_dir: f("plans_dir"), base_branch: f("base_branch") };
     }).filter(r => r.name || r.path),
   };
   const button = form.querySelector("[type=submit]");
@@ -222,4 +240,5 @@ form.addEventListener("submit", async e => {
     <svg class="undo" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></svg>
   </button>
   <label class="repo-path">Local checkout<input data-field="path" placeholder="~/path/to/checkout, optional" value="{{$path}}" title="{{$path}}"></label>
+  <label class="repo-base">Base branch<input data-field="base_branch" placeholder="origin's default" value="{{.BaseBranch}}" title="{{.BaseBranch}}"></label>
 </div>{{end}}

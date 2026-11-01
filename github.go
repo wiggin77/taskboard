@@ -38,6 +38,7 @@ type PR struct {
 	Title     string
 	URL       string
 	Branch    string
+	HeadSHA   string
 	State     string
 	Draft     bool
 	Review    string
@@ -58,6 +59,7 @@ type ghPR struct {
 	Title             string    `json:"title"`
 	URL               string    `json:"url"`
 	HeadRefName       string    `json:"headRefName"`
+	HeadRefOid        string    `json:"headRefOid"`
 	State             string    `json:"state"`
 	IsDraft           bool      `json:"isDraft"`
 	ReviewDecision    string    `json:"reviewDecision"`
@@ -73,7 +75,7 @@ func listPRs(ctx context.Context, cfg *Config, repo, state string, limit int, se
 		"--state", state,
 		"--limit", strconv.Itoa(limit),
 		"--search", search,
-		"--json", "number,title,url,headRefName,state,isDraft,reviewDecision,statusCheckRollup,updatedAt,mergedAt")
+		"--json", "number,title,url,headRefName,headRefOid,state,isDraft,reviewDecision,statusCheckRollup,updatedAt,mergedAt")
 	if err != nil {
 		return nil, err
 	}
@@ -94,6 +96,7 @@ func listPRs(ctx context.Context, cfg *Config, repo, state string, limit int, se
 			Title:     r.Title,
 			URL:       r.URL,
 			Branch:    r.HeadRefName,
+			HeadSHA:   r.HeadRefOid,
 			State:     r.State,
 			Draft:     r.IsDraft,
 			Review:    r.ReviewDecision,
@@ -134,6 +137,7 @@ const (
 	RoleRequested Role = iota
 	RoleAuthor
 	RoleReviewed
+	RoleLeftover
 )
 
 type PRLink struct {
@@ -144,7 +148,11 @@ type PRLink struct {
 	Author    string
 	Draft     bool
 	Role      Role
+	State     string
 	UpdatedAt time.Time
+
+	ReviewName string
+	Review     *Review
 }
 
 func (p PRLink) RepoName() string { return path.Base(p.Repo) }
@@ -166,15 +174,46 @@ func (p PRLink) StageLabel() string {
 		return "Review requested"
 	case RoleAuthor:
 		return "Your PR"
+	case RoleLeftover:
+		switch p.State {
+		case "MERGED":
+			return "Merged, clean up"
+		case "CLOSED":
+			return "Closed, clean up"
+		}
+		return "Not awaiting you, clean up"
 	}
 	return "Reviewed, waiting on author"
 }
 
 func (p PRLink) Tone() string {
-	if p.Role == RoleRequested {
+	if p.Role == RoleRequested || p.Role == RoleLeftover {
 		return "needs"
 	}
 	return "active"
+}
+
+type ghViewPR struct {
+	Title  string `json:"title"`
+	URL    string `json:"url"`
+	State  string `json:"state"`
+	Author struct {
+		Login string `json:"login"`
+	} `json:"author"`
+	UpdatedAt time.Time `json:"updatedAt"`
+}
+
+func viewPR(ctx context.Context, link *PRLink) error {
+	out, err := runCmd(ctx, "", "gh", "pr", "view", strconv.Itoa(link.Number), "--repo", link.Repo, "--json", "title,url,state,author,updatedAt")
+	if err != nil {
+		return err
+	}
+	var v ghViewPR
+	if err := json.Unmarshal(out, &v); err != nil {
+		return err
+	}
+	link.Title, link.URL, link.State, link.Author, link.UpdatedAt = v.Title, v.URL, v.State, v.Author.Login, v.UpdatedAt
+	return nil
 }
 
 type ghSearchPR struct {

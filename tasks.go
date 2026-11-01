@@ -76,6 +76,19 @@ func (t Task) StageLabel() string { return stageInfo[t.Stage].label }
 func (t Task) Tone() string       { return stageInfo[t.Stage].tone }
 func (t Task) Group() string      { return stageInfo[t.Stage].group }
 
+func (t Task) NeedsCleanup() bool { return t.Stage == StageCleanup }
+
+func (t Task) CanStart() bool {
+	if t.NoTicket || t.Session != nil {
+		return false
+	}
+	switch t.Stage {
+	case StageMergedJiraPending, StageCleanup, StageDone:
+		return false
+	}
+	return true
+}
+
 func (t Task) DisplayKey() string {
 	if t.NoTicket {
 		return path.Base(t.PR.Repo) + "#" + strconv.Itoa(t.PR.Number)

@@ -8,6 +8,11 @@
   "done_days": 30,
   "ssh_host": "ubuntu",
   "attach_command": ["gnome-terminal", "--", "tmux", "attach", "-t", "{target}"],
+  "agent_command": "claude",
+  "agent_resume_command": "claude --continue",
+  "tmux_session": "work",
+  "worktree_dir": "~/worktrees",
+  "worktree_links": ["~/src/enterprise"],
   "allowed_hosts": [],
   "jira": {
     "base_url": "https://mattermost.atlassian.net",

@@ -1,4 +1,4 @@
-{{define "prsections"}}{{range .}}
+{{define "prsections"}}{{$page := .}}{{range .PRSections}}
 <section id="{{slug .Name}}">
   <h2>{{.Name}} <span class="count">{{len .PRs}}</span></h2>
   <ul class="tasks">
@@ -14,6 +14,8 @@
       <div class="links">
         <a href="{{.URL}}" target="_blank" rel="noopener" title="{{.Repo}}#{{.Number}}">{{.RepoName}} #{{.Number}}</a>
         {{with .Meta}}<span>{{.}}</span>{{end}}
+        {{with .Review}}{{with .Worktree}}<span class="meta" title="{{.Path}}">worktree {{.Dir}}</span>{{end}}{{end}}
+        {{template "controls" (prControls . $page)}}
       </div>
     </li>
   {{end}}
