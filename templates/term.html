@@ -41,6 +41,7 @@ function status(text, { canStart = false, canReconnect = false } = {}) {
 
 const term = new Terminal({
   cursorBlink: true,
+  macOptionClickForcesSelection: true,
   fontFamily: 'ui-monospace, "JetBrains Mono", "SF Mono", Menlo, monospace',
   fontSize: 13,
   theme: { background: "#0F1318", foreground: "#E4E9EF", cursor: "#E4E9EF", selectionBackground: "#3A4654" },
