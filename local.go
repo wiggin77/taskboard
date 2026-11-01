@@ -93,7 +93,7 @@ func parseWorktrees(out []byte) []Worktree {
 func findPlans(cfg *Config, repo RepoConfig, wts []Worktree) ([]Plan, error) {
 	var plans []Plan
 	for _, wt := range wts {
-		dir := filepath.Join(wt.Path, repo.PlansDir)
+		dir := filepath.Join(wt.Path, repo.plansDir())
 		entries, err := os.ReadDir(dir)
 		if errors.Is(err, os.ErrNotExist) {
 			continue
@@ -122,7 +122,7 @@ func findPlans(cfg *Config, repo RepoConfig, wts []Worktree) ([]Plan, error) {
 				Key:      key,
 				Repo:     repo.Name,
 				Path:     p,
-				RelPath:  path.Join(filepath.ToSlash(repo.PlansDir), e.Name()),
+				RelPath:  path.Join(filepath.ToSlash(repo.plansDir()), e.Name()),
 				Branch:   wt.Branch,
 				Approved: planApproved(content),
 				ModTime:  info.ModTime(),

@@ -212,7 +212,7 @@ func (b *Board) refresh(ctx context.Context) {
 	wg.Add(3 + len(cfg.Repos))
 	go func() {
 		defer wg.Done()
-		issues, jiraErr = jiraSearch(ctx, cfg.Jira.JQL)
+		issues, jiraErr = jiraSearch(ctx, cfg.jql())
 		if jiraErr != nil {
 			return
 		}

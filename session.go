@@ -197,10 +197,7 @@ func startSession(ctx context.Context, cfg *Config, key string, p StartPlan) (st
 			return "", err
 		}
 	}
-	command := cfg.AgentCommand
-	if p.Mode == StartResume && cfg.AgentResume != "" {
-		command = cfg.AgentResume
-	}
+	command := cfg.agent(p.Mode == StartResume)
 	return openWindow(ctx, cfg, key, p.Path, strings.ReplaceAll(command, "{key}", key))
 }
 
@@ -268,10 +265,11 @@ func openWindow(ctx context.Context, cfg *Config, key, dir, command string) (str
 	const format = "#{session_name}:#{window_index}"
 	var out []byte
 	var err error
-	if _, herr := runCmd(ctx, "", "tmux", "has-session", "-t", "="+cfg.TmuxSession); herr != nil {
-		out, err = runCmd(ctx, "", "tmux", "new-session", "-d", "-s", cfg.TmuxSession, "-n", key, "-c", dir, "-P", "-F", format)
+	session := cfg.tmuxSession()
+	if _, herr := runCmd(ctx, "", "tmux", "has-session", "-t", "="+session); herr != nil {
+		out, err = runCmd(ctx, "", "tmux", "new-session", "-d", "-s", session, "-n", key, "-c", dir, "-P", "-F", format)
 	} else {
-		out, err = runCmd(ctx, "", "tmux", "new-window", "-d", "-t", "="+cfg.TmuxSession+":", "-n", key, "-c", dir, "-P", "-F", format)
+		out, err = runCmd(ctx, "", "tmux", "new-window", "-d", "-t", "="+session+":", "-n", key, "-c", dir, "-P", "-F", format)
 	}
 	if err != nil {
 		return "", err
@@ -626,11 +624,7 @@ func startReview(ctx context.Context, cfg *Config, l PRLink) (string, error) {
 
 // Reviews have no ticket, so {key} is dropped; the user types the review prompt themselves.
 func reviewCommand(cfg *Config, resume bool) string {
-	command := cfg.AgentCommand
-	if resume && cfg.AgentResume != "" {
-		command = cfg.AgentResume
-	}
-	return strings.ReplaceAll(command, "{key}", "")
+	return strings.ReplaceAll(cfg.agent(resume), "{key}", "")
 }
 
 // cleanupReview deletes only the review/<N> branch it created; any other branch in the worktree is the user's.

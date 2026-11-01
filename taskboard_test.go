@@ -616,7 +616,7 @@ func TestSaveSettings(t *testing.T) {
 		t.Fatalf("valid save: %d %s, want 200 asking for a restart", rec.Code, rec.Body)
 	}
 	got := board.Config()
-	if got.PollInterval.Duration != time.Hour || got.findKey("abc-12") != "ABC-12" || got.Repos[0].PlansDir != "plans" {
+	if got.PollInterval.Duration != time.Hour || got.findKey("abc-12") != "ABC-12" || got.Repos[0].plansDir() != "plans" {
 		t.Errorf("live config not updated: %+v", got)
 	}
 	if len(board.wake) != 1 {
@@ -916,8 +916,8 @@ func TestSessionConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.TmuxSession != "work" {
-		t.Errorf("tmux_session default = %q", cfg.TmuxSession)
+	if cfg.tmuxSession() != "work" {
+		t.Errorf("tmux_session default = %q", cfg.tmuxSession())
 	}
 	for _, bad := range []string{
 		`"repos":[{"name":"a/b","base_branch":"main"}]`,
@@ -1286,25 +1286,35 @@ func TestAgentCommandDefault(t *testing.T) {
 	base := `"project_keys":["MM"],"jira":{"base_url":"https://x.atlassian.net"},"repos":[{"name":"a/b"}]`
 	for _, c := range []struct{ extra, agent, resume string }{
 		{``, "claude", "claude --continue"},
-		{`,"agent_command":"aider"`, "aider", ""},
+		{`,"agent_command":"aider"`, "aider", "aider"},
 		{`,"agent_resume_command":"claude -c"`, "claude", "claude -c"},
 	} {
 		cfg, err := parseConfig([]byte(`{` + base + c.extra + `}`))
 		if err != nil {
 			t.Fatal(err)
 		}
-		if cfg.AgentCommand != c.agent || cfg.AgentResume != c.resume {
-			t.Errorf("%s: agent %q resume %q, want %q %q", c.extra, cfg.AgentCommand, cfg.AgentResume, c.agent, c.resume)
+		if got, gotResume := cfg.agent(false), cfg.agent(true); got != c.agent || gotResume != c.resume {
+			t.Errorf("%s: agent %q resume %q, want %q %q", c.extra, got, gotResume, c.agent, c.resume)
 		}
 	}
 }
 
-func TestEmptyJQLUsesDefault(t *testing.T) {
+func TestDefaultsAreNotSaved(t *testing.T) {
 	cfg, err := parseConfig([]byte(`{"project_keys":["MM"],"jira":{"base_url":"https://x.atlassian.net","jql":"  "},"repos":[{"name":"a/b"}]}`))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Jira.JQL != defaultJQL {
-		t.Errorf("JQL = %q, want the default", cfg.Jira.JQL)
+	if cfg.jql() != defaultJQL || cfg.tmuxSession() != "work" || cfg.agent(false) != "claude" || cfg.Repos[0].plansDir() != "plans" {
+		t.Errorf("defaults not applied: jql %q, session %q, agent %q, plans %q", cfg.jql(), cfg.tmuxSession(), cfg.agent(false), cfg.Repos[0].plansDir())
+	}
+	path := t.TempDir() + "/taskboard.json"
+	if err := SaveConfig(path, cfg); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := os.ReadFile(path)
+	for _, def := range []string{"claude", `"work"`, `"plans"`, "statusCategory"} {
+		if strings.Contains(string(raw), def) {
+			t.Errorf("saved config contains the default %s; defaults belong in placeholders:\n%s", def, raw)
+		}
 	}
 }

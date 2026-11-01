@@ -25,7 +25,7 @@ type Config struct {
 	MergedPRLimit    int          `json:"merged_pr_limit"`
 	DoneDays         int          `json:"done_days"`
 	AttachCommand    []string     `json:"attach_command,omitempty"`
-	TmuxSession      string       `json:"tmux_session"`
+	TmuxSession      string       `json:"tmux_session,omitempty"`
 	AgentCommand     string       `json:"agent_command,omitempty"`
 	AgentResume      string       `json:"agent_resume_command,omitempty"`
 	WorktreeDir      string       `json:"worktree_dir,omitempty"`
@@ -36,9 +36,13 @@ type Config struct {
 	keyRE *regexp.Regexp
 }
 
+// Defaults apply when a field is empty and are never written back, so the settings page shows each one as
+// its field's placeholder rather than as a saved value.
 const (
 	defaultAgent       = "claude"
 	defaultAgentResume = "claude --continue"
+	defaultTmuxSession = "work"
+	defaultPlansDir    = "plans"
 )
 
 const defaultJQL = "assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC"
@@ -51,7 +55,7 @@ type JiraConfig struct {
 type RepoConfig struct {
 	Name       string `json:"name"`
 	Path       string `json:"path,omitempty"`
-	PlansDir   string `json:"plans_dir"`
+	PlansDir   string `json:"plans_dir,omitempty"`
 	BaseBranch string `json:"base_branch,omitempty"`
 }
 
@@ -129,9 +133,6 @@ func parseConfig(b []byte) (*Config, error) {
 		RefreshTimeout: Duration{5 * time.Minute},
 		MergedPRLimit:  20,
 		DoneDays:       30,
-		Jira: JiraConfig{
-			JQL: defaultJQL,
-		},
 	}
 	if err := json.Unmarshal(b, cfg); err != nil {
 		return nil, fmt.Errorf("parse: %w", err)
@@ -179,9 +180,6 @@ func (c *Config) validate() error {
 		return errors.New("jira.base_url is required")
 	}
 	c.Jira.BaseURL = strings.TrimRight(c.Jira.BaseURL, "/")
-	if strings.TrimSpace(c.Jira.JQL) == "" {
-		c.Jira.JQL = defaultJQL
-	}
 	if len(c.ProjectKeys) == 0 {
 		return errors.New("project_keys must list at least one Jira project key")
 	}
@@ -193,24 +191,12 @@ func (c *Config) validate() error {
 		if r.Name == "" {
 			return fmt.Errorf("repos[%d].name is required", i)
 		}
-		if r.PlansDir == "" {
-			r.PlansDir = "plans"
-		}
 		if r.BaseBranch != "" && !strings.Contains(strings.Trim(r.BaseBranch, "/"), "/") {
 			return fmt.Errorf("repos[%d].base_branch must name a remote branch, like origin/main", i)
 		}
 	}
 	for i, serial := range c.RevokedCerts {
 		c.RevokedCerts[i] = normalizeSerial(serial)
-	}
-	if c.AgentCommand == "" {
-		c.AgentCommand = defaultAgent
-		if c.AgentResume == "" {
-			c.AgentResume = defaultAgentResume
-		}
-	}
-	if c.TmuxSession == "" {
-		c.TmuxSession = "work"
 	}
 	if strings.ContainsAny(c.TmuxSession, ":. ") {
 		return errors.New("tmux_session cannot contain ':', '.' or spaces")
@@ -277,6 +263,41 @@ func (c *Config) tlsDir(configPath string) string {
 		dir = filepath.Join(filepath.Dir(configPath), dir)
 	}
 	return dir
+}
+
+func (c *Config) jql() string {
+	if strings.TrimSpace(c.Jira.JQL) == "" {
+		return defaultJQL
+	}
+	return c.Jira.JQL
+}
+
+func (c *Config) tmuxSession() string {
+	if c.TmuxSession == "" {
+		return defaultTmuxSession
+	}
+	return c.TmuxSession
+}
+
+// agent returns the command typed into a new window. An empty resume command falls back to the agent
+// command when that was changed, since claude --continue would be wrong for another agent.
+func (c *Config) agent(resume bool) string {
+	switch {
+	case resume && c.AgentResume != "":
+		return c.AgentResume
+	case resume && c.AgentCommand == "":
+		return defaultAgentResume
+	case c.AgentCommand == "":
+		return defaultAgent
+	}
+	return c.AgentCommand
+}
+
+func (r RepoConfig) plansDir() string {
+	if r.PlansDir == "" {
+		return defaultPlansDir
+	}
+	return r.PlansDir
 }
 
 func (c *Config) repo(name string) (RepoConfig, bool) {
