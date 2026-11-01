@@ -280,7 +280,10 @@ func TestMergePRLinks(t *testing.T) {
 		RoleAuthor:    {pr("mattermost/mattermost", 3, 9), pr("Other/Repo", 4, 2)},
 		RoleReviewed:  {pr("mattermost/mattermost", 1, 1), pr("Mattermost/Mattermost", 5, 5), pr("other/repo", 6, 4), pr("mattermost/mattermost", 7, 2)},
 	}
-	reviews, others := splitPRLinks(cfg, mergePRLinks(found))
+	found[RoleRequested][0].Title = "MM-10 Fix the thing"
+	found[RoleRequested][0].Body = "Ticket: https://example.atlassian.net/browse/MM-11"
+	found[RoleReviewed][1].Body = "#### Ticket Link\nhttps://example.atlassian.net/browse/MM-12"
+	reviews, others := splitPRLinks(cfg, mergePRLinks(cfg, found))
 
 	type want struct {
 		n    int
@@ -298,6 +301,17 @@ func TestMergePRLinks(t *testing.T) {
 		}
 	}
 	check("reviews", reviews, []want{{1, RoleRequested}, {5, RoleReviewed}, {7, RoleReviewed}})
+	for i, key := range []string{"MM-10", "MM-12", ""} {
+		if reviews[i].Key != key {
+			t.Errorf("reviews[%d].Key = %q, want %q", i, reviews[i].Key, key)
+		}
+	}
+	if want := cfg.issueURL("MM-10"); reviews[0].JiraURL != want {
+		t.Errorf("reviews[0].JiraURL = %q, want %q", reviews[0].JiraURL, want)
+	}
+	if reviews[2].JiraURL != "" {
+		t.Errorf("reviews[2].JiraURL = %q, want none", reviews[2].JiraURL)
+	}
 	check("others", others, []want{{2, RoleRequested}, {4, RoleAuthor}, {6, RoleReviewed}})
 }
 

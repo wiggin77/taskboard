@@ -282,7 +282,7 @@ func (b *Board) refresh(ctx context.Context) {
 
 	reviews, leftovers := attachReviews(cfg, reviews, s.worktrees, windows)
 	for i := range leftovers {
-		if err := viewPR(ctx, &leftovers[i]); err != nil {
+		if err := viewPR(ctx, cfg, &leftovers[i]); err != nil {
 			errs = append(errs, fmt.Sprintf("%s #%d: %v", leftovers[i].Repo, leftovers[i].Number, err))
 		}
 	}

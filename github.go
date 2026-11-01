@@ -150,9 +150,21 @@ type PRLink struct {
 	Role      Role
 	State     string
 	UpdatedAt time.Time
+	Key       string
+	JiraURL   string
 
 	ReviewName string
 	Review     *Review
+}
+
+func (p *PRLink) setKey(cfg *Config, body string) {
+	p.Key = cfg.findKey(p.Title)
+	if p.Key == "" {
+		p.Key = cfg.findKey(body)
+	}
+	if p.Key != "" {
+		p.JiraURL = cfg.issueURL(p.Key)
+	}
 }
 
 func (p PRLink) RepoName() string { return path.Base(p.Repo) }
@@ -197,14 +209,15 @@ type ghViewPR struct {
 	Title  string `json:"title"`
 	URL    string `json:"url"`
 	State  string `json:"state"`
+	Body   string `json:"body"`
 	Author struct {
 		Login string `json:"login"`
 	} `json:"author"`
 	UpdatedAt time.Time `json:"updatedAt"`
 }
 
-func viewPR(ctx context.Context, link *PRLink) error {
-	out, err := runCmd(ctx, "", "gh", "pr", "view", strconv.Itoa(link.Number), "--repo", link.Repo, "--json", "title,url,state,author,updatedAt")
+func viewPR(ctx context.Context, cfg *Config, link *PRLink) error {
+	out, err := runCmd(ctx, "", "gh", "pr", "view", strconv.Itoa(link.Number), "--repo", link.Repo, "--json", "title,url,state,body,author,updatedAt")
 	if err != nil {
 		return err
 	}
@@ -213,6 +226,7 @@ func viewPR(ctx context.Context, link *PRLink) error {
 		return err
 	}
 	link.Title, link.URL, link.State, link.Author, link.UpdatedAt = v.Title, v.URL, v.State, v.Author.Login, v.UpdatedAt
+	link.setKey(cfg, v.Body)
 	return nil
 }
 
@@ -223,6 +237,7 @@ type ghSearchPR struct {
 	Number int    `json:"number"`
 	Title  string `json:"title"`
 	URL    string `json:"url"`
+	Body   string `json:"body"`
 	Author struct {
 		Login string `json:"login"`
 	} `json:"author"`
@@ -243,13 +258,13 @@ func listPRLinks(ctx context.Context, cfg *Config) (reviews, others []PRLink, er
 			return nil, nil, err
 		}
 	}
-	reviews, others = splitPRLinks(cfg, mergePRLinks(found))
+	reviews, others = splitPRLinks(cfg, mergePRLinks(cfg, found))
 	return reviews, others, nil
 }
 
 func searchPRs(ctx context.Context, query ...string) ([]ghSearchPR, error) {
 	args := []string{"search", "prs", "--state", "open", "--limit", "100",
-		"--json", "repository,number,title,url,author,isDraft,updatedAt", "--"}
+		"--json", "repository,number,title,url,body,author,isDraft,updatedAt", "--"}
 	out, err := runCmd(ctx, "", "gh", append(args, query...)...)
 	if err != nil {
 		return nil, err
@@ -261,7 +276,7 @@ func searchPRs(ctx context.Context, query ...string) ([]ghSearchPR, error) {
 	return raw, nil
 }
 
-func mergePRLinks(found [3][]ghSearchPR) []PRLink {
+func mergePRLinks(cfg *Config, found [3][]ghSearchPR) []PRLink {
 	seen := map[string]bool{}
 	var links []PRLink
 	for role, prs := range found {
@@ -270,7 +285,7 @@ func mergePRLinks(found [3][]ghSearchPR) []PRLink {
 				continue
 			}
 			seen[r.URL] = true
-			links = append(links, PRLink{
+			l := PRLink{
 				Repo:      r.Repository.NameWithOwner,
 				Number:    r.Number,
 				Title:     r.Title,
@@ -279,7 +294,9 @@ func mergePRLinks(found [3][]ghSearchPR) []PRLink {
 				Draft:     r.IsDraft,
 				Role:      Role(role),
 				UpdatedAt: r.UpdatedAt,
-			})
+			}
+			l.setKey(cfg, r.Body)
+			links = append(links, l)
 		}
 	}
 	sort.SliceStable(links, func(i, j int) bool {
