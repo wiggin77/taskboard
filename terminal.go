@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 
 	"github.com/coder/websocket"
 	"github.com/creack/pty"
@@ -88,7 +89,9 @@ func (s *server) termSocket(w http.ResponseWriter, r *http.Request) {
 	cfg := s.board.Config()
 	target, ok := findWindow(ctx, cfg, id)
 	if !ok {
-		conn.Close(closeNoSession, id+" has no session")
+		// The board offered Open because its snapshot still showed a session, so it is stale too.
+		s.board.Invalidate()
+		conn.Close(closeNoSession, s.restartKind(ctx, cfg, id))
 		return
 	}
 	linked, err := openLinked(ctx, target)
@@ -120,7 +123,7 @@ func (s *server) termSocket(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			if err != nil {
-				conn.Close(websocket.StatusNormalClosure, "session ended")
+				conn.Close(websocket.StatusNormalClosure, s.attachEnded(cfg, id))
 				return
 			}
 		}
@@ -141,6 +144,34 @@ func (s *server) termSocket(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+}
+
+// attachEnded tells a detach, where the window keeps running, from the window itself closing, which the
+// board should show at once rather than at its next poll.
+func (s *server) attachEnded(cfg *Config, id string) string {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if _, ok := findWindow(ctx, cfg, id); ok {
+		return "detached"
+	}
+	s.board.Invalidate()
+	return "ended"
+}
+
+// restartKind says whether starting again would resume an existing worktree or create one.
+func (s *server) restartKind(ctx context.Context, cfg *Config, id string) string {
+	if cfg.findKey(id) == id {
+		if t, err := liveTask(ctx, cfg, Task{Key: id}); err == nil && t.Worktree != nil {
+			return "resume"
+		}
+		return "start"
+	}
+	if l, ok := s.board.Review(id); ok {
+		if l, err := liveReview(ctx, cfg, l); err == nil && l.Review != nil && l.Review.Worktree != nil {
+			return "resume"
+		}
+	}
+	return "start"
 }
 
 func withoutEnv(env []string, name string) []string {

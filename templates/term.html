@@ -22,7 +22,7 @@ body{max-width:none;margin:0;padding:0;background:#0F1318;overflow:hidden}
 </head>
 <body>
 <div id="term"></div>
-<div id="status" role="status" hidden><span></span><button type="button" id="start" hidden>Start</button><button type="button" id="reconnect" hidden>Reconnect</button></div>
+<div id="status" role="status" hidden><span></span><button type="button" id="start" hidden></button><button type="button" id="reconnect" hidden>Reconnect</button></div>
 {{template "actions"}}
 <script src="/static/xterm.js"></script>
 <script src="/static/addon-fit.js"></script>
@@ -32,10 +32,11 @@ const startURL = {{.StartURL}};
 const statusBox = document.getElementById("status");
 const startButton = document.getElementById("start");
 const reconnectButton = document.getElementById("reconnect");
-function status(text, { canStart = false, canReconnect = false } = {}) {
+function status(text, { start = "", canReconnect = false } = {}) {
   statusBox.hidden = !text;
   statusBox.querySelector("span").textContent = text;
-  startButton.hidden = !canStart;
+  startButton.hidden = !start;
+  startButton.textContent = start;
   reconnectButton.hidden = !canReconnect;
 }
 
@@ -72,8 +73,10 @@ function connect() {
   };
   ws.onmessage = e => term.write(new Uint8Array(e.data));
   ws.onclose = e => {
-    if (e.code === 4404) return status(id + " has no session.", { canStart: true });
-    status(e.code === 1000 ? "The session ended." : "Disconnected" + (e.reason ? ": " + e.reason : "."), { canReconnect: true, canStart: e.code === 1000 });
+    if (e.code === 4404) return status(id + " has no session.", { start: e.reason === "resume" ? "Resume" : "Start" });
+    if (e.code === 1000 && e.reason === "ended") return status("The session ended.", { start: "Resume" });
+    if (e.code === 1000 && e.reason === "detached") return status("Detached.", { canReconnect: true });
+    status("Disconnected" + (e.reason ? ": " + e.reason : "."), { canReconnect: true });
   };
 }
 
@@ -83,12 +86,12 @@ async function start() {
   if (needsAnswer(r)) {
     status("");
     const data = await askNewBranch(id, r.body);
-    if (!data) return status("Not started.", { canStart: true });
+    if (!data) return status("Not started.", { start: "Start" });
     status("Starting " + id);
     r = await post(startURL, data);
   }
   if (!r.ok) {
-    status("Not started.", { canStart: true });
+    status("Not started.", { start: "Start" });
     return showError("Could not start " + id, typeof r.body === "string" ? r.body : "");
   }
   history.replaceState(null, "", location.pathname);
