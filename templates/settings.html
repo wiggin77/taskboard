@@ -27,10 +27,16 @@ textarea{resize:vertical;min-height:4.5rem}
 input:focus,textarea:focus{outline:2px solid var(--link);outline-offset:-1px}
 .row3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:0 .75rem;align-items:end}
 .row2{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 .75rem;align-items:end}
-.repo{display:grid;grid-template-columns:minmax(0,1fr) 12rem auto;grid-template-areas:"name plans remove" "path path .";gap:.45rem .5rem;
-  align-items:end;padding:.75rem 0;border-top:1px solid var(--line)}
-.repo:first-of-type{border-top:0;padding-top:0}
-.repo label{margin-top:0}
+input::placeholder,textarea::placeholder{color:var(--faint)}
+.repo{--rail:oklch(var(--repo-l) var(--repo-c) 250);
+  display:grid;grid-template-columns:minmax(0,1fr) 12rem auto;grid-template-areas:"name plans remove" "path path .";gap:.5rem .6rem;
+  align-items:end;padding:.65rem .8rem .8rem;background:color-mix(in oklch,var(--rail) var(--repo-tint),var(--bg));
+  border:1px solid color-mix(in oklch,var(--rail) 30%,var(--line));border-left:4px solid var(--rail);border-radius:8px}
+.repo+.repo{margin-top:.6rem}
+.repo label{margin-top:0;color:var(--muted);font-size:.75rem;font-weight:500}
+.repo input{background:var(--surface)}
+.repo .repo-name input{font-weight:650}
+.repo.removed{--repo-c:0;border-style:dashed}
 .repo .repo-name{grid-area:name}
 .repo .repo-plans{grid-area:plans}
 .repo .repo-path{grid-area:path}
