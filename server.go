@@ -362,6 +362,7 @@ func runAttach(cfg *Config, target string) error {
 		args[i] = strings.ReplaceAll(a, "{target}", linked)
 	}
 	cmd := exec.Command(args[0], args[1:]...)
+	cmd.Env = withoutEnv(os.Environ(), "TMUX")
 	if err := cmd.Start(); err != nil {
 		closeLinked(linked)
 		return err
