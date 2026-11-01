@@ -1,10 +1,10 @@
 # Session management
 
-Status: phase 1 implemented.
+Status: phases 1, 1b and 2 implemented.
 
 Taskboard goes from watching sessions to managing them: start work on a ticket (creating or reusing a worktree and opening a tmux window running the agent), stop a session, clean up finished work, and later attach to a session from the browser.
 
-Phases ship independently. Phase 1 is the core; phase 3 builds on the linked-session attach from phase 2.
+Phases ship independently. Phase 1 is the core; phase 3 builds on the linked-session attach from phase 2 (its server-side path, `openLinked`).
 
 ## Phase 1: start, stop and clean up
 
@@ -146,16 +146,13 @@ Buttons appear only when `.Local` is true and `agent_command` is set:
 
 Reviews rows with a local checkout get Start/Resume review, Stop and Clean up. A review is named `<checkout>-pr<N>` for both its worktree and its tmux window, so it is never joined to a ticket. `gh pr checkout --branch review/<N>` puts the worktree on a branch tracking the PR, so pull and (where allowed) push work. The PR head is also fetched as `refs/remotes/<remote>/pr/<N>`, and re-fetched at clean-up, so its commits count as pushed even for fork PRs. Clean-up removes that ref and deletes `review/<N>` unless it has unpushed commits; any other branch in the worktree is kept. Review worktrees or windows whose PR has left the list are shown as leftovers with the PR's state from `gh pr view`. The window starts `agent_command` with no prompt; the user types the review command.
 
-## Phase 2: linked-session attach
+## Phase 2: linked-session attach (implemented)
 
-Two clients on the same tmux session mirror each other's current window. Attach through a linked session instead, so each client tracks its own window:
+Two clients on the same tmux session mirror each other's current window, so every attach goes through a linked session (`new-session -t <session>`) marked with the session option `@taskboard`.
 
-```
-tmux new-session -t <session> -s tb-<KEY>-<n> \; set destroy-unattached on \; select-window -t <target>
-```
-
-- Build this in Go and pass it as a new `{attach}` placeholder (or change what `{target}` expands to) for `attach_command` and the copied ssh command.
-- Filter `tb-*` sessions out of `listSessions`, so linked windows don't show up as duplicate sessions.
+- Open session: the server creates `tb-<random>` detached, selects the window, and runs `attach_command` with `{target}` set to that session, so existing configs keep working. tmux destroys a detached session with `destroy-unattached` at once, so a `client-attached` hook turns it on when the terminal attaches. A session nobody attached to (the terminal failed to open) is killed by the refresh sweep after 2 minutes.
+- Copy session command: a one-liner run by the attaching client (`tmux new-session -t =<session> \; set-option @taskboard 1 \; set-option destroy-unattached on \; select-window -t :<index>`), prefixed with ssh when `ssh_host` is set.
+- `listWindows` skips windows in marked sessions and de-duplicates by window ID, so linked windows never show up twice.
 
 ## Phase 3: terminal in the browser
 

@@ -220,6 +220,7 @@ func (b *Board) refresh(ctx context.Context) {
 	}()
 	go func() {
 		defer wg.Done()
+		sweepLinked(ctx)
 		windows = listWindows(ctx, cfg)
 	}()
 	go func() {

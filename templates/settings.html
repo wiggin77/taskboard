@@ -115,9 +115,9 @@ button.primary{background:var(--link);border-color:var(--link);color:var(--surfa
 
 <fieldset>
   <legend>Sessions</legend>
-  <label>SSH host for copied commands<span class="hint">Copy session command gives ssh -t HOST 'tmux attach -t work:3', to paste on another machine. Leave empty to copy a plain tmux attach.</span>
+  <label>SSH host for copied commands<span class="hint">Copy session command gives ssh -t HOST followed by the tmux command that opens the window, to paste on another machine. Leave empty to copy just the tmux command.</span>
     <input name="ssh_host" placeholder="devbox" value="{{.SSHHost}}"></label>
-  <label>Open session command<span class="hint">Runs on this machine when you press Open session, e.g. a new terminal attached to the window. One argument per line; {target} becomes the tmux window. Leave empty to hide the button.</span>
+  <label>Open session command<span class="hint">Runs on this machine when you press Open session, e.g. a new terminal attached to the window. One argument per line; {target} becomes a tmux session showing the task's window, so tmux attach -t {target} opens it. Leave empty to hide the button.</span>
     <textarea name="attach_command" rows="4" placeholder="gnome-terminal&#10;--&#10;tmux&#10;attach&#10;-t&#10;{target}">{{join .AttachCommand "\n"}}</textarea></label>
   <label>Agent command<span class="hint">Typed into a new tmux window when you press Start session, e.g. claude. {key} becomes the ticket key. Leave empty to hide the Start session button. Start review on a PR in Reviews uses it too.</span>
     <input name="agent_command" placeholder="claude" value="{{.AgentCommand}}"></label>

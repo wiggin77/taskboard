@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -283,6 +285,64 @@ func openWindow(ctx context.Context, cfg *Config, key, dir, command string) (str
 	}
 	_, err = runCmd(ctx, "", "tmux", "send-keys", "-t", target, "Enter")
 	return target, err
+}
+
+const (
+	linkedMark  = "@taskboard"
+	linkedGrace = 2 * time.Minute
+)
+
+// openLinked creates a linked session showing target's window for one terminal to attach to. A detached
+// session with destroy-unattached set is destroyed at once, so a hook sets it when the terminal attaches.
+func openLinked(ctx context.Context, target string) (string, error) {
+	session, index := splitTarget(target)
+	b := make([]byte, 4)
+	rand.Read(b)
+	name := "tb-" + hex.EncodeToString(b)
+	if _, err := runCmd(ctx, "", "tmux", "new-session", "-d", "-t", "="+session, "-s", name); err != nil {
+		return "", err
+	}
+	for _, args := range [][]string{
+		{"set-option", "-t", name, linkedMark, "1"},
+		{"set-hook", "-t", name, "client-attached", "set-option destroy-unattached on"},
+		{"select-window", "-t", name + ":" + index},
+	} {
+		if _, err := runCmd(ctx, "", "tmux", args...); err != nil {
+			closeLinked(name)
+			return "", err
+		}
+	}
+	return name, nil
+}
+
+func closeLinked(name string) {
+	runCmd(context.Background(), "", "tmux", "kill-session", "-t", "="+name)
+}
+
+// staleLinked lists linked sessions nobody attached to, such as ones whose terminal failed to open.
+func staleLinked(out []byte, now time.Time) []string {
+	var stale []string
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		f := strings.Split(line, "\t")
+		if len(f) != 4 || f[1] != "1" || f[2] != "0" {
+			continue
+		}
+		created, err := strconv.ParseInt(f[3], 10, 64)
+		if err == nil && now.Sub(time.Unix(created, 0)) > linkedGrace {
+			stale = append(stale, f[0])
+		}
+	}
+	return stale
+}
+
+func sweepLinked(ctx context.Context) {
+	out, err := runCmd(ctx, "", "tmux", "list-sessions", "-F", "#{session_name}\t#{"+linkedMark+"}\t#{session_attached}\t#{session_created}")
+	if err != nil {
+		return
+	}
+	for _, name := range staleLinked(out, time.Now()) {
+		closeLinked(name)
+	}
 }
 
 func stopSession(ctx context.Context, s *Session) error {

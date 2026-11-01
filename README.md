@@ -104,10 +104,10 @@ git -C ~/src/mattermost worktree add ../mattermost-MM-1234 -b MM-1234-short-name
 tmux new-window -n MM-1234 -c ~/src/mattermost-MM-1234 <agent>
 ```
 
-Each session gets two links:
+Each session gets two links. Both attach through a new linked tmux session, which shares the windows of the task's session but has its own current window. Several terminals can then be attached at once, each on a different task, without switching each other's window. The linked session closes when its terminal detaches, and the board ignores linked sessions.
 
-- **Copy session command** (the copy icon) copies `ssh -t <ssh_host> 'tmux attach -t work:3'`. Paste it on the Mac or phone. Leave `ssh_host` empty to copy a plain `tmux attach`.
-- **Open session** (the terminal icon) appears only when the page is opened from the box itself and `attach_command` is set. It runs that command on the box (by default a new gnome-terminal attached to the window). Through an SSH tunnel the browser also looks local, so this button would open the terminal on the box, not on the remote machine.
+- **Copy session command** (the copy icon) copies a command that creates the linked session and opens the task's window, prefixed with `ssh -t <ssh_host>`. Paste it on the Mac or phone. Leave `ssh_host` empty to copy the bare `tmux` command.
+- **Open session** (the terminal icon) appears only when the page is opened from the box itself and `attach_command` is set. taskboard creates the linked session, then runs that command on the box with `{target}` set to the linked session's name, so the usual `tmux attach -t {target}` works (by default in a new gnome-terminal). Through an SSH tunnel the browser also looks local, so this button would open the terminal on the box, not on the remote machine. A linked session whose terminal never attaches is removed on a later refresh.
 
 ## Reaching it from other devices
 

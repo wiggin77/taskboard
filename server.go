@@ -313,12 +313,19 @@ func (s *server) attach(w http.ResponseWriter, r *http.Request) {
 }
 
 func runAttach(cfg *Config, target string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	linked, err := openLinked(ctx, target)
+	if err != nil {
+		return err
+	}
 	args := make([]string, len(cfg.AttachCommand))
 	for i, a := range cfg.AttachCommand {
-		args[i] = strings.ReplaceAll(a, "{target}", target)
+		args[i] = strings.ReplaceAll(a, "{target}", linked)
 	}
 	cmd := exec.Command(args[0], args[1:]...)
 	if err := cmd.Start(); err != nil {
+		closeLinked(linked)
 		return err
 	}
 	go cmd.Wait()

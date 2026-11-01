@@ -151,24 +151,31 @@ func planApproved(content []byte) bool {
 	return false
 }
 
-// listWindows returns every tmux window; Key is set only for windows named after a ticket.
+// listWindows returns every tmux window once, skipping the linked sessions taskboard attaches through;
+// Key is set only for windows named after a ticket.
 func listWindows(ctx context.Context, cfg *Config) []Session {
-	out, err := runCmd(ctx, "", "tmux", "list-windows", "-a", "-F", "#{session_name}:#{window_index}\t#{window_name}")
+	out, err := runCmd(ctx, "", "tmux", "list-windows", "-a", "-F", "#{session_name}:#{window_index}\t#{window_name}\t#{window_id}\t#{"+linkedMark+"}")
 	if err != nil {
 		// tmux exits non-zero when no server is running, which just means no sessions.
 		return nil
 	}
+	return parseWindows(cfg, out)
+}
+
+func parseWindows(cfg *Config, out []byte) []Session {
 	var windows []Session
+	seen := map[string]bool{}
 	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		target, name, ok := strings.Cut(line, "\t")
-		if !ok {
+		f := strings.Split(line, "\t")
+		if len(f) != 4 || f[3] != "" || seen[f[2]] {
 			continue
 		}
+		seen[f[2]] = true
 		windows = append(windows, Session{
-			Key:       cfg.findKey(name),
-			Target:    target,
-			Name:      name,
-			AttachCmd: attachCommand(cfg.SSHHost, target),
+			Key:       cfg.findKey(f[1]),
+			Target:    f[0],
+			Name:      f[1],
+			AttachCmd: attachCommand(cfg.SSHHost, f[0]),
 		})
 	}
 	return windows
@@ -184,12 +191,23 @@ func ticketSessions(windows []Session) []Session {
 	return sessions
 }
 
+// attachCommand attaches through a new linked session, so the terminal can switch windows without moving
+// other clients of the same session.
 func attachCommand(sshHost, target string) string {
-	tmux := "tmux attach -t " + shellQuote(target)
+	session, index := splitTarget(target)
+	tmux := "tmux new-session -t " + shellQuote("="+session) + ` \; set-option ` + linkedMark + ` 1 \; set-option destroy-unattached on \; select-window -t ` + shellQuote(":"+index)
 	if sshHost == "" {
 		return tmux
 	}
 	return "ssh -t " + shellQuote(sshHost) + " " + shellQuote(tmux)
+}
+
+func splitTarget(target string) (session, index string) {
+	i := strings.LastIndexByte(target, ':')
+	if i < 0 {
+		return target, ""
+	}
+	return target[:i], target[i+1:]
 }
 
 func shellQuote(s string) string {

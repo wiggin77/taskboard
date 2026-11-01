@@ -192,16 +192,34 @@ func TestPlanApproved(t *testing.T) {
 }
 
 func TestAttachCommand(t *testing.T) {
+	const linked = ` \; set-option @taskboard 1 \; set-option destroy-unattached on \; select-window -t `
 	cases := []struct{ host, target, want string }{
-		{"", "work:1", "tmux attach -t work:1"},
-		{"ubuntu", "work:1", "ssh -t ubuntu 'tmux attach -t work:1'"},
-		{"", "my work:1", "tmux attach -t 'my work:1'"},
-		{"ubuntu", "it's:2", `ssh -t ubuntu 'tmux attach -t '\''it'\''\'\'''\''s:2'\'''`},
+		{"", "work:1", "tmux new-session -t =work" + linked + ":1"},
+		{"ubuntu", "work:1", "ssh -t ubuntu 'tmux new-session -t =work" + linked + ":1'"},
+		{"", "my work:1", "tmux new-session -t '=my work'" + linked + ":1"},
+		{"ubuntu", "a:b:2", "ssh -t ubuntu 'tmux new-session -t =a:b" + linked + ":2'"},
 	}
 	for _, c := range cases {
 		if got := attachCommand(c.host, c.target); got != c.want {
-			t.Errorf("attachCommand(%q, %q) = %s, want %s", c.host, c.target, got, c.want)
+			t.Errorf("attachCommand(%q, %q) =\n %s\nwant\n %s", c.host, c.target, got, c.want)
 		}
+	}
+}
+
+func TestParseWindows(t *testing.T) {
+	cfg := testConfig(t)
+	out := []byte("tb-1a2b:0\tMM-1\t@0\t1\nwork:0\tMM-1\t@0\t\nwork:1\tnotes\t@1\t\nmine:1\tnotes\t@1\t\n")
+	got := parseWindows(cfg, out)
+	if len(got) != 2 || got[0].Target != "work:0" || got[0].Key != "MM-1" || got[1].Target != "work:1" || got[1].Key != "" {
+		t.Errorf("windows = %+v; want each window once, from unmarked sessions", got)
+	}
+}
+
+func TestStaleLinked(t *testing.T) {
+	now := time.Unix(10_000, 0)
+	out := []byte("work\t\t0\t100\ntb-old\t1\t0\t100\ntb-attached\t1\t1\t100\ntb-new\t1\t0\t9990\n")
+	if got := staleLinked(out, now); !slices.Equal(got, []string{"tb-old"}) {
+		t.Errorf("stale = %v, want only the old unattached linked session", got)
 	}
 }
 
