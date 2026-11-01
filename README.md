@@ -63,14 +63,14 @@ Plan files only attach to tasks found through Jira, a PR, a worktree or a sessio
 
 ## Sessions
 
-Set `agent_command` (for example `claude`) to get start buttons on every task that hasn't merged and has no session:
+Every task that hasn't merged and has no session gets start buttons. They start your coding agent, `agent_command`, which defaults to `claude`:
 
 - **Start in the browser** (the monitor icon) opens a new tab with the session in a terminal in the browser. It's offered to a browser on the taskboard machine and to [remote](#remote-access) browsers.
 - **Start in a terminal** (the play icon) opens the session in a terminal window on the taskboard machine, using `attach_command`. It's only offered to a browser on that machine, and only when `attach_command` is set.
 
 Either way, taskboard works out where the work lives:
 
-1. If the task already has a worktree, it opens a window there and types `agent_resume_command` (for example `claude --continue`; defaults to `agent_command`).
+1. If the task already has a worktree, it opens a window there and types `agent_resume_command` (default `claude --continue`, or `agent_command` if you changed that).
 2. Otherwise, if a local branch contains the ticket key, it adds a worktree for that branch.
 3. Otherwise, if the task has an open PR in a repo with a local checkout, it adds a worktree and runs `gh pr checkout`, which also handles PRs from forks.
 4. Otherwise it asks for the repo (when more than one has a local checkout) and a branch name, suggesting `MM-1234-summary-words`. It then fetches the repo's `base_branch` (default: whatever `origin/HEAD` points at) and creates the branch from it, without tracking it.

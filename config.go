@@ -36,6 +36,13 @@ type Config struct {
 	keyRE *regexp.Regexp
 }
 
+const (
+	defaultAgent       = "claude"
+	defaultAgentResume = "claude --continue"
+)
+
+const defaultJQL = "assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC"
+
 type JiraConfig struct {
 	BaseURL string `json:"base_url"`
 	JQL     string `json:"jql"`
@@ -123,7 +130,7 @@ func parseConfig(b []byte) (*Config, error) {
 		MergedPRLimit:  20,
 		DoneDays:       30,
 		Jira: JiraConfig{
-			JQL: "assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC",
+			JQL: defaultJQL,
 		},
 	}
 	if err := json.Unmarshal(b, cfg); err != nil {
@@ -172,6 +179,9 @@ func (c *Config) validate() error {
 		return errors.New("jira.base_url is required")
 	}
 	c.Jira.BaseURL = strings.TrimRight(c.Jira.BaseURL, "/")
+	if strings.TrimSpace(c.Jira.JQL) == "" {
+		c.Jira.JQL = defaultJQL
+	}
 	if len(c.ProjectKeys) == 0 {
 		return errors.New("project_keys must list at least one Jira project key")
 	}
@@ -192,6 +202,12 @@ func (c *Config) validate() error {
 	}
 	for i, serial := range c.RevokedCerts {
 		c.RevokedCerts[i] = normalizeSerial(serial)
+	}
+	if c.AgentCommand == "" {
+		c.AgentCommand = defaultAgent
+		if c.AgentResume == "" {
+			c.AgentResume = defaultAgentResume
+		}
 	}
 	if c.TmuxSession == "" {
 		c.TmuxSession = "work"

@@ -8,8 +8,6 @@
   "merged_pr_limit": 20,
   "done_days": 30,
   "attach_command": ["gnome-terminal", "--", "tmux", "attach", "-t", "{target}"],
-  "agent_command": "claude",
-  "agent_resume_command": "claude --continue",
   "tmux_session": "work",
   "worktree_dir": "~/worktrees",
   "worktree_links": ["~/src/enterprise"],

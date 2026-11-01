@@ -883,7 +883,6 @@ func TestSessionEndpointGuards(t *testing.T) {
 		{"/cleanup/MM-1", "192.0.2.1:1234", true, http.StatusForbidden},
 		{"/start/MM-9", local, true, http.StatusNotFound},
 		{"/start/mattermost%2Flogr%233", local, true, http.StatusNotFound},
-		{"/start/MM-1", local, true, http.StatusBadRequest},
 		{"/stop/MM-1", local, true, http.StatusNotFound},
 		{"/cleanup/MM-2", local, true, http.StatusConflict},
 	}
@@ -1000,7 +999,7 @@ func TestAttachReviews(t *testing.T) {
 
 func TestReviewCommand(t *testing.T) {
 	cfg := testConfig(t)
-	cfg.AgentCommand = "claude {key}"
+	cfg.AgentCommand, cfg.AgentResume = "claude {key}", ""
 	if got := reviewCommand(cfg, false); got != "claude " {
 		t.Errorf("start: %q", got)
 	}
@@ -1014,8 +1013,8 @@ func TestReviewCommand(t *testing.T) {
 }
 
 func TestControls(t *testing.T) {
-	local := indexData{Native: true, CanAct: true, CanStart: true}
-	remote := indexData{CanAct: true, CanStart: true}
+	local := indexData{Native: true, CanAct: true}
+	remote := indexData{CanAct: true}
 	sess := &Session{Target: "work:1"}
 	if c := taskControls(Task{Key: "MM-1", Stage: StageTicket}, local); c.Start != "Start session" || !c.Native || !c.Web || c.Stop || c.Clean != "" {
 		t.Errorf("not started task, local browser: %+v", c)
@@ -1280,5 +1279,32 @@ func TestTerminalEndpoints(t *testing.T) {
 	newServer(board, "").ServeHTTP(rec, viewer)
 	if rec.Code != http.StatusForbidden {
 		t.Errorf("viewer terminal page: %d, want 403", rec.Code)
+	}
+}
+
+func TestAgentCommandDefault(t *testing.T) {
+	base := `"project_keys":["MM"],"jira":{"base_url":"https://x.atlassian.net"},"repos":[{"name":"a/b"}]`
+	for _, c := range []struct{ extra, agent, resume string }{
+		{``, "claude", "claude --continue"},
+		{`,"agent_command":"aider"`, "aider", ""},
+		{`,"agent_resume_command":"claude -c"`, "claude", "claude -c"},
+	} {
+		cfg, err := parseConfig([]byte(`{` + base + c.extra + `}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.AgentCommand != c.agent || cfg.AgentResume != c.resume {
+			t.Errorf("%s: agent %q resume %q, want %q %q", c.extra, cfg.AgentCommand, cfg.AgentResume, c.agent, c.resume)
+		}
+	}
+}
+
+func TestEmptyJQLUsesDefault(t *testing.T) {
+	cfg, err := parseConfig([]byte(`{"project_keys":["MM"],"jira":{"base_url":"https://x.atlassian.net","jql":"  "},"repos":[{"name":"a/b"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Jira.JQL != defaultJQL {
+		t.Errorf("JQL = %q, want the default", cfg.Jira.JQL)
 	}
 }

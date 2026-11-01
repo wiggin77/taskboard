@@ -106,7 +106,6 @@ type indexData struct {
 	RefreshSeconds int
 	Native         bool
 	CanAct         bool
-	CanStart       bool
 	Stations       []string
 }
 
@@ -127,7 +126,7 @@ func taskControls(t Task, d indexData) controls {
 	c := controls{ID: t.Key, Session: t.Session != nil}
 	if c.Session {
 		c.Native, c.Web, c.Stop = d.Native, d.CanAct, d.CanAct
-	} else if d.CanStart && t.CanStart() {
+	} else if d.CanAct && t.CanStart() {
 		c.Native, c.Web = d.Native, true
 		c.Start = "Start session"
 		if t.Worktree != nil {
@@ -151,7 +150,7 @@ func prControls(p PRLink, d indexData) controls {
 	}
 	if c.Session {
 		c.Native, c.Web, c.Stop = d.Native, d.CanAct, d.CanAct
-	} else if d.CanStart && p.Role != RoleLeftover {
+	} else if d.CanAct && p.Role != RoleLeftover {
 		c.Native, c.Web = d.Native, true
 		c.Start = "Start review"
 		if wt != nil {
@@ -238,7 +237,6 @@ func (s *server) index(w http.ResponseWriter, r *http.Request) {
 		Version:        snap.Version,
 		Native:         len(cfg.AttachCommand) > 0 && s.accessOf(r) == local,
 		CanAct:         s.accessOf(r) >= remote,
-		CanStart:       cfg.AgentCommand != "" && s.accessOf(r) >= remote,
 		Stations:       stations,
 	}
 	for _, name := range groupOrder {
@@ -432,10 +430,6 @@ func (s *server) start(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer release()
-	if cfg.AgentCommand == "" {
-		http.Error(w, "set the agent command in Settings first", http.StatusBadRequest)
-		return
-	}
 	if !t.CanStart() && t.Session == nil {
 		http.Error(w, t.Key+" is "+strings.ToLower(t.StageLabel())+", so there is nothing to start", http.StatusConflict)
 		return
@@ -548,10 +542,6 @@ func (s *server) reviewStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer release()
-	if cfg.AgentCommand == "" {
-		http.Error(w, "set the agent command in Settings first", http.StatusBadRequest)
-		return
-	}
 	if l.Role == RoleLeftover {
 		http.Error(w, l.Repo+" #"+strconv.Itoa(l.Number)+" is no longer awaiting your review", http.StatusConflict)
 		return
