@@ -63,7 +63,7 @@ func runCmd(ctx context.Context, dir, name string, args ...string) ([]byte, erro
 }
 
 func listWorktrees(ctx context.Context, cfg *Config, repo RepoConfig) ([]Worktree, error) {
-	out, err := runCmd(ctx, repo.Path, "git", "worktree", "list", "--porcelain")
+	out, err := runCmd(ctx, repo.Dir(), "git", "worktree", "list", "--porcelain")
 	if err != nil {
 		return nil, err
 	}

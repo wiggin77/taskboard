@@ -14,7 +14,7 @@
     "jql": "assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC"
   },
   "repos": [
-    {"name": "mattermost/mattermost", "path": "/home/you/src/mattermost", "plans_dir": "plans"},
-    {"name": "mattermost/mattermost-plugin-jira", "path": "/home/you/src/mattermost-plugin-jira"}
+    {"name": "mattermost/mattermost", "path": "~/src/mattermost", "plans_dir": "plans"},
+    {"name": "mattermost/mattermost-plugin-jira", "path": "~/src/mattermost-plugin-jira"}
   ]
 }

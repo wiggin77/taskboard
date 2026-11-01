@@ -40,6 +40,33 @@ type RepoConfig struct {
 	PlansDir string `json:"plans_dir"`
 }
 
+func (r RepoConfig) Dir() string { return expandHome(r.Path) }
+
+func expandHome(p string) string {
+	if p != "~" && !strings.HasPrefix(p, "~/") {
+		return p
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return p
+	}
+	return filepath.Join(home, p[1:])
+}
+
+func shortenHome(p string) string {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return p
+	}
+	if p == home {
+		return "~"
+	}
+	if rest, ok := strings.CutPrefix(p, home+string(filepath.Separator)); ok {
+		return "~/" + rest
+	}
+	return p
+}
+
 type Duration struct{ time.Duration }
 
 func (d *Duration) UnmarshalJSON(b []byte) error {

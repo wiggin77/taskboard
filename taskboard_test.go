@@ -638,3 +638,29 @@ func TestSettingsPage(t *testing.T) {
 		}
 	}
 }
+
+func TestHomePaths(t *testing.T) {
+	t.Setenv("HOME", "/home/me")
+	for in, want := range map[string]string{
+		"~":          "/home/me",
+		"~/src/repo": "/home/me/src/repo",
+		"~other/src": "~other/src",
+		"/abs/path":  "/abs/path",
+		"":           "",
+	} {
+		if got := expandHome(in); got != want {
+			t.Errorf("expandHome(%q) = %q, want %q", in, got, want)
+		}
+	}
+	for in, want := range map[string]string{
+		"/home/me":          "~",
+		"/home/me/src/repo": "~/src/repo",
+		"/home/meow/src":    "/home/meow/src",
+		"~/src":             "~/src",
+		"":                  "",
+	} {
+		if got := shortenHome(in); got != want {
+			t.Errorf("shortenHome(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

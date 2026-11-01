@@ -27,6 +27,7 @@ var templates = template.Must(template.New("").Funcs(template.FuncMap{
 	"iso":       func(t time.Time) string { return t.Format(time.RFC3339) },
 	"slug":      slug,
 	"join":      strings.Join,
+	"shortHome": shortenHome,
 }).ParseFS(templateFS, "templates/*.html"))
 
 func slug(name string) string {
