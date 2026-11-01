@@ -132,7 +132,17 @@ To use the board from another machine, for example a browser on a Mac with taskb
    ./taskboard certs client mac-laptop
    ```
 
-3. On the Mac, double-click `ca.crt` to add it to Keychain, open it in Keychain Access and set it to Always Trust, then double-click `mac-laptop.p12` and enter its password. Chrome, Edge and Safari all use Keychain. Firefox and iOS have their own certificate stores.
+3. Copy `ca.crt` and `mac-laptop.p12` to the Mac and add both to your **login** keychain. Chrome, Edge and Safari all read it. Don't use System, which would trust the CA for every account on the Mac, or iCloud, which doesn't sync trust settings. `ca.crt` is taskboard's certificate authority: trusting it lets the browser accept taskboard's HTTPS certificate. The `.p12` is this device's client certificate, which proves to taskboard that the browser is yours.
+
+   - **In Keychain Access:** double-click `ca.crt` and choose the login keychain. Then find "taskboard CA" in login > Certificates, open it, expand Trust, set "When using this certificate" to **Always Trust**, and close the window (macOS asks for your password). Double-click `mac-laptop.p12`, choose login, and enter the password `certs client` printed.
+   - **Or in Terminal:**
+
+     ```sh
+     security add-trusted-cert -r trustRoot -k ~/Library/Keychains/login.keychain-db ca.crt
+     security import mac-laptop.p12 -k ~/Library/Keychains/login.keychain-db -P '<password>'
+     ```
+
+   The first time a browser uses the certificate, macOS asks whether it may use the key. Choose Always Allow. Firefox and iOS have their own certificate stores.
 4. Set `tls_listen` (for example `0.0.0.0:8443`, or the Tailscale address) and restart taskboard. Then open `https://ubuntu:8443`. The browser asks which certificate to use the first time.
 
 A browser without a valid certificate gets a TLS error rather than a page. Names the server certificate covers are accepted, so `allowed_hosts` only matters for the plain `listen` address. When the box gets a new name, re-issue the server certificate with `./taskboard certs server -host ...` and restart; client certificates stay valid. To cut off a lost device, add its serial to `revoked_certs`; that takes effect immediately, even on open connections.
