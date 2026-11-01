@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 {{template "theme"}}
+{{template "tabs"}}
 <noscript><meta http-equiv="refresh" content="{{.RefreshSeconds}}"></noscript>
 <title>Task board</title>
 <style>
@@ -155,8 +156,8 @@ a:hover{text-decoration:underline}
         </ol>
       </div>
       <div class="links">
-        {{if not .NoTicket}}<a href="{{.JiraURL}}" target="_blank" rel="noopener">Jira{{with .JiraStatus}} <span class="meta">{{.}}</span>{{end}}{{if .JiraMissing}} <span class="meta">not found</span>{{end}}</a>{{end}}
-        {{with .PR}}<a href="{{.URL}}" target="_blank" rel="noopener">PR #{{.Number}}{{with .CI.String}} <span class="meta">{{.}}</span>{{end}}</a>{{end}}
+        {{if not .NoTicket}}<a href="{{.JiraURL}}" target="{{.JiraURL}}" data-tab>Jira{{with .JiraStatus}} <span class="meta">{{.}}</span>{{end}}{{if .JiraMissing}} <span class="meta">not found</span>{{end}}</a>{{end}}
+        {{with .PR}}<a href="{{.URL}}" target="{{.URL}}" data-tab>PR #{{.Number}}{{with .CI.String}} <span class="meta">{{.}}</span>{{end}}</a>{{end}}
         {{with .Worktree}}<span class="meta" title="{{.Path}}">worktree {{.Dir}}</span>{{end}}
         {{with .Plan}}<a href="/plan/{{.Key}}">Plan{{if .Approved}} <span class="meta">approved</span>{{end}}</a>{{end}}
         {{template "controls" (taskControls . $)}}

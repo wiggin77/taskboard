@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 {{template "theme"}}
+{{template "tabs"}}
 <title>{{.Task.Key}} plan</title>
 <style>
 {{template "tokens"}}
@@ -23,9 +24,9 @@ pre{background:var(--surface);border:1px solid var(--line);border-radius:6px;pad
 <header>
   <nav>
     <a href="/">Back to board</a>
-    <a href="{{.Task.JiraURL}}" target="_blank" rel="noopener">Jira</a>
-    {{with .Task.PR}}<a href="{{.URL}}" target="_blank" rel="noopener">PR #{{.Number}}</a>{{end}}
-    {{with .Task.Plan.GitHubURL}}<a href="{{.}}" target="_blank" rel="noopener">Plan on GitHub</a>{{end}}
+    <a href="{{.Task.JiraURL}}" target="{{.Task.JiraURL}}" data-tab>Jira</a>
+    {{with .Task.PR}}<a href="{{.URL}}" target="{{.URL}}" data-tab>PR #{{.Number}}</a>{{end}}
+    {{with .Task.Plan.GitHubURL}}<a href="{{.}}" target="{{.}}" data-tab>Plan on GitHub</a>{{end}}
   </nav>
   {{template "themebutton"}}
 </header>
