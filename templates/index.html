@@ -292,7 +292,7 @@ async function action(button, title, run) {
   if (!r) return;
   if (!r.ok) return showError(title, typeof r.body === "string" ? r.body : "");
   flashIcon(button, "ok", r.done);
-  check();
+  setTimeout(check, 1500);
 }
 function startSession(button) {
   const key = button.dataset.start;

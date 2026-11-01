@@ -90,7 +90,7 @@ func (s *server) termSocket(w http.ResponseWriter, r *http.Request) {
 	target, ok := findWindow(ctx, cfg, id)
 	if !ok {
 		// The board offered Open because its snapshot still showed a session, so it is stale too.
-		s.board.Invalidate()
+		s.board.LocalChanged(ctx)
 		conn.Close(closeNoSession, s.restartKind(ctx, cfg, id))
 		return
 	}
@@ -154,7 +154,7 @@ func (s *server) attachEnded(cfg *Config, id string) string {
 	if _, ok := findWindow(ctx, cfg, id); ok {
 		return "detached"
 	}
-	s.board.Invalidate()
+	s.board.LocalChanged(ctx)
 	return "ended"
 }
 

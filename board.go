@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"hash/fnv"
 	"log"
+	"maps"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -34,6 +36,10 @@ type Board struct {
 	updatedCheck time.Time
 
 	wake chan struct{}
+
+	composeMu sync.Mutex
+	fetched   *fetched
+	localGen  atomic.Uint64
 
 	mu        sync.RWMutex
 	snap      Snapshot
@@ -180,10 +186,25 @@ func (b *Board) Run(ctx context.Context) {
 	}
 }
 
-type repoResult struct {
-	prs       []PR
+// fetched is what a full refresh got from Jira and GitHub. It is never modified once stored, so a
+// session action can rebuild the board on top of it without waiting for another refresh.
+type fetched struct {
+	cfg      *Config
+	issues   map[string]JiraIssue
+	resolved map[string]bool
+	missing  map[string]bool
+	prs      []PR
+	reviews  []PRLink
+	otherPRs []PRLink
+	views    map[string]PRLink
+	errs     []string
+	updated  time.Time
+}
+
+type localState struct {
 	worktrees []Worktree
 	plans     []Plan
+	windows   []Session
 	errs      []string
 }
 
@@ -198,16 +219,18 @@ func (b *Board) refresh(ctx context.Context) {
 		b.cachesReset = time.Now()
 	}
 
+	gen := b.localGen.Load()
 	var (
 		wg        sync.WaitGroup
 		issues    []JiraIssue
 		resolved  []JiraIssue
 		jiraErr   error
-		windows   []Session
+		loc       localState
 		reviews   []PRLink
 		otherPRs  []PRLink
 		prLinkErr error
-		repos     = make([]repoResult, len(cfg.Repos))
+		prs       = make([][]PR, len(cfg.Repos))
+		prErrs    = make([][]string, len(cfg.Repos))
 	)
 	wg.Add(3 + len(cfg.Repos))
 	go func() {
@@ -221,7 +244,7 @@ func (b *Board) refresh(ctx context.Context) {
 	go func() {
 		defer wg.Done()
 		sweepLinked(ctx)
-		windows = listWindows(ctx, cfg)
+		loc = scanLocal(ctx, cfg)
 	}()
 	go func() {
 		defer wg.Done()
@@ -230,36 +253,40 @@ func (b *Board) refresh(ctx context.Context) {
 	for i, repo := range cfg.Repos {
 		go func() {
 			defer wg.Done()
-			repos[i] = scanRepo(ctx, cfg, repo)
+			prs[i], prErrs[i] = repoPRs(ctx, cfg, repo)
 		}()
 	}
 	wg.Wait()
 
-	var errs []string
-	s := sources{issues: map[string]JiraIssue{}, resolved: map[string]bool{}, missing: b.missingIssues, sessions: ticketSessions(windows)}
+	r := &fetched{
+		cfg:      cfg,
+		issues:   map[string]JiraIssue{},
+		resolved: map[string]bool{},
+		reviews:  reviews,
+		otherPRs: otherPRs,
+		views:    map[string]PRLink{},
+	}
 	if jiraErr != nil {
-		errs = append(errs, "Jira search: "+jiraErr.Error())
+		r.errs = append(r.errs, "Jira search: "+jiraErr.Error())
 	}
 	if prLinkErr != nil {
-		errs = append(errs, "GitHub search: "+prLinkErr.Error())
+		r.errs = append(r.errs, "GitHub search: "+prLinkErr.Error())
 	}
 	for _, is := range issues {
-		s.issues[is.Key] = is
+		r.issues[is.Key] = is
 	}
 	for _, is := range resolved {
-		s.issues[is.Key] = is
-		s.resolved[is.Key] = true
+		r.issues[is.Key] = is
+		r.resolved[is.Key] = true
 	}
-	for _, r := range repos {
-		s.prs = append(s.prs, r.prs...)
-		s.worktrees = append(s.worktrees, r.worktrees...)
-		s.plans = append(s.plans, r.plans...)
-		errs = append(errs, r.errs...)
+	for i := range prs {
+		r.prs = append(r.prs, prs[i]...)
+		r.errs = append(r.errs, prErrs[i]...)
 	}
 
-	for _, key := range b.unknownKeys(s) {
+	for _, key := range b.unknownKeys(sources{issues: r.issues, prs: r.prs, worktrees: loc.worktrees, sessions: ticketSessions(loc.windows)}) {
 		if is, ok := b.doneIssues[key]; ok {
-			s.issues[key] = is
+			r.issues[key] = is
 			continue
 		}
 		if b.missingIssues[key] {
@@ -267,55 +294,96 @@ func (b *Board) refresh(ctx context.Context) {
 		}
 		is, ok, err := jiraGet(ctx, key)
 		if err != nil {
-			errs = append(errs, fmt.Sprintf("Jira %s: %v", key, err))
+			r.errs = append(r.errs, fmt.Sprintf("Jira %s: %v", key, err))
 			continue
 		}
 		if !ok {
 			b.missingIssues[key] = true
 			continue
 		}
-		s.issues[key] = is
+		r.issues[key] = is
 		if is.Done {
 			b.doneIssues[key] = is
 		}
 	}
+	r.missing = maps.Clone(b.missingIssues)
 
-	reviews, leftovers := attachReviews(cfg, reviews, s.worktrees, windows)
-	for i := range leftovers {
-		if err := viewPR(ctx, cfg, &leftovers[i]); err != nil {
-			errs = append(errs, fmt.Sprintf("%s #%d: %v", leftovers[i].Repo, leftovers[i].Number, err))
+	_, leftovers := attachReviews(cfg, reviews, loc.worktrees, loc.windows)
+	for _, l := range leftovers {
+		url := l.URL
+		if err := viewPR(ctx, cfg, &l); err != nil {
+			r.errs = append(r.errs, fmt.Sprintf("%s #%d: %v", l.Repo, l.Number, err))
+			continue
 		}
-	}
-	reviews = append(reviews, leftovers...)
-
-	if err := b.fillJiraUpdated(ctx, s.issues); err != nil {
-		errs = append(errs, "Jira updated dates: "+err.Error())
+		r.views[url] = l
 	}
 
-	snap := Snapshot{Tasks: buildTasks(cfg, s, time.Now()), Reviews: reviews, OtherPRs: otherPRs, Errors: errs, Updated: time.Now()}
-	snap.Version = snapshotVersion(snap)
-	for _, e := range errs {
+	if err := b.fillJiraUpdated(ctx, r.issues); err != nil {
+		r.errs = append(r.errs, "Jira updated dates: "+err.Error())
+	}
+	r.updated = time.Now()
+
+	for _, e := range b.compose(ctx, r, &loc, gen) {
 		log.Print(e)
 	}
+}
+
+// LocalChanged shows a session action's result at once, from fresh local state and the last remote
+// data, and requests a full refresh for the rest.
+func (b *Board) LocalChanged(ctx context.Context) {
+	b.localGen.Add(1)
+	b.compose(ctx, nil, nil, 0)
+	b.Invalidate()
+}
+
+// compose publishes a snapshot from r (the stored fetched data when nil) and loc. It re-reads local state
+// when loc is nil or a session action has run since gen, so a slow refresh can't undo an action's result.
+func (b *Board) compose(ctx context.Context, r *fetched, loc *localState, gen uint64) []string {
+	b.composeMu.Lock()
+	defer b.composeMu.Unlock()
+	if r == nil {
+		if r = b.fetched; r == nil {
+			return nil
+		}
+	}
+	b.fetched = r
+	if loc == nil || b.localGen.Load() != gen {
+		l := scanLocal(ctx, r.cfg)
+		loc = &l
+	}
+
+	s := sources{issues: r.issues, resolved: r.resolved, missing: r.missing, prs: r.prs,
+		worktrees: loc.worktrees, plans: loc.plans, sessions: ticketSessions(loc.windows)}
+	reviews, leftovers := attachReviews(r.cfg, r.reviews, loc.worktrees, loc.windows)
+	for i, l := range leftovers {
+		if v, ok := r.views[l.URL]; ok {
+			v.Role, v.ReviewName, v.Review = l.Role, l.ReviewName, l.Review
+			leftovers[i] = v
+		}
+	}
+	errs := append(slices.Clone(r.errs), loc.errs...)
+	snap := Snapshot{Tasks: buildTasks(r.cfg, s, time.Now()), Reviews: append(reviews, leftovers...), OtherPRs: r.otherPRs, Errors: errs, Updated: r.updated}
+	snap.Version = snapshotVersion(snap)
 	b.mu.Lock()
 	b.snap = snap
 	b.mu.Unlock()
+	return errs
 }
 
-func scanRepo(ctx context.Context, cfg *Config, repo RepoConfig) repoResult {
-	var r repoResult
+func repoPRs(ctx context.Context, cfg *Config, repo RepoConfig) ([]PR, []string) {
+	var errs []string
 	open, err := listPRs(ctx, cfg, repo.Name, "open", 100, "")
 	if err != nil {
-		r.errs = append(r.errs, fmt.Sprintf("%s open PRs: %v", repo.Name, err))
+		errs = append(errs, fmt.Sprintf("%s open PRs: %v", repo.Name, err))
 	}
 	merged, err := listPRs(ctx, cfg, repo.Name, "merged", cfg.MergedPRLimit, "")
 	if err != nil {
-		r.errs = append(r.errs, fmt.Sprintf("%s merged PRs: %v", repo.Name, err))
+		errs = append(errs, fmt.Sprintf("%s merged PRs: %v", repo.Name, err))
 	}
 	cutoff := time.Now().AddDate(0, 0, -cfg.DoneDays).Format("2006-01-02")
 	recent, err := listPRs(ctx, cfg, repo.Name, "merged", 100, "merged:>="+cutoff)
 	if err != nil {
-		r.errs = append(r.errs, fmt.Sprintf("%s recently merged PRs: %v", repo.Name, err))
+		errs = append(errs, fmt.Sprintf("%s recently merged PRs: %v", repo.Name, err))
 	}
 	seen := map[int]bool{}
 	for _, pr := range merged {
@@ -326,21 +394,28 @@ func scanRepo(ctx context.Context, cfg *Config, repo RepoConfig) repoResult {
 			merged = append(merged, pr)
 		}
 	}
-	r.prs = append(open, merged...)
+	return append(open, merged...), errs
+}
 
-	if repo.Path == "" {
-		return r
+func scanLocal(ctx context.Context, cfg *Config) localState {
+	l := localState{windows: listWindows(ctx, cfg)}
+	for _, repo := range cfg.Repos {
+		if repo.Path == "" {
+			continue
+		}
+		wts, err := listWorktrees(ctx, cfg, repo)
+		if err != nil {
+			l.errs = append(l.errs, fmt.Sprintf("%s worktrees: %v", repo.Name, err))
+			continue
+		}
+		l.worktrees = append(l.worktrees, wts...)
+		plans, err := findPlans(cfg, repo, wts)
+		if err != nil {
+			l.errs = append(l.errs, fmt.Sprintf("%s plans: %v", repo.Name, err))
+		}
+		l.plans = append(l.plans, plans...)
 	}
-	r.worktrees, err = listWorktrees(ctx, cfg, repo)
-	if err != nil {
-		r.errs = append(r.errs, fmt.Sprintf("%s worktrees: %v", repo.Name, err))
-		return r
-	}
-	r.plans, err = findPlans(cfg, repo, r.worktrees)
-	if err != nil {
-		r.errs = append(r.errs, fmt.Sprintf("%s plans: %v", repo.Name, err))
-	}
-	return r
+	return l
 }
 
 func (b *Board) unknownKeys(s sources) []string {

@@ -467,7 +467,7 @@ func (s *server) start(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		target, err = startSession(ctx, cfg, t.Key, plan)
-		s.board.Invalidate()
+		s.board.LocalChanged(ctx)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -498,7 +498,7 @@ func (s *server) stop(w http.ResponseWriter, r *http.Request) {
 	if err == nil && t.Session != nil {
 		err = stopSession(ctx, t.Session)
 	}
-	s.board.Invalidate()
+	s.board.LocalChanged(ctx)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -528,7 +528,7 @@ func (s *server) cleanup(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusConflict, rm)
 		return
 	}
-	s.board.Invalidate()
+	s.board.LocalChanged(ctx)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -554,7 +554,7 @@ func (s *server) reviewStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	target, err := startReview(ctx, cfg, l)
-	s.board.Invalidate()
+	s.board.LocalChanged(ctx)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -578,7 +578,7 @@ func (s *server) reviewStop(w http.ResponseWriter, r *http.Request) {
 	if err == nil && l.Review != nil && l.Review.Session != nil {
 		err = stopSession(ctx, l.Review.Session)
 	}
-	s.board.Invalidate()
+	s.board.LocalChanged(ctx)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -608,7 +608,7 @@ func (s *server) reviewCleanup(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusConflict, rm)
 		return
 	}
-	s.board.Invalidate()
+	s.board.LocalChanged(ctx)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
