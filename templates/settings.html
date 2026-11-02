@@ -48,6 +48,7 @@ input::placeholder,textarea::placeholder{color:var(--faint)}
 .repo.removed label{color:var(--muted)}
 .repo.removed input{text-decoration:line-through;opacity:.6}
 .repo.removed::after{content:"Removed when you save.";grid-column:1 / -1;color:var(--muted);font-size:.75rem}
+.repo.org{grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"name remove"}
 button{padding:.35rem .85rem;border:1px solid var(--line);border-radius:999px;background:var(--surface);color:var(--ink);
   font:inherit;font-size:.8125rem;font-weight:550;cursor:pointer;transition:border-color .12s}
 button:hover:not(:disabled){border-color:var(--muted)}
@@ -95,9 +96,16 @@ button.primary{background:var(--link);border-color:var(--link);color:var(--surfa
 
 <fieldset id="repos">
   <legend>Repos</legend>
-  <span class="hint">Your PRs in these repos become tasks; PRs elsewhere go under Other repos. With a local checkout, the board also shows its worktrees and the plan files in each worktree's plans folder (default is 'plans'), named after the ticket, like MM-1234.md.</span>
+  <span class="hint">Your PRs in these repos become tasks; PRs elsewhere go under Other repos, limited by the organizations below. With a local checkout, the board also shows its worktrees and the plan files in each worktree's plans folder (default is 'plans'), named after the ticket, like MM-1234.md.</span>
   {{range .Repos}}{{template "repo" .}}{{end}}
   <button class="icon add" type="button" id="add-repo" title="Add repo" aria-label="Add repo"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M12 5v14"/></svg></button>
+</fieldset>
+
+<fieldset id="orgs">
+  <legend>Organizations for Other repos</legend>
+  <span class="hint">Other repos lists PRs from these organizations or user accounts only, e.g. mattermost. With none listed, every repo shows. Repos in the Repos section always show, whatever their organization.</span>
+  {{range .GitHub.Organizations}}{{template "org" .}}{{end}}
+  <button class="icon add" type="button" id="add-org" title="Add organization" aria-label="Add organization"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M12 5v14"/></svg></button>
 </fieldset>
 
 <fieldset>
@@ -155,6 +163,7 @@ button.primary{background:var(--link);border-color:var(--link);color:var(--surfa
 {{end}}
 
 <template id="repo-row">{{template "repo" .NewRepo}}</template>
+<template id="org-row">{{template "org" ""}}</template>
 
 <script>
 const form = document.getElementById("settings");
@@ -162,32 +171,37 @@ const status = document.getElementById("status");
 const repos = document.getElementById("repos");
 const val = name => form.elements[name].value.trim();
 const lines = name => val(name).split("\n").map(s => s.trim()).filter(Boolean);
-const addRepo = document.getElementById("add-repo");
-addRepo.addEventListener("click", () => {
-  addRepo.before(document.getElementById("repo-row").content.cloneNode(true));
-  addRepo.previousElementSibling.querySelector("input").focus();
-});
+const orgs = document.getElementById("orgs");
+for (const [button, template] of [["add-repo", "repo-row"], ["add-org", "org-row"]]) {
+  const add = document.getElementById(button);
+  add.addEventListener("click", () => {
+    add.before(document.getElementById(template).content.cloneNode(true));
+    add.previousElementSibling.querySelector("input").focus();
+  });
+}
 function labelRemove(row) {
-  const name = row.querySelector("[data-field=name]").value.trim() || "this repo";
+  const name = row.querySelector("[data-field=name]").value.trim() || (row.classList.contains("org") ? "this organization" : "this repo");
   const label = row.classList.contains("removed") ? "Keep " + name : "Remove " + name;
   const button = row.querySelector(".remove");
   button.title = label;
   button.setAttribute("aria-label", label);
 }
-repos.addEventListener("input", e => {
-  if (!e.target.dataset.field) return;
-  e.target.title = e.target.value;
-  if (e.target.dataset.field === "name") labelRemove(e.target.closest(".repo"));
-});
-repos.addEventListener("click", e => {
-  if (!e.target.closest(".remove")) return;
-  const row = e.target.closest(".repo");
-  const inputs = row.querySelectorAll("input");
-  if (![...inputs].some(i => i.value.trim())) return row.remove();
-  const removed = row.classList.toggle("removed");
-  for (const i of inputs) i.disabled = removed;
-  labelRemove(row);
-});
+for (const section of [repos, orgs]) {
+  section.addEventListener("input", e => {
+    if (!e.target.dataset.field) return;
+    e.target.title = e.target.value;
+    if (e.target.dataset.field === "name") labelRemove(e.target.closest(".repo"));
+  });
+  section.addEventListener("click", e => {
+    if (!e.target.closest(".remove")) return;
+    const row = e.target.closest(".repo");
+    const inputs = row.querySelectorAll("input");
+    if (![...inputs].some(i => i.value.trim())) return row.remove();
+    const removed = row.classList.toggle("removed");
+    for (const i of inputs) i.disabled = removed;
+    labelRemove(row);
+  });
+}
 form.addEventListener("submit", async e => {
   e.preventDefault();
   const cfg = {
@@ -208,6 +222,7 @@ form.addEventListener("submit", async e => {
     tmux_session: val("tmux_session"),
     worktree_dir: val("worktree_dir"),
     worktree_links: lines("worktree_links"),
+    github: { organizations: [...orgs.querySelectorAll(".org:not(.removed) [data-field=name]")].map(i => i.value.trim()).filter(Boolean) },
     jira: { base_url: val("jira.base_url"), jql: val("jira.jql") },
     repos: [...repos.querySelectorAll(".repo:not(.removed)")].map(row => {
       const f = n => row.querySelector(`[data-field=${n}]`).value.trim();
@@ -226,7 +241,7 @@ form.addEventListener("submit", async e => {
     });
     if (!res.ok) throw new Error((await res.text()).trim() || res.statusText);
     const { restart } = await res.json();
-    for (const row of repos.querySelectorAll(".repo.removed")) row.remove();
+    for (const row of form.querySelectorAll(".repo.removed")) row.remove();
     status.className = "ok";
     status.textContent = "Saved. The board is refreshing." + (restart ? " Restart taskboard to use the new listen address." : "");
   } catch (err) {
@@ -249,4 +264,12 @@ form.addEventListener("submit", async e => {
   </button>
   <label class="repo-path">Local checkout<input data-field="path" placeholder="optional, e.g. ~/src/repo" value="{{$path}}" title="{{$path}}"></label>
   <label class="repo-base">Base branch<input data-field="base_branch" placeholder="origin/HEAD" value="{{.BaseBranch}}" title="{{.BaseBranch}}"></label>
+</div>{{end}}
+
+{{define "org"}}<div class="repo org">
+  <label class="repo-name">Organization or user<input data-field="name" placeholder="e.g. mattermost" value="{{.}}" title="{{.}}"></label>
+  <button class="icon remove" type="button" title="Remove {{or . "this organization"}}" aria-label="Remove {{or . "this organization"}}">
+    <svg class="trash" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><path d="M10 11v6M14 11v6"/></svg>
+    <svg class="undo" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></svg>
+  </button>
 </div>{{end}}

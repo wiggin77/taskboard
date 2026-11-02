@@ -311,11 +311,14 @@ func mergePRLinks(cfg *Config, found [3][]ghSearchPR) []PRLink {
 }
 
 // Authored PRs in configured repos are left out because they already appear as tasks.
+// Repos outside the configured ones go to others only when github.organizations allows their owner.
 func splitPRLinks(cfg *Config, links []PRLink) (reviews, others []PRLink) {
 	for _, l := range links {
 		switch {
 		case !cfg.hasRepo(l.Repo):
-			others = append(others, l)
+			if cfg.showsOther(l.Repo) {
+				others = append(others, l)
+			}
 		case l.Role != RoleAuthor:
 			reviews = append(reviews, l)
 		}
