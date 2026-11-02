@@ -148,6 +148,25 @@ func parseConfig(b []byte) (*Config, error) {
 	return cfg, nil
 }
 
+// MarshalJSON leaves out the github block while github.organizations is empty, so saving never writes an unset setting.
+func (c Config) MarshalJSON() ([]byte, error) {
+	type plain Config
+	out := struct {
+		plain
+		GitHub *GitHubConfig `json:"github,omitempty"`
+	}{plain: plain(c)}
+	if len(c.GitHub.Organizations) > 0 {
+		out.GitHub = &c.GitHub
+	}
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(out); err != nil {
+		return nil, err
+	}
+	return bytes.TrimSpace(buf.Bytes()), nil
+}
+
 func SaveConfig(path string, cfg *Config) error {
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)

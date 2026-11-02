@@ -6,7 +6,7 @@ Status: implemented.
 
 The Other repos section lists every open PR that you authored, reviewed or were asked to review in any repo that is not in `repos`. GitHub search returns PRs from all organizations you can see. Repos you do not follow fill the section.
 
-**Goal:** a new setting, `github.organizations`, lists the organizations (or user accounts) whose repos may appear under Other repos. Repos in other organizations are hidden. An empty list keeps the current behavior: all repos show.
+**Goal:** a new setting, `github.organizations`, lists the organizations (or user accounts) whose repos may appear under Other repos. Repos in other organizations are hidden. An empty list shows all repos.
 
 Example: `"github": {"organizations": ["mattermost", "mattermost-community"]}` shows PRs in `mattermost/*` and `mattermost-community/*`. It hides PRs in `someone-else/*`.
 
@@ -22,7 +22,7 @@ These decisions are final. No question remains open.
   - A query-level filter would need extra searches for the configured repos outside the listed organizations.
   - Known limit: each `gh` query still returns at most 100 PRs, and hidden PRs count toward that limit.
 - **Match rule.** The owner is the text before the first `/` of `PRLink.Repo`. The comparison ignores case, as `hasRepo` does. A user account name works the same as an organization name.
-- **Empty list means no filter.** Existing config files keep their behavior.
+- **Empty list means no filter.** A config file without the setting shows every repo.
 
 ## Design
 
