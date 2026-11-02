@@ -39,6 +39,9 @@ func main() {
 	defer stop()
 
 	board := NewBoard(cfg)
+	if board.highlights, err = loadHighlights(highlightsPath(*configPath)); err != nil {
+		log.Fatal(err)
+	}
 	handler := newServer(board, *configPath)
 	servers := []*http.Server{{Addr: cfg.Listen, Handler: handler, ReadHeaderTimeout: 10 * time.Second}}
 	if cfg.TLSListen != "" {

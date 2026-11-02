@@ -1332,3 +1332,108 @@ func TestDefaultsAreNotSaved(t *testing.T) {
 		}
 	}
 }
+
+func TestHighlightsStore(t *testing.T) {
+	path := highlightsPath(t.TempDir() + "/taskboard.json")
+	h, err := loadHighlights(path)
+	if err != nil || len(h.list()) != 0 {
+		t.Fatalf("missing file: %v %v, want empty", h.list(), err)
+	}
+	if _, err := h.set("MM-1", true, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.set("o/r#5", true, nil); err != nil {
+		t.Fatal(err)
+	}
+	h, err = loadHighlights(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := h.list(); !slices.Equal(got, []string{"MM-1", "o/r#5"}) {
+		t.Errorf("after reload: %v", got)
+	}
+	got, err := h.set("MM-2", true, map[string]bool{"MM-2": true, "o/r#5": true})
+	if err != nil || !slices.Equal(got, []string{"MM-2", "o/r#5"}) {
+		t.Errorf("set with a complete board: %v %v, want MM-1 pruned", got, err)
+	}
+	if got, _ := h.set("MM-2", false, nil); !slices.Equal(got, []string{"o/r#5"}) {
+		t.Errorf("unset: %v", got)
+	}
+	if err := os.WriteFile(path, []byte("{"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadHighlights(path); err == nil {
+		t.Error("invalid JSON should be an error")
+	}
+}
+
+func TestHighlightEndpoint(t *testing.T) {
+	board := NewBoard(testConfig(t))
+	var err error
+	if board.highlights, err = loadHighlights(highlightsPath(t.TempDir() + "/taskboard.json")); err != nil {
+		t.Fatal(err)
+	}
+	board.snap = Snapshot{
+		Tasks:   []Task{{Key: "MM-1", Stage: StageTicket}, {Key: "MM-2", Stage: StageTicket}},
+		Reviews: []PRLink{{Repo: "mattermost/logr", Number: 5, Role: RoleRequested}},
+		Updated: time.Now(),
+	}
+	h := newServer(board, "")
+	do := func(method, path, remote string, header bool, body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(method, path, strings.NewReader(body))
+		req.Host = "localhost"
+		req.RemoteAddr = remote
+		if body != "" {
+			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		}
+		if header {
+			req.Header.Set("X-Taskboard", "1")
+		}
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec
+	}
+	const local = "127.0.0.1:1234"
+	if rec := do("POST", "/highlight", local, false, "id=MM-1&on=1"); rec.Code != http.StatusForbidden {
+		t.Errorf("without the header: %d, want 403", rec.Code)
+	}
+	if rec := do("POST", "/highlight", "192.0.2.1:1234", true, "id=MM-1&on=1"); rec.Code != http.StatusForbidden {
+		t.Errorf("viewer: %d, want 403", rec.Code)
+	}
+	if rec := do("POST", "/highlight", local, true, "id=MM-9&on=1"); rec.Code != http.StatusNotFound {
+		t.Errorf("unknown id: %d, want 404", rec.Code)
+	}
+	board.highlights.ids["MM-gone"] = true
+	board.snap.Errors = []string{"jira: down"}
+	do("POST", "/highlight", local, true, "id=MM-2&on=1")
+	if !board.highlights.ids["MM-gone"] {
+		t.Error("an incomplete board should not prune highlights")
+	}
+	board.snap.Errors = nil
+	rec := do("POST", "/highlight", local, true, "id=mattermost%2Flogr%235&on=1")
+	var res struct{ Highlights []string }
+	if err := json.Unmarshal(rec.Body.Bytes(), &res); err != nil || rec.Code != http.StatusOK {
+		t.Fatalf("highlight: %d %s", rec.Code, rec.Body.String())
+	}
+	if want := []string{"MM-2", "mattermost/logr#5"}; !slices.Equal(res.Highlights, want) {
+		t.Errorf("highlights %v, want %v", res.Highlights, want)
+	}
+
+	rec = do("GET", "/version", local, false, "")
+	if err := json.Unmarshal(rec.Body.Bytes(), &res); err != nil || len(res.Highlights) != 2 {
+		t.Errorf("version highlights: %s", rec.Body.String())
+	}
+	page := do("GET", "/", local, false, "").Body.String()
+	if !strings.Contains(page, `highlighted" data-id="MM-2"`) || !strings.Contains(page, `highlighted" data-id="mattermost/logr#5"`) {
+		t.Error("index should mark highlighted task and review rows")
+	}
+	if strings.Contains(page, `highlighted" data-id="MM-1"`) {
+		t.Error("MM-1 is not highlighted")
+	}
+	if !strings.Contains(page, "data-highlight") {
+		t.Error("a local browser should get highlight toggles")
+	}
+	if page := do("GET", "/", "192.0.2.1:1234", false, "").Body.String(); strings.Contains(page, "data-highlight ") {
+		t.Error("a viewer should not get highlight toggles")
+	}
+}

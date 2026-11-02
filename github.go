@@ -169,6 +169,8 @@ func (p *PRLink) setKey(cfg *Config, body string) {
 
 func (p PRLink) RepoName() string { return path.Base(p.Repo) }
 
+func (p PRLink) ID() string { return p.Repo + "#" + strconv.Itoa(p.Number) }
+
 func (p PRLink) Meta() string {
 	var parts []string
 	if p.Role != RoleAuthor {

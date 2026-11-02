@@ -30,6 +30,8 @@ Open http://127.0.0.1:8484. While the page has been viewed in the last 15 minute
 
 The Refresh button refreshes on demand, so a long `poll_interval` works if you would rather refresh by hand. Pressing it during a refresh waits for that one instead of starting another. A refresh that takes longer than `refresh_timeout` (default 5m) is cut short and reports the sources it could not read.
 
+To keep track of the items you're working on right now, highlight them with the bookmark in the left edge of a row; it appears when you hover over the row. Highlighted rows are tinted, and the Highlighted chip at the top jumps to each one in turn. Highlights are saved on the server in `taskboard-highlights.json`, next to the config file, so they survive restarts and show on every device you use the board from; other open pages pick up a change within 15 seconds. A highlight is dropped once its item leaves the board. Like the session buttons, highlighting needs a browser on the taskboard machine or a client certificate; other browsers see highlights but can't change them.
+
 The theme button (on every page) cycles between matching the system's light or dark setting (the default), light and dark. The choice is saved in the browser, so each browser keeps its own.
 
 ## Settings

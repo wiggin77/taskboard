@@ -3,7 +3,8 @@
   <h2>{{.Name}} <span class="count">{{len .PRs}}</span></h2>
   <ul class="tasks">
   {{range .PRs}}
-    <li class="task tone-{{.Tone}}">
+    {{$id := .ID}}<li class="task tone-{{.Tone}}{{if index $page.Highlighted $id}} highlighted{{end}}" data-id="{{$id}}">
+      {{if $page.CanAct}}{{template "highlightbutton" (index $page.Highlighted $id)}}{{end}}
       <div class="title">
         <p>{{.Title}}</p>
       </div>

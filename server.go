@@ -107,6 +107,8 @@ type indexData struct {
 	Native         bool
 	CanAct         bool
 	Stations       []string
+	Highlights     []string
+	Highlighted    map[string]bool
 }
 
 // controls says which session buttons a row shows; an empty ID shows none. Native buttons open a terminal
@@ -192,6 +194,7 @@ func newServer(board *Board, configPath string) http.Handler {
 	mux.HandleFunc("POST /review/stop/{name}", s.reviewStop)
 	mux.HandleFunc("POST /review/cleanup/{name}", s.reviewCleanup)
 	mux.HandleFunc("POST /refresh", s.refresh)
+	mux.HandleFunc("POST /highlight", s.highlight)
 	mux.HandleFunc("GET /term/{id}", s.termPage)
 	mux.HandleFunc("GET /term/{id}/ws", s.termSocket)
 	mux.HandleFunc("GET /static/{file}", s.static)
@@ -238,6 +241,11 @@ func (s *server) index(w http.ResponseWriter, r *http.Request) {
 		Native:         len(cfg.AttachCommand) > 0 && s.accessOf(r) == local,
 		CanAct:         s.accessOf(r) >= remote,
 		Stations:       stations,
+		Highlights:     s.board.highlights.list(),
+		Highlighted:    map[string]bool{},
+	}
+	for _, id := range data.Highlights {
+		data.Highlighted[id] = true
 	}
 	for _, name := range groupOrder {
 		if tasks := byGroup[name]; len(tasks) > 0 {
@@ -289,7 +297,31 @@ func (s *server) version(w http.ResponseWriter, r *http.Request) {
 		"version":    snap.Version,
 		"updated":    updatedLabel(snap.Updated),
 		"refreshing": s.board.Refreshing(),
+		"highlights": s.board.highlights.list(),
 	})
+}
+
+// highlight sets rather than toggles, so two devices clicking at once can't undo each other.
+func (s *server) highlight(w http.ResponseWriter, r *http.Request) {
+	if !s.allowAction(w, r) {
+		return
+	}
+	id, on := r.FormValue("id"), r.FormValue("on") == "1"
+	snap := s.board.Snapshot()
+	present := boardIDs(snap)
+	if on && !present[id] {
+		http.Error(w, id+" is not on the board", http.StatusNotFound)
+		return
+	}
+	if snap.Updated.IsZero() || len(snap.Errors) > 0 {
+		present = nil
+	}
+	list, err := s.board.highlights.set(id, on, present)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"highlights": list})
 }
 
 func (s *server) plan(w http.ResponseWriter, r *http.Request) {

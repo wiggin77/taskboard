@@ -28,6 +28,8 @@ h1{font-size:1.25rem;font-weight:700;letter-spacing:-.02em;margin:0}
   background:var(--surface);color:var(--ink);font-size:.8125rem;font-weight:550;transition:border-color .12s}
 .jump a:hover{border-color:var(--trail);text-decoration:none}
 .jump a.tone-needs{border-color:color-mix(in srgb,var(--needs) 50%,var(--line));color:var(--needs)}
+.jump a.to-highlight{border-color:color-mix(in srgb,var(--link) 50%,var(--line));color:var(--link)}
+.jump a[hidden]{display:none}
 .errors{border:1px solid color-mix(in srgb,var(--fail) 35%,var(--line));border-radius:10px;background:color-mix(in srgb,var(--fail) 7%,var(--surface));
   padding:.75rem 1rem;margin:0 0 1.75rem;font-size:.8125rem}
 .errors p{margin:0 0 .25rem;font-weight:600}
@@ -51,6 +53,17 @@ ul.tasks{list-style:none;margin:0;padding:0;background:var(--surface);border:1px
 .task:hover{background:var(--hover)}
 .task::before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--tone)}
 .task.tone-idle::before{background:transparent}
+.task.highlighted{background:color-mix(in srgb,var(--link) var(--highlight-tint),var(--surface))}
+.mark{position:absolute;left:3px;top:0;bottom:0;width:calc(1.35rem - 3px);display:flex;justify-content:center;padding:1.15rem 0 0;
+  border:0;background:none;color:var(--faint);cursor:pointer;opacity:0;transition:opacity .12s,color .12s}
+.mark svg{width:12px;height:12px}
+.task:hover .mark,.mark:focus-visible{opacity:1}
+.mark:hover{color:var(--link)}
+.mark:focus-visible{outline-offset:-2px}
+.highlighted .mark{opacity:1;color:var(--link)}
+.highlighted .mark svg{fill:currentColor}
+.mark.err{opacity:1;color:var(--fail)}
+@media (hover:none){.mark{opacity:.5}}
 .title{min-width:0}
 .title p{margin:0;font-weight:500;overflow-wrap:anywhere}
 .key{display:inline-block;margin-right:.5rem;padding:.05rem .4rem;border-radius:5px;background:var(--chip);color:var(--muted);vertical-align:1px;
@@ -120,7 +133,7 @@ a:hover{text-decoration:underline}
       </a>{{end}}
     </div>
   </div>
-  {{with .Nav}}<nav class="jump" aria-label="Sections">{{range .}}<a href="#{{slug .Name}}"{{with .Tone}} class="tone-{{.}}"{{end}}>{{.Name}} <span class="count">{{.Count}}</span></a>{{end}}</nav>{{end}}
+  {{with .Nav}}<nav class="jump" aria-label="Sections"><a href="#" class="to-highlight" title="Jump to the next highlighted item" hidden>Highlighted <span class="count"></span></a>{{range .}}<a href="#{{slug .Name}}"{{with .Tone}} class="tone-{{.}}"{{end}}>{{.Name}} <span class="count">{{.Count}}</span></a>{{end}}</nav>{{end}}
 </header>
 
 {{with .Errors}}
@@ -144,7 +157,8 @@ a:hover{text-decoration:underline}
   {{end}}
   <ul class="tasks">
   {{range .Tasks}}
-    <li class="task tone-{{.Tone}}">
+    <li class="task tone-{{.Tone}}{{if index $.Highlighted .Key}} highlighted{{end}}" data-id="{{.Key}}">
+      {{if $.CanAct}}{{template "highlightbutton" (index $.Highlighted .Key)}}{{end}}
       <div class="title">
         <p><span class="key">{{.DisplayKey}}</span>{{.Summary}}</p>
       </div>
@@ -191,6 +205,7 @@ async function check() {
       const v = await (await fetch("/version", { cache: "no-store" })).json();
       if (v.version !== pageVersion && !holdReload()) return location.reload();
       showRefreshing(v.refreshing, v.updated);
+      if (!pending) applyHighlights(v.highlights);
     } catch {}
   }
   timer = setTimeout(check, refreshing ? 5000 : 15000);
@@ -248,7 +263,62 @@ function flashIcon(button, state, label) {
     button.setAttribute("aria-label", old);
   }, 1500);
 }
+const cards = () => document.querySelectorAll(".task[data-id]");
+const highlightChip = document.querySelector(".to-highlight");
+function setHighlighted(card, on) {
+  card.classList.toggle("highlighted", on);
+  const button = card.querySelector("[data-highlight]");
+  if (!button) return;
+  const label = on ? "Remove highlight" : "Highlight";
+  button.setAttribute("aria-pressed", on);
+  button.title = label;
+  button.setAttribute("aria-label", label);
+}
+function countHighlights() {
+  if (!highlightChip) return;
+  const n = document.querySelectorAll(".task.highlighted").length;
+  highlightChip.hidden = n === 0;
+  highlightChip.querySelector(".count").textContent = n;
+}
+function applyHighlights(ids) {
+  const set = new Set(ids);
+  for (const card of cards()) setHighlighted(card, set.has(card.dataset.id));
+  countHighlights();
+}
+async function toggleHighlight(button) {
+  const id = button.closest(".task").dataset.id;
+  const on = !button.closest(".task").classList.contains("highlighted");
+  const same = [...cards()].filter(c => c.dataset.id === id);
+  for (const card of same) setHighlighted(card, on);
+  countHighlights();
+  const r = await post("/highlight", { id, on: on ? "1" : "0" });
+  if (r.ok) {
+    if (!pending) applyHighlights(r.body.highlights);
+    return;
+  }
+  for (const card of same) setHighlighted(card, !on);
+  countHighlights();
+  flashIcon(button, "err", "Could not save the highlight");
+}
+let lastHighlight = -1;
+function nextHighlight() {
+  const list = [...document.querySelectorAll(".task.highlighted")];
+  if (!list.length) return;
+  lastHighlight = (lastHighlight + 1) % list.length;
+  const card = list[lastHighlight];
+  card.closest("details")?.setAttribute("open", "");
+  card.scrollIntoView({ block: "center" });
+  card.querySelector("[data-highlight]")?.focus({ preventScroll: true });
+}
+applyHighlights({{.Highlights}});
+
 document.addEventListener("click", async (e) => {
+  const mark = e.target.closest("[data-highlight]");
+  if (mark) return toggleHighlight(mark);
+  if (e.target.closest(".to-highlight")) {
+    e.preventDefault();
+    return nextHighlight();
+  }
   const jump = e.target.closest(".jump a");
   if (jump) {
     document.querySelector(jump.getAttribute("href") + " details")?.setAttribute("open", "");
@@ -344,6 +414,8 @@ function cleanUp(button) {
 </html>
 
 {{define "marks"}}<svg class="ok" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg><svg class="wait" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>{{end}}
+
+{{define "highlightbutton"}}<button class="mark" type="button" data-highlight aria-pressed="{{.}}" title="{{if .}}Remove highlight{{else}}Highlight{{end}}" aria-label="{{if .}}Remove highlight{{else}}Highlight{{end}}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m19 21-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16z"/></svg></button>{{end}}
 
 {{define "controls"}}{{if .ID}}{{$c := .}}
         {{if .Session}}

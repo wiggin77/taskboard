@@ -37,6 +37,8 @@ type Board struct {
 
 	wake chan struct{}
 
+	highlights *highlights
+
 	composeMu sync.Mutex
 	fetched   *fetched
 	localGen  atomic.Uint64
@@ -60,6 +62,7 @@ func NewBoard(cfg *Config) *Board {
 		jiraUpdated:   map[string]time.Time{},
 		cachesReset:   time.Now(),
 		wake:          make(chan struct{}, 1),
+		highlights:    &highlights{ids: map[string]bool{}},
 	}
 	b.cfg.Store(cfg)
 	return b

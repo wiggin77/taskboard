@@ -143,7 +143,6 @@ func parseConfig(b []byte) (*Config, error) {
 	return cfg, nil
 }
 
-// SaveConfig writes via a temp file and rename so a crash never leaves a truncated config.
 func SaveConfig(path string, cfg *Config) error {
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
@@ -152,16 +151,21 @@ func SaveConfig(path string, cfg *Config) error {
 	if err := enc.Encode(cfg); err != nil {
 		return err
 	}
+	return writeFileAtomic(path, buf.Bytes())
+}
+
+// writeFileAtomic writes via a temp file and rename so a crash never leaves a truncated file. It keeps an existing file's mode.
+func writeFileAtomic(path string, data []byte) error {
 	mode := os.FileMode(0o644)
 	if fi, err := os.Stat(path); err == nil {
 		mode = fi.Mode().Perm()
 	}
-	f, err := os.CreateTemp(filepath.Dir(path), ".taskboard-*.json")
+	f, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+"-*")
 	if err != nil {
 		return err
 	}
 	defer os.Remove(f.Name())
-	if _, err := f.Write(buf.Bytes()); err != nil {
+	if _, err := f.Write(data); err != nil {
 		f.Close()
 		return err
 	}
