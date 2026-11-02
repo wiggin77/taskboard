@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
@@ -395,7 +396,7 @@ func TestOtherOrgsConfig(t *testing.T) {
 		}
 	}
 
-	path := t.TempDir() + "/taskboard.json"
+	path := filepath.Join(t.TempDir(), "taskboard.json")
 	if err := SaveConfig(path, cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -406,12 +407,14 @@ func TestOtherOrgsConfig(t *testing.T) {
 	if !slices.Equal(saved.GitHub.Organizations, cfg.GitHub.Organizations) {
 		t.Errorf("round trip github.organizations = %q, want %q", saved.GitHub.Organizations, cfg.GitHub.Organizations)
 	}
-	cfg.GitHub.Organizations = nil
-	if err := SaveConfig(path, cfg); err != nil {
-		t.Fatal(err)
-	}
-	if raw, _ := os.ReadFile(path); strings.Contains(string(raw), "github") {
-		t.Errorf("an empty github.organizations should not write a github block:\n%s", raw)
+	for _, empty := range [][]string{nil, {}} {
+		cfg.GitHub.Organizations = empty
+		if err := SaveConfig(path, cfg); err != nil {
+			t.Fatal(err)
+		}
+		if raw, _ := os.ReadFile(path); strings.Contains(string(raw), "github") {
+			t.Errorf("an empty github block (%#v) should not be saved:\n%s", empty, raw)
+		}
 	}
 }
 
@@ -770,7 +773,7 @@ func TestDurationString(t *testing.T) {
 }
 
 func TestSaveSettings(t *testing.T) {
-	path := t.TempDir() + "/taskboard.json"
+	path := filepath.Join(t.TempDir(), "taskboard.json")
 	cfg := testConfig(t)
 	cfg.Listen = "127.0.0.1:8484"
 	cfg.AttachCommand = []string{"sh", "-c", "a && b"}
@@ -996,7 +999,7 @@ func TestRemovalCheck(t *testing.T) {
 		t.Error("only a merged PR vouches for deleted remote branches")
 	}
 	var many strings.Builder
-	for i := 0; i < 25; i++ {
+	for i := range 25 {
 		fmt.Fprintf(&many, "?? f%d\n", i)
 	}
 	if r := removalCheck([]byte(many.String()), nil, "", nil); len(r.Uncommitted) != maxListed+1 || r.Uncommitted[maxListed] != "and 5 more" {
@@ -1007,7 +1010,7 @@ func TestRemovalCheck(t *testing.T) {
 func TestCleanupNeverRemovesMainCheckout(t *testing.T) {
 	cfg := sessionConfig(t)
 	task := Task{Key: "MM-1", Worktree: &Worktree{Repo: "mattermost/mattermost", Path: "/src/mattermost", Branch: "MM-1-x", Main: true}}
-	if _, err := cleanup(context.Background(), cfg, task, true); err == nil || !strings.Contains(err.Error(), "main checkout") {
+	if _, err := cleanup(t.Context(), cfg, task, true); err == nil || !strings.Contains(err.Error(), "main checkout") {
 		t.Errorf("cleanup of the main checkout: %v", err)
 	}
 }
@@ -1459,7 +1462,7 @@ func TestTerminalEndpoints(t *testing.T) {
 		t.Errorf("xterm.js: %d", code)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + "/term/MM-1/ws"
 	_, res, err := websocket.Dial(ctx, wsURL, &websocket.DialOptions{HTTPHeader: http.Header{"Origin": {"https://evil.example.com"}}})
@@ -1506,7 +1509,7 @@ func TestDefaultsAreNotSaved(t *testing.T) {
 	if cfg.jql() != defaultJQL || cfg.tmuxSession() != "work" || cfg.agent(false) != "claude" || cfg.Repos[0].plansDir() != "plans" {
 		t.Errorf("defaults not applied: jql %q, session %q, agent %q, plans %q", cfg.jql(), cfg.tmuxSession(), cfg.agent(false), cfg.Repos[0].plansDir())
 	}
-	path := t.TempDir() + "/taskboard.json"
+	path := filepath.Join(t.TempDir(), "taskboard.json")
 	if err := SaveConfig(path, cfg); err != nil {
 		t.Fatal(err)
 	}
@@ -1519,7 +1522,7 @@ func TestDefaultsAreNotSaved(t *testing.T) {
 }
 
 func TestHighlightsStore(t *testing.T) {
-	path := highlightsPath(t.TempDir() + "/taskboard.json")
+	path := highlightsPath(filepath.Join(t.TempDir(), "taskboard.json"))
 	h, err := loadHighlights(path)
 	if err != nil || len(h.list()) != 0 {
 		t.Fatalf("missing file: %v %v, want empty", h.list(), err)
@@ -1555,7 +1558,7 @@ func TestHighlightsStore(t *testing.T) {
 func TestHighlightEndpoint(t *testing.T) {
 	board := NewBoard(testConfig(t))
 	var err error
-	if board.highlights, err = loadHighlights(highlightsPath(t.TempDir() + "/taskboard.json")); err != nil {
+	if board.highlights, err = loadHighlights(highlightsPath(filepath.Join(t.TempDir(), "taskboard.json"))); err != nil {
 		t.Fatal(err)
 	}
 	board.snap = Snapshot{

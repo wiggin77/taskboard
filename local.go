@@ -47,12 +47,20 @@ type Session struct {
 	Name   string
 }
 
+// commandWaitDelay bounds how long Output waits for a command's pipes after its context ends, so a child that keeps them open cannot hang a refresh.
+const commandWaitDelay = 5 * time.Second
+
 func runCmd(ctx context.Context, dir, name string, args ...string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Dir = dir
+	cmd.WaitDelay = commandWaitDelay
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
+	if errors.Is(err, exec.ErrWaitDelay) {
+		// The command itself succeeded; only a leftover child kept its pipes open.
+		err = nil
+	}
 	if err != nil {
 		if msg := strings.TrimSpace(stderr.String()); msg != "" {
 			return nil, fmt.Errorf("%s: %w: %s", name, err, msg)
@@ -80,11 +88,10 @@ func parseWorktrees(out []byte) []Worktree {
 	sc := bufio.NewScanner(bytes.NewReader(out))
 	for sc.Scan() {
 		line := sc.Text()
-		switch {
-		case strings.HasPrefix(line, "worktree "):
-			wts = append(wts, Worktree{Path: strings.TrimPrefix(line, "worktree "), Main: len(wts) == 0})
-		case strings.HasPrefix(line, "branch ") && len(wts) > 0:
-			wts[len(wts)-1].Branch = strings.TrimPrefix(line, "branch refs/heads/")
+		if dir, ok := strings.CutPrefix(line, "worktree "); ok {
+			wts = append(wts, Worktree{Path: dir, Main: len(wts) == 0})
+		} else if ref, ok := strings.CutPrefix(line, "branch "); ok && len(wts) > 0 {
+			wts[len(wts)-1].Branch = strings.TrimPrefix(ref, "refs/heads/")
 		}
 	}
 	return wts
@@ -165,7 +172,7 @@ func parseWindows(cfg *Config, out []byte) []Session {
 	var windows []Session
 	seen := map[string]bool{}
 	// Only newlines are trimmed: the last field is empty for unmarked sessions, and TrimSpace would eat its tab.
-	for _, line := range strings.Split(strings.TrimRight(string(out), "\r\n"), "\n") {
+	for line := range strings.SplitSeq(strings.TrimRight(string(out), "\r\n"), "\n") {
 		f := strings.Split(line, "\t")
 		if len(f) != 4 || f[3] != "" || seen[f[2]] {
 			continue

@@ -12,7 +12,7 @@ go test ./...
 go test -run TestBuildTasks ./...    # single test
 ```
 
-Single `main` package (Go 1.22, uses `ServeMux` method/path patterns). Dependencies are limited to `coder/websocket` and `creack/pty` (browser terminal) and `go-pkcs12` (client certificate files); xterm.js is vendored in `static/` and embedded. All tests are in `taskboard_test.go` and use `testConfig(t)`; they never shell out, so they run without `gh`/`acli`. The binary requires `acli`, `gh` and `git` on PATH at startup.
+Single `main` package (Go 1.27, uses `ServeMux` method/path patterns). Dependencies are limited to `coder/websocket` and `creack/pty` (browser terminal) and `go-pkcs12` (client certificate files); xterm.js is vendored in `static/` and embedded. All tests are in `taskboard_test.go` and use `testConfig(t)`; they never shell out, so they run without `gh`/`acli`. The binary requires `acli`, `gh` and `git` on PATH at startup.
 
 ## Architecture
 

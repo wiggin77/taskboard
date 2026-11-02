@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -79,20 +80,18 @@ func (h *highlights) set(id string, on bool, present map[string]bool) ([]string,
 }
 
 func pruneHighlights(ids, present map[string]bool) map[string]bool {
-	next := map[string]bool{}
-	for id := range ids {
-		if present == nil || present[id] {
-			next[id] = true
-		}
+	next := maps.Clone(ids)
+	if next == nil {
+		next = map[string]bool{}
+	}
+	if present != nil {
+		maps.DeleteFunc(next, func(id string, _ bool) bool { return !present[id] })
 	}
 	return next
 }
 
 func sortedIDs(ids map[string]bool) []string {
-	list := make([]string, 0, len(ids))
-	for id := range ids {
-		list = append(list, id)
-	}
+	list := slices.AppendSeq(make([]string, 0, len(ids)), maps.Keys(ids))
 	slices.Sort(list)
 	return list
 }

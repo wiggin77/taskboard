@@ -1,8 +1,9 @@
 package main
 
 import (
+	"cmp"
 	"path"
-	"sort"
+	"slices"
 	"strconv"
 	"time"
 )
@@ -258,23 +259,25 @@ func buildTasks(cfg *Config, s sources, now time.Time) []Task {
 		}
 		tasks = append(tasks, *t)
 	}
-	sort.Slice(tasks, func(i, j int) bool {
-		a, b := tasks[i], tasks[j]
-		if a.Stage != b.Stage {
-			return a.Stage < b.Stage
-		}
-		if !a.Updated.Equal(b.Updated) {
-			return newerFirst(a.Updated, b.Updated)
-		}
-		return a.Key < b.Key
+	slices.SortFunc(tasks, func(a, b Task) int {
+		return cmp.Or(
+			cmp.Compare(a.Stage, b.Stage),
+			compareNewerFirst(a.Updated, b.Updated),
+			cmp.Compare(a.Key, b.Key),
+		)
 	})
 	return tasks
 }
 
 // Unknown (zero) times sort last.
-func newerFirst(a, b time.Time) bool {
-	if a.IsZero() || b.IsZero() {
-		return b.IsZero() && !a.IsZero()
+func compareNewerFirst(a, b time.Time) int {
+	switch {
+	case a.IsZero() && b.IsZero():
+		return 0
+	case a.IsZero():
+		return 1
+	case b.IsZero():
+		return -1
 	}
-	return a.After(b)
+	return b.Compare(a)
 }
