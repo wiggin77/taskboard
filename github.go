@@ -1,10 +1,11 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"path"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -301,11 +302,11 @@ func mergePRLinks(cfg *Config, found [3][]ghSearchPR) []PRLink {
 			links = append(links, l)
 		}
 	}
-	sort.SliceStable(links, func(i, j int) bool {
-		if links[i].Role != links[j].Role {
-			return links[i].Role < links[j].Role
-		}
-		return links[i].UpdatedAt.After(links[j].UpdatedAt)
+	slices.SortStableFunc(links, func(a, b PRLink) int {
+		return cmp.Or(
+			cmp.Compare(a.Role, b.Role),
+			b.UpdatedAt.Compare(a.UpdatedAt),
+		)
 	})
 	return links
 }

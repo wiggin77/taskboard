@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
 	"time"
 
@@ -175,13 +176,7 @@ func (s *server) restartKind(ctx context.Context, cfg *Config, id string) string
 }
 
 func withoutEnv(env []string, name string) []string {
-	out := env[:0:0]
-	for _, kv := range env {
-		if !strings.HasPrefix(kv, name+"=") {
-			out = append(out, kv)
-		}
-	}
-	return out
+	return slices.DeleteFunc(slices.Clone(env), func(kv string) bool { return strings.HasPrefix(kv, name+"=") })
 }
 
 // WebSocket close reasons are limited to 123 bytes.

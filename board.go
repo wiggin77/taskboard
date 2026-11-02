@@ -136,19 +136,20 @@ func (b *Board) Snapshot() Snapshot {
 }
 
 func (b *Board) Task(key string) (Task, bool) {
-	for _, t := range b.Snapshot().Tasks {
-		if t.Key == key {
-			return t, true
-		}
+	tasks := b.Snapshot().Tasks
+	if i := slices.IndexFunc(tasks, func(t Task) bool { return t.Key == key }); i >= 0 {
+		return tasks[i], true
 	}
 	return Task{}, false
 }
 
 func (b *Board) Review(name string) (PRLink, bool) {
-	for _, l := range b.Snapshot().Reviews {
-		if l.ReviewName != "" && l.ReviewName == name {
-			return l, true
-		}
+	reviews := b.Snapshot().Reviews
+	if name == "" {
+		return PRLink{}, false
+	}
+	if i := slices.IndexFunc(reviews, func(l PRLink) bool { return l.ReviewName == name }); i >= 0 {
+		return reviews[i], true
 	}
 	return PRLink{}, false
 }
@@ -479,15 +480,13 @@ func (b *Board) fillJiraUpdated(ctx context.Context, issues map[string]JiraIssue
 	sem := make(chan struct{}, 8)
 	var wg sync.WaitGroup
 	for i, key := range missing {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			sem <- struct{}{}
 			defer func() { <-sem }()
 			var is JiraIssue
 			is, _, errs[i] = jiraGet(ctx, key)
 			fetched[i] = is.Updated
-		}()
+		})
 	}
 	wg.Wait()
 	for i, key := range missing {
