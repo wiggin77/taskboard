@@ -410,9 +410,93 @@ func TestOtherOrgsConfig(t *testing.T) {
 	if err := SaveConfig(path, cfg); err != nil {
 		t.Fatal(err)
 	}
-	if raw, _ := os.ReadFile(path); strings.Contains(string(raw), "organizations") {
-		t.Errorf("an empty github.organizations should not be saved:\n%s", raw)
+	if raw, _ := os.ReadFile(path); strings.Contains(string(raw), "github") {
+		t.Errorf("an empty github.organizations should not write a github block:\n%s", raw)
 	}
+}
+
+func TestConfigMarshalGitHub(t *testing.T) {
+	marshal := func(cfg *Config) map[string]json.RawMessage {
+		t.Helper()
+		b, err := json.Marshal(cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var m map[string]json.RawMessage
+		if err := json.Unmarshal(b, &m); err != nil {
+			t.Fatal(err)
+		}
+		return m
+	}
+
+	t.Run("nil organizations leave out github", func(t *testing.T) {
+		cfg := testConfig(t)
+		cfg.GitHub = GitHubConfig{}
+		if raw, ok := marshal(cfg)["github"]; ok {
+			t.Errorf("github = %s, want the key left out", raw)
+		}
+	})
+	t.Run("empty organizations leave out github", func(t *testing.T) {
+		cfg := testConfig(t)
+		cfg.GitHub = GitHubConfig{Organizations: []string{}}
+		if raw, ok := marshal(cfg)["github"]; ok {
+			t.Errorf("github = %s, want the key left out", raw)
+		}
+	})
+	t.Run("organizations are written", func(t *testing.T) {
+		cfg := testConfig(t)
+		cfg.GitHub = GitHubConfig{Organizations: []string{"mattermost", "mattermost-community"}}
+		raw, ok := marshal(cfg)["github"]
+		if !ok {
+			t.Fatal("github key missing")
+		}
+		if got, want := string(raw), `{"organizations":["mattermost","mattermost-community"]}`; got != want {
+			t.Errorf("github = %s, want %s", got, want)
+		}
+	})
+	t.Run("other fields are unchanged", func(t *testing.T) {
+		cfg := testConfig(t)
+		with := marshal(cfg)
+		cfg.GitHub = GitHubConfig{Organizations: []string{"mattermost"}}
+		without := marshal(cfg)
+		delete(without, "github")
+		if !reflect.DeepEqual(with, without) {
+			t.Errorf("adding organizations changed other keys:\n%v\n%v", with, without)
+		}
+		for _, key := range []string{"listen", "jira", "repos"} {
+			if _, ok := with[key]; !ok {
+				t.Errorf("key %q missing", key)
+			}
+		}
+	})
+	t.Run("an encoder that keeps HTML characters is honored", func(t *testing.T) {
+		cfg := testConfig(t)
+		cfg.Jira.JQL = "a & b < c"
+		var buf strings.Builder
+		enc := json.NewEncoder(&buf)
+		enc.SetEscapeHTML(false)
+		if err := enc.Encode(cfg); err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(buf.String(), "a & b < c") {
+			t.Errorf("output escapes HTML characters: %s", buf.String())
+		}
+	})
+	t.Run("a value config marshals like a pointer", func(t *testing.T) {
+		cfg := testConfig(t)
+		cfg.GitHub = GitHubConfig{Organizations: []string{"mattermost"}}
+		byPtr, err := json.Marshal(cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		byValue, err := json.Marshal(*cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(byPtr) != string(byValue) {
+			t.Errorf("pointer and value output differ:\n%s\n%s", byPtr, byValue)
+		}
+	})
 }
 
 func TestTaskOrderNewestFirst(t *testing.T) {
