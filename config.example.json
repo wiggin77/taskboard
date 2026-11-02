@@ -19,5 +19,8 @@
   "repos": [
     {"name": "mattermost/mattermost", "path": "~/src/mattermost", "plans_dir": "plans"},
     {"name": "mattermost/mattermost-plugin-jira", "path": "~/src/mattermost-plugin-jira"}
-  ]
+  ],
+  "github": {
+    "organizations": ["mattermost", "mattermost-community"]
+  }
 }

@@ -315,6 +315,106 @@ func TestMergePRLinks(t *testing.T) {
 	check("others", others, []want{{2, RoleRequested}, {4, RoleAuthor}, {6, RoleReviewed}})
 }
 
+func TestSplitPRLinksOtherOrgs(t *testing.T) {
+	link := func(repo string, n int, role Role) PRLink {
+		return PRLink{Repo: repo, Number: n, Role: role}
+	}
+	links := []PRLink{
+		link("mattermost/mattermost", 1, RoleRequested),
+		link("mattermost-community/x", 2, RoleRequested),
+		link("acme/y", 3, RoleReviewed),
+		link("other/repo", 4, RoleRequested),
+		link("other/repo", 5, RoleAuthor),
+		link("other/repo", 6, RoleReviewed),
+		link("mattermost/mattermost", 7, RoleAuthor),
+	}
+	numbers := func(ls []PRLink) []int {
+		var out []int
+		for _, l := range ls {
+			out = append(out, l.Number)
+		}
+		return out
+	}
+	cfg := testConfig(t)
+	cfg.Repos = []RepoConfig{{Name: "mattermost/mattermost"}}
+
+	reviews, others := splitPRLinks(cfg, links)
+	if want := []int{1}; !slices.Equal(numbers(reviews), want) {
+		t.Errorf("reviews = %v, want %v", numbers(reviews), want)
+	}
+	if want := []int{2, 3, 4, 5, 6}; !slices.Equal(numbers(others), want) {
+		t.Errorf("empty github.organizations: others = %v, want %v", numbers(others), want)
+	}
+
+	cfg.GitHub.Organizations = []string{"mattermost-community", "Acme"}
+	reviews, others = splitPRLinks(cfg, links)
+	if want := []int{1}; !slices.Equal(numbers(reviews), want) {
+		t.Errorf("reviews with github.organizations = %v, want %v (configured repos are never filtered)", numbers(reviews), want)
+	}
+	if want := []int{2, 3}; !slices.Equal(numbers(others), want) {
+		t.Errorf("others with github.organizations = %v, want %v", numbers(others), want)
+	}
+}
+
+func TestShowsOther(t *testing.T) {
+	for _, c := range []struct {
+		orgs []string
+		repo string
+		want bool
+	}{
+		{nil, "any/repo", true},
+		{[]string{"mattermost"}, "mattermost/mattermost", true},
+		{[]string{"mattermost"}, "Mattermost/mattermost", true},
+		{[]string{"Mattermost"}, "mattermost/mattermost", true},
+		{[]string{"mattermost"}, "mattermost-x/repo", false},
+		{[]string{"mattermost"}, "x-mattermost/repo", false},
+		{[]string{"mattermost"}, "other/mattermost", false},
+		{[]string{"mattermost"}, "mattermost", true},
+		{[]string{"a", "b"}, "b/repo", true},
+	} {
+		cfg := &Config{GitHub: GitHubConfig{Organizations: c.orgs}}
+		if got := cfg.showsOther(c.repo); got != c.want {
+			t.Errorf("showsOther(%v, %q) = %v, want %v", c.orgs, c.repo, got, c.want)
+		}
+	}
+}
+
+func TestOtherOrgsConfig(t *testing.T) {
+	base := `"project_keys":["MM"],"jira":{"base_url":"https://x.atlassian.net"},"repos":[{"name":"a/b"}]`
+	cfg, err := parseConfig([]byte(`{` + base + `,"github":{"organizations":["mattermost","  mattermost-community "]}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"mattermost", "mattermost-community"}; !slices.Equal(cfg.GitHub.Organizations, want) {
+		t.Errorf("github.organizations = %q, want %q", cfg.GitHub.Organizations, want)
+	}
+	for _, bad := range []string{`["a/b"]`, `["a b"]`, `[""]`, `["ok","  "]`} {
+		_, err := parseConfig([]byte(`{` + base + `,"github":{"organizations":` + bad + `}}`))
+		if err == nil || !strings.Contains(err.Error(), "github.organizations") {
+			t.Errorf("github.organizations %s: error = %v, want one naming github.organizations", bad, err)
+		}
+	}
+
+	path := t.TempDir() + "/taskboard.json"
+	if err := SaveConfig(path, cfg); err != nil {
+		t.Fatal(err)
+	}
+	saved, err := LoadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(saved.GitHub.Organizations, cfg.GitHub.Organizations) {
+		t.Errorf("round trip github.organizations = %q, want %q", saved.GitHub.Organizations, cfg.GitHub.Organizations)
+	}
+	cfg.GitHub.Organizations = nil
+	if err := SaveConfig(path, cfg); err != nil {
+		t.Fatal(err)
+	}
+	if raw, _ := os.ReadFile(path); strings.Contains(string(raw), "organizations") {
+		t.Errorf("an empty github.organizations should not be saved:\n%s", raw)
+	}
+}
+
 func TestTaskOrderNewestFirst(t *testing.T) {
 	now := time.Now()
 	ago := func(h int) time.Time { return now.Add(-time.Duration(h) * time.Hour) }
@@ -648,6 +748,7 @@ func TestSaveSettings(t *testing.T) {
 func TestSettingsPage(t *testing.T) {
 	cfg := testConfig(t)
 	cfg.AttachCommand = []string{"tmux", "attach", "-t", "{target}"}
+	cfg.GitHub.Organizations = []string{"mattermost", "acme"}
 	h := newServer(NewBoard(cfg), "/tmp/taskboard.json")
 	get := func(remote string) *httptest.ResponseRecorder {
 		req := httptest.NewRequest("GET", "/settings", nil)
@@ -665,7 +766,7 @@ func TestSettingsPage(t *testing.T) {
 		t.Fatalf("loopback: %d, want 200", rec.Code)
 	}
 	body := rec.Body.String()
-	for _, want := range []string{`value="1m"`, ">tmux\nattach\n-t\n{target}</textarea>", `value="mattermost/mattermost"`, `value="MM"`} {
+	for _, want := range []string{`value="1m"`, ">tmux\nattach\n-t\n{target}</textarea>", `value="mattermost/mattermost"`, `value="MM"`, `id="orgs"`, `id="add-org"`, `<input data-field="name" placeholder="e.g. mattermost" value="acme"`} {
 		if !strings.Contains(body, want) {
 			t.Errorf("settings page missing %q", want)
 		}
