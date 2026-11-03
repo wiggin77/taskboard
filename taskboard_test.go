@@ -853,7 +853,7 @@ func TestSettingsPage(t *testing.T) {
 		t.Fatalf("loopback: %d, want 200", rec.Code)
 	}
 	body := rec.Body.String()
-	for _, want := range []string{`value="1m"`, ">tmux\nattach\n-t\n{target}</textarea>", `value="mattermost/mattermost"`, `value="MM"`, `id="orgs"`, `id="add-org"`, `<input data-field="name" placeholder="e.g. mattermost" value="acme"`} {
+	for _, want := range []string{`name="repos_dir" placeholder="~/src"`, `value="1m"`, ">tmux\nattach\n-t\n{target}</textarea>", `value="mattermost/mattermost"`, `value="MM"`, `id="orgs"`, `id="add-org"`, `<input data-field="name" placeholder="e.g. mattermost" value="acme"`} {
 		if !strings.Contains(body, want) {
 			t.Errorf("settings page missing %q", want)
 		}
@@ -1125,6 +1125,7 @@ func TestSessionConfig(t *testing.T) {
 		`"repos":[{"name":"a/b","base_branch":"main"}]`,
 		`"repos":[{"name":"a/b"}],"tmux_session":"my:work"`,
 		`"repos":[{"name":"a/b"}],"worktree_dir":"wt"`,
+		`"repos":[{"name":"a/b"}],"repos_dir":"code"`,
 		`"repos":[{"name":"a/b"}],"worktree_links":["enterprise"]`,
 	} {
 		if _, err := parseConfig([]byte(`{` + base + `,` + bad + `}`)); err == nil {
@@ -1514,7 +1515,7 @@ func TestDefaultsAreNotSaved(t *testing.T) {
 		t.Fatal(err)
 	}
 	raw, _ := os.ReadFile(path)
-	for _, def := range []string{"claude", `"work"`, `"plans"`, "statusCategory"} {
+	for _, def := range []string{"claude", `"work"`, `"plans"`, "statusCategory", "repos_dir", "~/src"} {
 		if strings.Contains(string(raw), def) {
 			t.Errorf("saved config contains the default %s; defaults belong in placeholders:\n%s", def, raw)
 		}
@@ -1623,5 +1624,78 @@ func TestHighlightEndpoint(t *testing.T) {
 	}
 	if page := do("GET", "/", "192.0.2.1:1234", false, "").Body.String(); strings.Contains(page, "data-highlight ") {
 		t.Error("a viewer should not get highlight toggles")
+	}
+}
+
+func TestReposDir(t *testing.T) {
+	t.Setenv("HOME", "/home/me")
+	base := `"project_keys":["MM"],"jira":{"base_url":"https://x.atlassian.net"}`
+	dirs := func(extra string) []string {
+		t.Helper()
+		cfg, err := parseConfig([]byte(`{` + base + extra + `,"repos":[{"name":"a/b","path":"mattermost"},{"name":"a/c","path":"~/src/mattermost"},{"name":"a/d","path":"/abs/x"},{"name":"a/e"}]}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out []string
+		for _, r := range cfg.Repos {
+			out = append(out, r.Dir())
+		}
+		return out
+	}
+	if got, want := dirs(""), []string{"/home/me/src/mattermost", "/home/me/src/mattermost", "/abs/x", ""}; !slices.Equal(got, want) {
+		t.Errorf("default repos_dir: %v, want %v", got, want)
+	}
+	if got, want := dirs(`,"repos_dir":"/code/"`), []string{"/code/mattermost", "/home/me/src/mattermost", "/abs/x", ""}; !slices.Equal(got, want) {
+		t.Errorf("repos_dir /code/: %v, want %v", got, want)
+	}
+	if got := (RepoConfig{Path: "x"}).Dir(); got != "/home/me/src/x" {
+		t.Errorf("Dir without validate = %q", got)
+	}
+	_, err := parseConfig([]byte(`{` + base + `,"repos_dir":"code","repos":[{"name":"a/b"}]}`))
+	if err == nil || !strings.Contains(err.Error(), "repos_dir") {
+		t.Errorf("relative repos_dir error = %v", err)
+	}
+}
+
+func TestDisplayPath(t *testing.T) {
+	t.Setenv("HOME", "/home/me")
+	cfg := testConfig(t)
+	for in, want := range map[string]string{
+		"":                 "",
+		"mattermost":       "mattermost",
+		"../work/x":        "../work/x",
+		"~/src/mattermost": "mattermost",
+		"/home/me/src/a/b": "a/b",
+		"~/src":            "~/src",
+		"/opt/x":           "/opt/x",
+		"~/work/x":         "~/work/x",
+		"~/src/":           "~/src",
+		"~/srcother/x":     "~/srcother/x",
+	} {
+		if got := cfg.displayPath(in); got != want {
+			t.Errorf("displayPath(%q) = %q, want %q", in, got, want)
+		}
+	}
+	cfg.ReposDir = "/code/"
+	if got := cfg.displayPath("/code/x"); got != "x" {
+		t.Errorf("custom repos_dir: %q", got)
+	}
+}
+
+func TestSettingsPageShortPaths(t *testing.T) {
+	t.Setenv("HOME", "/home/me")
+	cfg := testConfig(t)
+	cfg.Repos = []RepoConfig{{Name: "a/b", Path: "~/src/mattermost"}}
+	if err := cfg.validate(); err != nil {
+		t.Fatal(err)
+	}
+	h := newServer(NewBoard(cfg), "/tmp/taskboard.json")
+	req := httptest.NewRequest("GET", "/settings", nil)
+	req.Host = "localhost"
+	req.RemoteAddr = "127.0.0.1:1234"
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if !strings.Contains(rec.Body.String(), `data-field="path" placeholder="optional, e.g. repo or ~/src/repo" value="mattermost"`) {
+		t.Errorf("settings page should show the short path:\n%s", rec.Body.String())
 	}
 }

@@ -77,6 +77,8 @@ Either way, taskboard works out where the work lives:
 3. Otherwise, if the task has an open PR in a repo with a local checkout, it adds a worktree and runs `gh pr checkout`, which also handles PRs from forks.
 4. Otherwise it asks for the repo (when more than one has a local checkout) and a branch name, suggesting `MM-1234-summary-words`. It then fetches the repo's `base_branch` (default: whatever `origin/HEAD` points at) and creates the branch from it, without tracking it.
 
+Each repo's `path` is its local checkout. `repos_dir` (default `~/src`) is the folder that holds checkouts, so a `path` without a leading `/` or `~/`, such as `mattermost`, means `<repos_dir>/mattermost`. A full path or a `~/` path is used as written, and an empty `path` means the repo has no local checkout; the board never scans `repos_dir` for it. `repos_dir` must be a full path or start with `~/`. The settings page shows, and saves, the short form for any checkout inside `repos_dir`. When `worktree_dir` is empty, "next to its repo's checkout" means next to the resolved path.
+
 New worktrees go in `worktree_dir` as `<repo>-<KEY>`, for example `~/worktrees/mattermost-MM-1234`. When `worktree_dir` is empty, each goes next to its repo's checkout. The window is named after the ticket and opened in the `tmux_session` session (default `work`), which is started if no tmux server is running. The agent command is typed into the window's shell, so quitting the agent leaves you at a prompt in the worktree. `{key}` in either command becomes the ticket key. If `attach_command` is set, a terminal attached to the new window opens right away.
 
 A tmux server that taskboard starts inherits taskboard's environment, so start taskboard from a shell that has the agent on its `PATH`.

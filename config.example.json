@@ -9,6 +9,7 @@
   "done_days": 30,
   "attach_command": ["gnome-terminal", "--", "tmux", "attach", "-t", "{target}"],
   "tmux_session": "work",
+  "repos_dir": "~/src",
   "worktree_dir": "~/worktrees",
   "worktree_links": ["~/src/enterprise"],
   "allowed_hosts": [],
@@ -17,7 +18,7 @@
     "jql": "assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC"
   },
   "repos": [
-    {"name": "mattermost/mattermost", "path": "~/src/mattermost", "plans_dir": "plans"},
+    {"name": "mattermost/mattermost", "path": "mattermost", "plans_dir": "plans"},
     {"name": "mattermost/mattermost-plugin-jira", "path": "~/src/mattermost-plugin-jira"}
   ],
   "github": {
