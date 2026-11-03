@@ -83,17 +83,19 @@ func (r RepoConfig) Dir() string {
 	}
 	root := r.root
 	if root == "" {
-		root = filepath.Clean(expandHome(defaultReposDir))
+		root = resolveReposDir("")
 	}
 	return filepath.Join(root, p)
 }
 
 // reposDir returns the folder that holds repo checkouts.
-func (c *Config) reposDir() string {
-	if c.ReposDir == "" {
-		return filepath.Clean(expandHome(defaultReposDir))
+func (c *Config) reposDir() string { return resolveReposDir(c.ReposDir) }
+
+func resolveReposDir(dir string) string {
+	if dir == "" {
+		dir = defaultReposDir
 	}
-	return filepath.Clean(expandHome(c.ReposDir))
+	return filepath.Clean(expandHome(dir))
 }
 
 // displayPath returns the form of a repo path the settings page shows: relative to the repos folder when the
