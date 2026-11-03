@@ -1216,6 +1216,26 @@ func TestReviewCommand(t *testing.T) {
 	}
 }
 
+func TestCheckedOut(t *testing.T) {
+	dir := t.TempDir()
+	cfg := testConfig(t)
+	cfg.Repos = []RepoConfig{
+		{Name: "o/here", Path: dir},
+		{Name: "o/gone", Path: filepath.Join(dir, "gone")},
+		{Name: "o/nopath"},
+	}
+	got := checkedOut(cfg)
+	if len(got.Repos) != 2 || got.Repos[0].Name != "o/here" || got.Repos[1].Name != "o/nopath" {
+		t.Errorf("repos = %+v", got.Repos)
+	}
+	if len(cfg.Repos) != 3 {
+		t.Errorf("cfg was changed: %+v", cfg.Repos)
+	}
+	if r := localRepos(got); len(r) != 1 || r[0].Name != "o/here" {
+		t.Errorf("local repos = %+v", r)
+	}
+}
+
 func TestControls(t *testing.T) {
 	local := indexData{Native: true, CanAct: true}
 	remote := indexData{CanAct: true}

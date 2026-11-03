@@ -519,6 +519,7 @@ func (s *server) start(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+		cfg := checkedOut(cfg)
 		plan, err := startPlan(cfg, t, branches)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
