@@ -8,6 +8,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"maps"
@@ -1697,5 +1698,124 @@ func TestSettingsPageShortPaths(t *testing.T) {
 	h.ServeHTTP(rec, req)
 	if !strings.Contains(rec.Body.String(), `data-field="path" placeholder="optional, e.g. repo or ~/src/repo" value="mattermost"`) {
 		t.Errorf("settings page should show the short path:\n%s", rec.Body.String())
+	}
+}
+
+func TestAddRepoPlan(t *testing.T) {
+	t.Setenv("HOME", "/home/me")
+	cfg := testConfig(t)
+	snap := Snapshot{OtherPRs: []PRLink{{Repo: "acme/widget", Number: 1}, {Repo: "acme/..", Number: 2}, {Repo: "mattermost/Mattermost", Number: 3}}}
+	rc, dir, err := addRepoPlan(cfg, snap, "acme/widget")
+	if err != nil || rc != (RepoConfig{Name: "acme/widget", Path: "widget"}) || dir != "/home/me/src/widget" {
+		t.Errorf("listed: %+v %q %v", rc, dir, err)
+	}
+	for _, name := range []string{"acme/other", "acme/..", ""} {
+		if _, _, err := addRepoPlan(cfg, snap, name); !errors.Is(err, errNotListed) {
+			t.Errorf("%q: %v, want errNotListed", name, err)
+		}
+	}
+	if _, _, err := addRepoPlan(cfg, snap, "mattermost/Mattermost"); !errors.Is(err, errManaged) {
+		t.Errorf("managed with other case: %v, want errManaged", err)
+	}
+}
+
+func TestRemoteMatches(t *testing.T) {
+	for url, want := range map[string]bool{
+		"https://github.com/acme/widget.git\n": true,
+		"https://github.com/acme/widget":       true,
+		"https://github.com/Acme/Widget/":      true,
+		"git@github.com:acme/widget.git":       true,
+		"ssh://git@github.com/acme/widget":     true,
+		"https://github.com/other/widget.git":  false,
+		"https://github.com/acme/big-widget":   false,
+		"":                                     false,
+	} {
+		if got := remoteMatches(url, "acme/widget"); got != want {
+			t.Errorf("remoteMatches(%q) = %v, want %v", url, got, want)
+		}
+	}
+}
+
+func TestWithRepo(t *testing.T) {
+	t.Setenv("HOME", "/home/me")
+	cfg := testConfig(t)
+	next, err := withRepo(cfg, RepoConfig{Name: "acme/widget", Path: "widget"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Repos) != 1 || len(next.Repos) != 2 {
+		t.Fatalf("repos: old %d, new %d", len(cfg.Repos), len(next.Repos))
+	}
+	if got := next.Repos[1].Dir(); got != "/home/me/src/widget" {
+		t.Errorf("Dir = %q", got)
+	}
+	path := filepath.Join(t.TempDir(), "taskboard.json")
+	if err := SaveConfig(path, next); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := os.ReadFile(path)
+	if strings.Contains(string(raw), "repos_dir") || !strings.Contains(string(raw), `"path": "widget"`) {
+		t.Errorf("saved config:\n%s", raw)
+	}
+}
+
+func TestAddRepoEndpointGuards(t *testing.T) {
+	board := NewBoard(testConfig(t))
+	board.snap.OtherPRs = []PRLink{{Repo: "acme/widget", Number: 1}, {Repo: "mattermost/mattermost", Number: 2}}
+	s := &server{board: board, busy: map[string]bool{}}
+	call := func(remote string, header bool, repo string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest("POST", "/repos/add", strings.NewReader("repo="+repo))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.RemoteAddr = remote
+		if header {
+			req.Header.Set("X-Taskboard", "1")
+		}
+		rec := httptest.NewRecorder()
+		s.addRepo(rec, req)
+		return rec
+	}
+	const local = "127.0.0.1:1234"
+	for _, c := range []struct {
+		remote string
+		header bool
+		repo   string
+		want   int
+	}{
+		{local, false, "acme/widget", http.StatusForbidden},
+		{"192.0.2.1:1234", true, "acme/widget", http.StatusForbidden},
+		{local, true, "acme/unknown", http.StatusNotFound},
+		{local, true, "mattermost/mattermost", http.StatusConflict},
+	} {
+		if rec := call(c.remote, c.header, c.repo); rec.Code != c.want {
+			t.Errorf("%+v: %d %s, want %d", c, rec.Code, strings.TrimSpace(rec.Body.String()), c.want)
+		}
+	}
+	s.busy["repo:acme/widget"] = true
+	if rec := call(local, true, "acme/widget"); rec.Code != http.StatusLocked || !s.busy["repo:acme/widget"] {
+		t.Errorf("add already running: %d, want 423 and the claim kept", rec.Code)
+	}
+}
+
+func TestIndexAddRepoButton(t *testing.T) {
+	board := NewBoard(testConfig(t))
+	board.snap = Snapshot{
+		Reviews:  []PRLink{{Repo: "acme/widget", Number: 1, Role: RoleRequested}},
+		OtherPRs: []PRLink{{Repo: "acme/widget", Number: 2, Role: RoleAuthor}},
+		Updated:  time.Now(),
+	}
+	h := newServer(board, "")
+	get := func(remote string) string {
+		req := httptest.NewRequest("GET", "/", nil)
+		req.Host = "localhost"
+		req.RemoteAddr = remote
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec.Body.String()
+	}
+	if n := strings.Count(get("127.0.0.1:1234"), `data-add-repo="acme/widget"`); n != 1 {
+		t.Errorf("local request has %d add buttons, want 1 (Other repos only)", n)
+	}
+	if strings.Contains(get("192.0.2.1:1234"), "data-add-repo=") {
+		t.Error("a viewer should not get add buttons")
 	}
 }

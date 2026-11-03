@@ -330,6 +330,8 @@ document.addEventListener("click", async (e) => {
   if (stop) return stopSession(stop);
   const clean = e.target.closest("[data-cleanup]");
   if (clean) return cleanUp(clean);
+  const add = e.target.closest("[data-add-repo]");
+  if (add) return addRepo(add);
   const open = e.target.closest("[data-attach]");
   if (open) {
     let ok = false;
@@ -363,6 +365,18 @@ async function action(button, title, run) {
   if (!r.ok) return showError(title, typeof r.body === "string" ? r.body : "");
   flashIcon(button, "ok", r.done);
   setTimeout(check, 1500);
+}
+function addRepo(button) {
+  const repo = button.dataset.addRepo;
+  const same = document.querySelectorAll("[data-add-repo]");
+  for (const b of same) if (b !== button && b.dataset.addRepo === repo) setBusy(b, true);
+  return action(button, "Could not add " + repo, async () => {
+    const r = await post("/repos/add", { repo });
+    if (r.ok) r.done = r.body.cloned ? "Cloned into " + r.body.path + " and added" : "Added " + r.body.path;
+    return r;
+  }).finally(() => {
+    for (const b of same) if (b !== button && b.dataset.addRepo === repo) setBusy(b, false);
+  });
 }
 function startSession(button) {
   const key = button.dataset.start;

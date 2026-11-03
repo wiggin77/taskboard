@@ -77,6 +77,9 @@ type server struct {
 
 	mu   sync.Mutex
 	busy map[string]bool
+
+	// cfgMu serializes read-modify-write changes to the config file.
+	cfgMu sync.Mutex
 }
 
 type group struct {
@@ -85,8 +88,9 @@ type group struct {
 }
 
 type prSection struct {
-	Name string
-	PRs  []PRLink
+	Name   string
+	PRs    []PRLink
+	CanAdd bool
 }
 
 type navItem struct {
@@ -206,6 +210,7 @@ func newServer(board *Board, configPath string) http.Handler {
 	mux.HandleFunc("POST /review/cleanup/{name}", s.reviewCleanup)
 	mux.HandleFunc("POST /refresh", s.refresh)
 	mux.HandleFunc("POST /highlight", s.highlight)
+	mux.HandleFunc("POST /repos/add", s.addRepo)
 	mux.HandleFunc("GET /term/{id}", s.termPage)
 	mux.HandleFunc("GET /term/{id}/ws", s.termSocket)
 	mux.HandleFunc("GET /static/{file}", s.static)
@@ -263,7 +268,7 @@ func (s *server) index(w http.ResponseWriter, r *http.Request) {
 			data.Groups = append(data.Groups, group{Name: name, Tasks: tasks})
 		}
 	}
-	for _, sec := range []prSection{{"Reviews", snap.Reviews}, {"Other repos", snap.OtherPRs}} {
+	for _, sec := range []prSection{{Name: "Reviews", PRs: snap.Reviews}, {Name: "Other repos", PRs: snap.OtherPRs, CanAdd: data.CanAct}} {
 		if len(sec.PRs) > 0 {
 			data.PRSections = append(data.PRSections, sec)
 		}
@@ -700,11 +705,16 @@ func (s *server) saveSettings(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if err := SaveConfig(s.configPath, cfg); err != nil {
+	s.cfgMu.Lock()
+	err = SaveConfig(s.configPath, cfg)
+	if err == nil {
+		s.board.SetConfig(cfg)
+	}
+	s.cfgMu.Unlock()
+	if err != nil {
 		http.Error(w, "save "+s.configPath+": "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	s.board.SetConfig(cfg)
 	w.Header().Set("Content-Type", "application/json")
 	restart := cfg.Listen != s.listen || cfg.TLSListen != s.tlsListen || cfg.TLSDir != s.tlsDir
 	json.NewEncoder(w).Encode(map[string]bool{"restart": restart})
@@ -759,4 +769,55 @@ func render(w http.ResponseWriter, r *http.Request, name string, data any) {
 	gz := gzip.NewWriter(w)
 	gz.Write(buf.Bytes())
 	gz.Close()
+}
+
+// addRepo adds a repo listed under Other repos to repos, cloning its checkout into repos_dir when missing.
+func (s *server) addRepo(w http.ResponseWriter, r *http.Request) {
+	if !s.allowAction(w, r) {
+		return
+	}
+	name := r.FormValue("repo")
+	rc, dir, err := addRepoPlan(s.board.Config(), s.board.Snapshot(), name)
+	switch {
+	case errors.Is(err, errNotListed):
+		http.Error(w, name+" is not under Other repos", http.StatusNotFound)
+		return
+	case err != nil:
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
+	release, ok := s.claim(w, "repo:"+name)
+	if !ok {
+		return
+	}
+	defer release()
+	// A page reload must not abort a clone.
+	ctx, cancel := context.WithTimeout(context.Background(), cloneTimeout)
+	defer cancel()
+	cloned, err := ensureCheckout(ctx, name, dir)
+	if errors.Is(err, errCheckoutMismatch) {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	s.cfgMu.Lock()
+	defer s.cfgMu.Unlock()
+	cfg := s.board.Config()
+	if cfg.hasRepo(name) {
+		http.Error(w, name+" is already in your repos", http.StatusConflict)
+		return
+	}
+	next, err := withRepo(cfg, rc)
+	if err == nil {
+		err = SaveConfig(s.configPath, next)
+	}
+	if err != nil {
+		http.Error(w, "save "+s.configPath+": "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	s.board.SetConfig(next)
+	writeJSON(w, http.StatusOK, map[string]any{"repo": name, "path": shortenHome(dir), "cloned": cloned})
 }
