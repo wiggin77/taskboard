@@ -34,6 +34,7 @@ var templates = template.Must(template.New("").Funcs(template.FuncMap{
 	"shortHome":    shortenHome,
 	"taskControls": taskControls,
 	"prControls":   prControls,
+	"repoRow":      repoRow,
 }).ParseFS(templateFS, "templates/*.html"))
 
 func slug(name string) string {
@@ -170,7 +171,17 @@ type settingsData struct {
 	ConfigPath string
 	Listen     string
 	TLSListen  string
-	NewRepo    RepoConfig
+	NewRepo    repoField
+}
+
+// repoField is a repo with the path as the settings page shows it.
+type repoField struct {
+	RepoConfig
+	Path string
+}
+
+func repoRow(c *Config, r RepoConfig) repoField {
+	return repoField{RepoConfig: r, Path: c.displayPath(r.Path)}
 }
 
 type planData struct {
@@ -670,7 +681,8 @@ func (s *server) settings(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "settings need a browser on the taskboard machine or a client certificate", http.StatusForbidden)
 		return
 	}
-	render(w, r, "settings.html", settingsData{Config: s.board.Config(), ConfigPath: s.configPath, Listen: s.listen, TLSListen: s.tlsListen})
+	cfg := s.board.Config()
+	render(w, r, "settings.html", settingsData{Config: cfg, NewRepo: repoRow(cfg, RepoConfig{}), ConfigPath: s.configPath, Listen: s.listen, TLSListen: s.tlsListen})
 }
 
 func (s *server) saveSettings(w http.ResponseWriter, r *http.Request) {
