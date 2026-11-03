@@ -49,6 +49,16 @@ const (
 	maxListed     = 20
 )
 
+// checkedOut returns a copy of cfg with only the repos whose folder exists. A missing folder makes every git
+// command for that repo fail, and that must not block actions on another repo.
+func checkedOut(cfg *Config) *Config {
+	next := *cfg
+	next.Repos = slices.DeleteFunc(slices.Clone(cfg.Repos), func(r RepoConfig) bool {
+		return r.Path != "" && missingCheckout(r)
+	})
+	return &next
+}
+
 func localRepos(cfg *Config) []RepoConfig {
 	var repos []RepoConfig
 	for _, r := range cfg.Repos {
@@ -157,7 +167,7 @@ func defaultBranch(key, summary string) string {
 
 func listBranches(ctx context.Context, cfg *Config) (map[string][]string, error) {
 	branches := map[string][]string{}
-	for _, r := range localRepos(cfg) {
+	for _, r := range localRepos(checkedOut(cfg)) {
 		out, err := runCmd(ctx, r.Dir(), "git", "for-each-ref", "--sort=-committerdate", "--format=%(refname:short)", "refs/heads")
 		if err != nil {
 			return nil, fmt.Errorf("%s branches: %w", r.Name, err)
@@ -178,7 +188,7 @@ func liveTask(ctx context.Context, cfg *Config, t Task) (Task, error) {
 		}
 	}
 	t.Worktree = nil
-	for _, r := range localRepos(cfg) {
+	for _, r := range localRepos(checkedOut(cfg)) {
 		wts, err := listWorktrees(ctx, cfg, r)
 		if err != nil {
 			return t, fmt.Errorf("%s worktrees: %w", r.Name, err)
