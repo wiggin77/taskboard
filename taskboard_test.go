@@ -1232,11 +1232,26 @@ func TestControls(t *testing.T) {
 	if c := taskControls(Task{Key: "MM-1", Stage: StageCoding, Session: sess}, indexData{}); c.Native || c.Web || c.Stop || c.Start != "" {
 		t.Errorf("viewer gets no actions: %+v", c)
 	}
+	if c := taskControls(Task{Key: "MM-1", Stage: StageTicket, PR: &PR{Repo: "o/mm"}, NoCheckout: true}, local); c.Clone != "Clone repo" || c.Repo != "o/mm" || c.Start != "" || c.Native || c.Web {
+		t.Errorf("task with a missing checkout: %+v", c)
+	}
+	if c := taskControls(Task{Key: "o/mm#5", NoTicket: true, Stage: StageChangesRequested, PR: &PR{Repo: "o/mm"}, NoCheckout: true}, remote); c.Clone != "Clone repo" || c.Web {
+		t.Errorf("PR without a ticket and a missing checkout: %+v", c)
+	}
+	if c := taskControls(Task{Key: "MM-1", Stage: StageTicket, PR: &PR{Repo: "o/mm"}, NoCheckout: true}, indexData{}); c.Clone != "" {
+		t.Errorf("viewer gets no clone button: %+v", c)
+	}
 	if c := prControls(PRLink{Number: 1}, local); c.ID != "" {
 		t.Errorf("PR without a local checkout: %+v", c)
 	}
 	if c := prControls(PRLink{ReviewName: "mm-pr1", Role: RoleRequested}, remote); c.Start != "Start review" || c.Path != "/review" || !c.Web || c.Native || c.Clean != "" {
 		t.Errorf("new review, remote browser: %+v", c)
+	}
+	if c := prControls(PRLink{Repo: "o/mm", ReviewName: "mm-pr1", NoCheckout: true}, remote); c.Clone != "Clone repo" || c.Repo != "o/mm" || c.Start != "" || c.Web {
+		t.Errorf("missing checkout: %+v", c)
+	}
+	if c := prControls(PRLink{ReviewName: "mm-pr1", NoCheckout: true}, indexData{}); c.Clone != "" {
+		t.Errorf("viewer gets no clone button: %+v", c)
 	}
 	if c := prControls(PRLink{ReviewName: "mm-pr1", Role: RoleReviewed, Review: &Review{Worktree: &Worktree{}}}, local); c.Start != "Resume review" || c.Clean == "" {
 		t.Errorf("review with a worktree: %+v", c)

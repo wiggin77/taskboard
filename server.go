@@ -128,10 +128,18 @@ type controls struct {
 	Stop    bool
 	Start   string
 	Clean   string
+	Repo    string
+	Clone   string
 }
 
 func taskControls(t Task, d indexData) controls {
 	c := controls{ID: t.Key, Session: t.Session != nil}
+	if t.NoCheckout && t.PR != nil && t.Session == nil && t.Worktree == nil && (t.CanStart() || t.NoTicket && t.Stage != StageDone) {
+		if d.CanAct {
+			c.Repo, c.Clone = t.PR.Repo, "Clone repo"
+		}
+		return c
+	}
 	if c.Session {
 		c.Native, c.Web, c.Stop = d.Native, d.CanAct, d.CanAct
 	} else if d.CanAct && t.CanStart() {
@@ -151,7 +159,13 @@ func prControls(p PRLink, d indexData) controls {
 	if p.ReviewName == "" {
 		return controls{}
 	}
-	c := controls{ID: p.ReviewName, Path: "/review"}
+	c := controls{ID: p.ReviewName, Path: "/review", Repo: p.Repo}
+	if p.NoCheckout {
+		if d.CanAct {
+			c.Clone = "Clone repo"
+		}
+		return c
+	}
 	var wt *Worktree
 	if p.Review != nil {
 		c.Session, wt = p.Review.Session != nil, p.Review.Worktree
@@ -212,6 +226,7 @@ func newServer(board *Board, configPath string) http.Handler {
 	mux.HandleFunc("POST /refresh", s.refresh)
 	mux.HandleFunc("POST /highlight", s.highlight)
 	mux.HandleFunc("POST /repos/add", s.addRepo)
+	mux.HandleFunc("POST /repos/clone", s.cloneRepo)
 	mux.HandleFunc("GET /term/{id}", s.termPage)
 	mux.HandleFunc("GET /term/{id}/ws", s.termSocket)
 	mux.HandleFunc("GET /static/{file}", s.static)
@@ -825,4 +840,41 @@ func (s *server) addRepo(w http.ResponseWriter, r *http.Request) {
 	}
 	s.board.SetConfig(next)
 	writeJSON(w, http.StatusOK, map[string]any{"repo": name, "path": shortenHome(dir), "cloned": cloned})
+}
+
+// cloneRepo clones a repo in repos into its configured folder when that folder is missing.
+func (s *server) cloneRepo(w http.ResponseWriter, r *http.Request) {
+	if !s.allowAction(w, r) {
+		return
+	}
+	name := r.FormValue("repo")
+	rc, ok := s.board.Config().repo(name)
+	if !ok || rc.Path == "" {
+		http.Error(w, name+" has no configured folder", http.StatusNotFound)
+		return
+	}
+	if !repoNameRE.MatchString(rc.Name) {
+		http.Error(w, rc.Name+" is not an owner/repo name", http.StatusBadRequest)
+		return
+	}
+	release, ok := s.claim(w, "repo:"+rc.Name)
+	if !ok {
+		return
+	}
+	defer release()
+	// A page reload must not abort a clone.
+	ctx, cancel := context.WithTimeout(context.Background(), cloneTimeout)
+	defer cancel()
+	dir := rc.Dir()
+	cloned, err := ensureCheckout(ctx, rc.Name, dir)
+	switch {
+	case errors.Is(err, errCheckoutMismatch):
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	case err != nil:
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	s.board.LocalChanged(context.Background())
+	writeJSON(w, http.StatusOK, map[string]any{"repo": rc.Name, "path": shortenHome(dir), "cloned": cloned})
 }

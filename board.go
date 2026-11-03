@@ -366,7 +366,15 @@ func (b *Board) compose(ctx context.Context, r *fetched, loc *localState, gen ui
 		}
 	}
 	errs := append(slices.Clone(r.errs), loc.errs...)
-	snap := Snapshot{Tasks: buildTasks(r.cfg, s, time.Now()), Reviews: append(reviews, leftovers...), OtherPRs: r.otherPRs, Errors: errs, Updated: r.updated}
+	tasks := buildTasks(r.cfg, s, time.Now())
+	for i := range tasks {
+		if pr := tasks[i].PR; pr != nil {
+			if rc, ok := r.cfg.repo(pr.Repo); ok {
+				tasks[i].NoCheckout = missingCheckout(rc)
+			}
+		}
+	}
+	snap := Snapshot{Tasks: tasks, Reviews: append(reviews, leftovers...), OtherPRs: r.otherPRs, Errors: errs, Updated: r.updated}
 	snap.Version = snapshotVersion(snap)
 	b.mu.Lock()
 	b.snap = snap
@@ -404,7 +412,7 @@ func repoPRs(ctx context.Context, cfg *Config, repo RepoConfig) ([]PR, []string)
 func scanLocal(ctx context.Context, cfg *Config) localState {
 	l := localState{windows: listWindows(ctx, cfg)}
 	for _, repo := range cfg.Repos {
-		if repo.Path == "" {
+		if repo.Path == "" || missingCheckout(repo) {
 			continue
 		}
 		wts, err := listWorktrees(ctx, cfg, repo)

@@ -528,6 +528,7 @@ func attachReviews(cfg *Config, links []PRLink, wts []Worktree, windows []Sessio
 		if r, ok := cfg.repo(l.Repo); ok && r.Path != "" {
 			k := ref{r.Name, l.Number}
 			l.ReviewName = reviewName(r, l.Number)
+			l.NoCheckout = missingCheckout(r)
 			l.Review = found[k]
 			used[k] = true
 		}
@@ -550,6 +551,15 @@ func attachReviews(cfg *Config, links []PRLink, wts []Worktree, windows []Sessio
 		})
 	}
 	return out, leftovers
+}
+
+// missingCheckout reports whether the repo's configured folder does not exist.
+func missingCheckout(r RepoConfig) bool {
+	if r.Path == "" {
+		return false
+	}
+	_, err := os.Lstat(r.Dir())
+	return errors.Is(err, os.ErrNotExist)
 }
 
 func liveReview(ctx context.Context, cfg *Config, l PRLink) (PRLink, error) {
