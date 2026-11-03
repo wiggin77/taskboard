@@ -1727,6 +1727,11 @@ func TestRemoteMatches(t *testing.T) {
 		"git@github.com:acme/widget.git":       true,
 		"ssh://git@github.com/acme/widget":     true,
 		"https://github.com/other/widget.git":  false,
+		"https://gitlab.com/acme/widget.git":   false,
+		"git@gitlab.com:acme/widget.git":       false,
+		"https://me@github.com/acme/widget":    true,
+		"ssh://git@github.com:22/acme/widget":  true,
+		"github.com/acme/widget":               false,
 		"https://github.com/acme/big-widget":   false,
 		"":                                     false,
 	} {
@@ -1817,5 +1822,25 @@ func TestIndexAddRepoButton(t *testing.T) {
 	}
 	if strings.Contains(get("192.0.2.1:1234"), "data-add-repo=") {
 		t.Error("a viewer should not get add buttons")
+	}
+}
+
+func TestStaleClone(t *testing.T) {
+	now := time.Now()
+	old := now.Add(-cloneTimeout - time.Minute)
+	for _, c := range []struct {
+		name     string
+		modified time.Time
+		want     bool
+	}{
+		{".foo.clone-123", old, true},
+		{".foo.clone-123", now.Add(-time.Minute), false},
+		{".bar.clone-123", old, false},
+		{"foo", old, false},
+		{".foo.clone-123", now.Add(-cloneTimeout + time.Minute), false},
+	} {
+		if got := staleClone(c.name, "foo", c.modified, now); got != c.want {
+			t.Errorf("staleClone(%q, age %v) = %v, want %v", c.name, now.Sub(c.modified), got, c.want)
+		}
 	}
 }
