@@ -368,14 +368,20 @@ async function action(button, title, run) {
 }
 function addRepo(button) {
   const repo = button.dataset.addRepo;
-  const same = document.querySelectorAll("[data-add-repo]");
-  for (const b of same) if (b !== button && b.dataset.addRepo === repo) setBusy(b, true);
+  const same = [...document.querySelectorAll("[data-add-repo]")].filter(b => b.dataset.addRepo === repo);
+  let added = false;
+  for (const b of same) if (b !== button) setBusy(b, true);
   return action(button, "Could not add " + repo, async () => {
     const r = await post("/repos/add", { repo });
     if (r.ok) r.done = r.body.cloned ? "Cloned into " + r.body.path + " and added" : "Added " + r.body.path;
+    added = r.ok;
     return r;
   }).finally(() => {
-    for (const b of same) if (b !== button && b.dataset.addRepo === repo) setBusy(b, false);
+    // The rows stay until the refresh with the new config lands, and another click would only report the repo as already added.
+    for (const b of same) {
+      if (b !== button) setBusy(b, false);
+      if (added) b.disabled = true;
+    }
   });
 }
 function startSession(button) {

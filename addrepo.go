@@ -89,6 +89,11 @@ func ensureCheckout(ctx context.Context, repo, dir string) (cloned bool, err err
 	if err != nil {
 		return false, err
 	}
+	// MkdirTemp makes the folder 0700, and git clone keeps an existing folder's mode.
+	if err := os.Chmod(tmp, 0o755); err != nil {
+		os.RemoveAll(tmp)
+		return false, err
+	}
 	if _, err := runCmd(ctx, parent, "gh", "repo", "clone", repo, tmp); err != nil {
 		os.RemoveAll(tmp)
 		return false, err

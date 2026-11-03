@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -809,6 +810,10 @@ func (s *server) addRepo(w http.ResponseWriter, r *http.Request) {
 	if cfg.hasRepo(name) {
 		http.Error(w, name+" is already in your repos", http.StatusConflict)
 		return
+	}
+	// repos_dir can change while the clone runs; the entry must still name the folder that was cloned.
+	if filepath.Join(cfg.reposDir(), rc.Path) != dir {
+		rc.Path = shortenHome(dir)
 	}
 	next, err := withRepo(cfg, rc)
 	if err == nil {
