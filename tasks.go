@@ -71,6 +71,8 @@ type Task struct {
 	Plan        *Plan
 	Session     *Session
 	Worktree    *Worktree
+	// NoCheckout is true when the PR's repo has a configured folder that does not exist on disk.
+	NoCheckout bool
 }
 
 func (t Task) StageLabel() string { return stageInfo[t.Stage].label }
