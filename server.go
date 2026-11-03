@@ -130,10 +130,14 @@ type controls struct {
 	Clean   string
 	Repo    string
 	Clone   string
+	Jira    string
 }
 
 func taskControls(t Task, d indexData) controls {
 	c := controls{ID: t.Key, Session: t.Session != nil}
+	if d.CanAct && t.NoTicket && t.PR != nil && t.Stage != StageDone {
+		c.Jira = "Create Jira ticket"
+	}
 	if t.NoCheckout && t.PR != nil && t.Session == nil && t.Worktree == nil && (t.CanStart() || t.NoTicket && t.Stage != StageDone) {
 		if d.CanAct {
 			c.Repo, c.Clone = t.PR.Repo, "Clone repo"
@@ -227,6 +231,7 @@ func newServer(board *Board, configPath string) http.Handler {
 	mux.HandleFunc("POST /highlight", s.highlight)
 	mux.HandleFunc("POST /repos/add", s.addRepo)
 	mux.HandleFunc("POST /repos/clone", s.cloneRepo)
+	mux.HandleFunc("POST /jira/create", s.createJira)
 	mux.HandleFunc("GET /term/{id}", s.termPage)
 	mux.HandleFunc("GET /term/{id}/ws", s.termSocket)
 	mux.HandleFunc("GET /static/{file}", s.static)
@@ -877,4 +882,40 @@ func (s *server) cloneRepo(w http.ResponseWriter, r *http.Request) {
 	}
 	s.board.LocalChanged(context.Background())
 	writeJSON(w, http.StatusOK, map[string]any{"repo": rc.Name, "path": shortenHome(dir), "cloned": cloned})
+}
+
+func (s *server) createJira(w http.ResponseWriter, r *http.Request) {
+	if !s.allowAction(w, r) {
+		return
+	}
+	t, ok := s.board.Task(r.FormValue("id"))
+	if !ok || !t.NoTicket || t.PR == nil {
+		http.NotFound(w, r)
+		return
+	}
+	cfg := s.board.Config()
+	project := cfg.ProjectKeys[0]
+	if p := r.FormValue("project"); p != "" {
+		if !slices.Contains(cfg.ProjectKeys, p) {
+			http.Error(w, p+" is not in project_keys", http.StatusBadRequest)
+			return
+		}
+		project = p
+	}
+	release, ok := s.claim(w, t.Key)
+	if !ok {
+		return
+	}
+	defer release()
+	ctx, cancel := actionContext()
+	defer cancel()
+	key, err := createJiraIssue(ctx, cfg, project, *t.PR)
+	if key != "" {
+		s.board.LocalChanged(context.Background())
+	}
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"key": key, "url": cfg.issueURL(key)})
 }
