@@ -1,10 +1,6 @@
-{{define "prsections"}}{{$page := .}}{{range .PRSections}}
-<section id="{{slug .Name}}">
-  <h2>{{.Name}} <span class="count">{{len .PRs}}</span></h2>
-  <ul class="tasks">
-  {{range .PRs}}
-    {{$id := .ID}}<li class="task tone-{{.Tone}}{{if index $page.Highlighted $id}} highlighted{{end}}" data-id="{{$id}}">
-      {{if $page.CanAct}}{{template "highlightbutton" (index $page.Highlighted $id)}}{{end}}
+{{define "prrow"}}{{$p := .Page}}{{$id := .ID}}
+    <li class="task tone-{{.Tone}}{{if index $p.Highlighted $id}} highlighted{{end}}" data-id="{{$id}}">
+      {{if $p.CanAct}}{{template "highlightbutton" (index $p.Highlighted $id)}}{{end}}
       <div class="title">
         <p>{{.Title}}</p>
       </div>
@@ -17,10 +13,7 @@
         {{if .JiraURL}}<a href="{{.JiraURL}}" target="{{.JiraURL}}" data-tab title="Jira">{{.Key}}</a>{{end}}
         {{with .Meta}}<span>{{.}}</span>{{end}}
         {{with .Review}}{{with .Worktree}}<span class="meta" title="{{.Path}}">worktree {{.Dir}}</span>{{end}}{{end}}
-        {{template "controls" (prControls . $page)}}
+        {{template "controls" (prControls .PRLink $p)}}
       </div>
     </li>
-  {{end}}
-  </ul>
-</section>
-{{end}}{{end}}
+{{end}}
