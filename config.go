@@ -42,7 +42,7 @@ type Config struct {
 const (
 	defaultAgent       = "claude"
 	defaultAgentResume = "claude --continue"
-	defaultTmuxSession = "work"
+	defaultTmuxSession = "taskboard"
 	defaultPlansDir    = "plans"
 )
 

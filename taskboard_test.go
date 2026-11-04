@@ -709,7 +709,7 @@ func TestIndexGzipAndVersion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(body), "<title>Task board</title>") {
+	if !strings.Contains(string(body), "<title>taskboard</title>") {
 		t.Error("gzipped body is not the board page")
 	}
 	<-board.wake
@@ -1115,7 +1115,7 @@ func TestSessionConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.tmuxSession() != "work" {
+	if cfg.tmuxSession() != "taskboard" {
 		t.Errorf("tmux_session default = %q", cfg.tmuxSession())
 	}
 	for _, bad := range []string{
@@ -1503,7 +1503,7 @@ func TestDefaultsAreNotSaved(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.jql() != defaultJQL || cfg.tmuxSession() != "work" || cfg.agent(false) != "claude" || cfg.Repos[0].plansDir() != "plans" {
+	if cfg.jql() != defaultJQL || cfg.tmuxSession() != "taskboard" || cfg.agent(false) != "claude" || cfg.Repos[0].plansDir() != "plans" {
 		t.Errorf("defaults not applied: jql %q, session %q, agent %q, plans %q", cfg.jql(), cfg.tmuxSession(), cfg.agent(false), cfg.Repos[0].plansDir())
 	}
 	path := t.TempDir() + "/taskboard.json"
@@ -1511,7 +1511,7 @@ func TestDefaultsAreNotSaved(t *testing.T) {
 		t.Fatal(err)
 	}
 	raw, _ := os.ReadFile(path)
-	for _, def := range []string{"claude", `"work"`, `"plans"`, "statusCategory"} {
+	for _, def := range []string{"claude", `"taskboard"`, `"plans"`, "statusCategory"} {
 		if strings.Contains(string(raw), def) {
 			t.Errorf("saved config contains the default %s; defaults belong in placeholders:\n%s", def, raw)
 		}
@@ -1620,5 +1620,214 @@ func TestHighlightEndpoint(t *testing.T) {
 	}
 	if page := do("GET", "/", "192.0.2.1:1234", false, "").Body.String(); strings.Contains(page, "data-highlight ") {
 		t.Error("a viewer should not get highlight toggles")
+	}
+}
+
+func TestDecodeEpicFields(t *testing.T) {
+	out := []byte(`[{"key":"MM-10","fields":{"summary":"Epic","status":{"name":"Open"},"issuetype":{"name":"Epic","hierarchyLevel":1}}},
+{"key":"MM-11","fields":{"summary":"Story","status":{"name":"Open"},"issuetype":{"name":"Story","hierarchyLevel":0},
+ "parent":{"key":"MM-10","fields":{"summary":"Epic","issuetype":{"name":"Epic","hierarchyLevel":1}}},"assignee":{"displayName":"Jack"}}},
+{"key":"MM-12","fields":{"summary":"Subtask","status":{"name":"Open"},"issuetype":{"name":"Sub-task","hierarchyLevel":-1},
+ "parent":{"key":"MM-11","fields":{"summary":"Story","issuetype":{"name":"Story","hierarchyLevel":0}}},"assignee":null}}]`)
+	issues, err := decodeIssues(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []JiraIssue{
+		{Key: "MM-10", Summary: "Epic", Status: "Open", Epic: true},
+		{Key: "MM-11", Summary: "Story", Status: "Open", Parent: "MM-10", ParentSummary: "Epic", Assignee: "Jack"},
+		{Key: "MM-12", Summary: "Subtask", Status: "Open"},
+	}
+	if !slices.Equal(issues, want) {
+		t.Errorf("issues = %+v, want %+v", issues, want)
+	}
+}
+
+func TestBuildTasksEpicFields(t *testing.T) {
+	cfg := testConfig(t)
+	tasks := buildTasks(cfg, sources{issues: map[string]JiraIssue{
+		"MM-10": {Key: "MM-10", Summary: "Epic", Epic: true},
+		"MM-11": {Key: "MM-11", Summary: "Story", Parent: "MM-10", ParentSummary: "Epic"},
+	}}, time.Now())
+	byKey := map[string]Task{}
+	for _, task := range tasks {
+		byKey[task.Key] = task
+	}
+	if !byKey["MM-10"].Epic || byKey["MM-10"].Parent != "" {
+		t.Errorf("epic = %+v", byKey["MM-10"])
+	}
+	if c := byKey["MM-11"]; c.Epic || c.Parent != "MM-10" || c.ParentSummary != "Epic" || c.ParentURL != cfg.issueURL("MM-10") {
+		t.Errorf("child = %+v", c)
+	}
+}
+
+func TestBuildEpics(t *testing.T) {
+	cfg := testConfig(t)
+	now := time.Now()
+	tasks := buildTasks(cfg, sources{
+		issues: map[string]JiraIssue{
+			"MM-10": {Key: "MM-10", Summary: "Epic", Epic: true},
+			"MM-11": {Key: "MM-11", Summary: "Coding", Parent: "MM-10", Updated: now},
+			"MM-12": {Key: "MM-12", Summary: "Failing", Parent: "MM-10", Updated: now},
+			"MM-13": {Key: "MM-13", Summary: "Not a child"},
+			"MM-14": {Key: "MM-14", Summary: "Done mine", Parent: "MM-10", Done: true, Updated: now},
+			"MM-20": {Key: "MM-20", Summary: "Done epic", Epic: true, Done: true, Updated: now},
+		},
+		prs:       []PR{{Key: "MM-12", State: "OPEN", CI: CIFailing}},
+		worktrees: []Worktree{{Key: "MM-11", Path: "/src/mm-MM-11"}},
+	}, now)
+	children := map[string][]JiraIssue{
+		"MM-10": {
+			{Key: "MM-12", Summary: "Failing"},
+			{Key: "MM-30", Summary: "Done theirs", Status: "Closed", Done: true, Assignee: "Jack"},
+			{Key: "MM-31", Summary: "Open theirs", Status: "Open", Assignee: "Jack"},
+		},
+		"MM-20": {{Key: "MM-32", Summary: "Never shown"}},
+	}
+	groups := buildEpics(cfg, tasks, children)
+	if len(groups) != 1 || groups[0].Task.Key != "MM-10" {
+		t.Fatalf("groups = %+v, want only the open epic MM-10", groups)
+	}
+	g := groups[0]
+	var keys []string
+	for _, c := range g.Children {
+		keys = append(keys, c.Key)
+	}
+	if want := []string{"MM-12", "MM-11", "MM-31", "MM-14", "MM-30"}; !slices.Equal(keys, want) {
+		t.Errorf("children = %v, want %v", keys, want)
+	}
+	if g.Open != 3 || g.Done != 2 {
+		t.Errorf("open %d done %d, want 3 and 2", g.Open, g.Done)
+	}
+	if c := g.Children[0]; !c.OnBoard || c.StageLabel != "CI failing" || c.Tone != "fail" {
+		t.Errorf("on-board child = %+v", c)
+	}
+	if c := g.Children[2]; c.OnBoard || c.Assignee != "Jack" || c.JiraURL != cfg.issueURL("MM-31") {
+		t.Errorf("off-board child = %+v", c)
+	}
+}
+
+func TestTaskGroup(t *testing.T) {
+	cases := []struct {
+		task Task
+		want string
+	}{
+		{Task{Key: "MM-1", Epic: true, Stage: StageTicket}, groupEpics},
+		{Task{Key: "MM-2", Epic: true, Stage: StageInReview, PR: &PR{}}, groupWaiting},
+		{Task{Key: "MM-3", Epic: true, Stage: StageDone, JiraDone: true}, groupDone},
+		{Task{Key: "MM-4", Stage: StageTicket}, groupNotStarted},
+	}
+	for _, c := range cases {
+		if got := taskGroup(c.task); got != c.want {
+			t.Errorf("%s: group %q, want %q", c.task.Key, got, c.want)
+		}
+	}
+}
+
+func TestSectionOrder(t *testing.T) {
+	cfg := testConfig(t)
+	board := NewBoard(cfg)
+	board.snap = Snapshot{
+		Tasks: []Task{
+			{Key: "MM-1", Stage: StageCIFailing},
+			{Key: "MM-2", Stage: StageInReview},
+			{Key: "MM-3", Stage: StageCoding},
+			{Key: "MM-4", Stage: StageCleanup},
+			{Key: "MM-5", Stage: StageTicket},
+			{Key: "MM-6", Stage: StageDone},
+		},
+		Epics:    []EpicGroup{{Task: Task{Key: "MM-7", Epic: true, Stage: StageTicket}}},
+		Reviews:  []PRLink{{Repo: "a/b", Number: 1}},
+		OtherPRs: []PRLink{{Repo: "c/d", Number: 2}},
+		Updated:  time.Now(),
+	}
+	req := httptest.NewRequest("GET", "/", nil)
+	req.Host = "localhost"
+	req.RemoteAddr = "127.0.0.1:1234"
+	rec := httptest.NewRecorder()
+	newServer(board, "").ServeHTTP(rec, req)
+	page := rec.Body.String()
+	order := []string{"Needs you", "Reviews", "Waiting on others", "In progress", "Needs clean-up", "Epics", "Not started", "Other repos", "Done"}
+	last := -1
+	for _, name := range order {
+		i := strings.Index(page, `<section id="`+slug(name)+`"`)
+		if i < last {
+			t.Errorf("section %s is out of order", name)
+		}
+		last = i
+	}
+	for _, name := range order {
+		sec := page[strings.Index(page, `<section id="`+slug(name)+`"`):]
+		sec = strings.TrimSpace(sec[strings.Index(sec, ">")+1:])
+		want := "<details open><summary>"
+		switch name {
+		case "Done":
+			want = "<details><summary>"
+		case "Epics":
+			want = "<h2>"
+		}
+		if !strings.HasPrefix(sec, want) {
+			t.Errorf("section %s should start with %s", name, want)
+		}
+	}
+	nav := page[:strings.Index(page, "</nav>")]
+	last = -1
+	for _, name := range order {
+		i := strings.Index(nav, `href="#`+slug(name)+`"`)
+		if i < last {
+			t.Errorf("nav link %s is out of order", name)
+		}
+		last = i
+	}
+}
+
+func TestIndexEpics(t *testing.T) {
+	cfg := testConfig(t)
+	board := NewBoard(cfg)
+	tasks := buildTasks(cfg, sources{
+		issues: map[string]JiraIssue{
+			"MM-10": {Key: "MM-10", Summary: "Big epic", Epic: true},
+			"MM-11": {Key: "MM-11", Summary: "My story", Parent: "MM-10", ParentSummary: "Big epic"},
+			"MM-12": {Key: "MM-12", Summary: "Orphan story", Parent: "MM-99", ParentSummary: "Someone's epic"},
+		},
+	}, time.Now())
+	board.snap = Snapshot{
+		Tasks:   tasks,
+		Epics:   buildEpics(cfg, tasks, map[string][]JiraIssue{"MM-10": {{Key: "MM-40", Summary: "Their story", Status: "Open", Assignee: "Jack"}}}),
+		Updated: time.Now(),
+	}
+	h := newServer(board, "")
+	get := func(remote string) string {
+		req := httptest.NewRequest("GET", "/", nil)
+		req.Host = "localhost"
+		req.RemoteAddr = remote
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec.Body.String()
+	}
+	page := get("127.0.0.1:1234")
+	for _, want := range []string{
+		`id="epic-MM-10"`,
+		`<span class="badge">Epic</span>Big epic`,
+		`href="#epic-MM-10" data-to-epic="MM-10"`,
+		`href="` + cfg.issueURL("MM-99") + `"`,
+		`data-goto="MM-11"`,
+		`Open, Jack`,
+		`href="#epics"`,
+	} {
+		if !strings.Contains(page, want) {
+			t.Errorf("index is missing %s", want)
+		}
+	}
+	notStarted := page[strings.Index(page, `id="not-started"`):]
+	notStarted = notStarted[:strings.Index(notStarted, "</section>")]
+	if strings.Contains(notStarted, `data-id="MM-10"`) {
+		t.Error("an epic with no work of its own should not be in Not started")
+	}
+	if strings.Count(page, `data-id="MM-11"`) != 1 {
+		t.Error("an on-board child should have one full row")
+	}
+	if viewer := get("192.0.2.1:1234"); !strings.Contains(viewer, `id="epic-MM-10"`) || strings.Contains(viewer, "data-highlight ") {
+		t.Error("a viewer should see the epics read-only")
 	}
 }
