@@ -6,7 +6,7 @@
 {{template "theme"}}
 {{template "tabs"}}
 <noscript><meta http-equiv="refresh" content="{{.RefreshSeconds}}"></noscript>
-<title>Task board</title>
+<title>taskboard</title>
 <style>
 {{template "tokens"}}
 {{template "actionstyle"}}
@@ -110,18 +110,35 @@ a:hover{text-decoration:underline}
 .icon.busy .wait{display:block;animation:spin 1s linear infinite}
 .icon.busy{cursor:progress}
 @media (prefers-reduced-motion:reduce){.icon.busy .wait{animation:none}}
+.badge{display:inline-block;margin-right:.5rem;padding:.05rem .4rem;border-radius:5px;vertical-align:1px;font-size:.6875rem;font-weight:650;line-height:1.4;
+  color:var(--link);background:color-mix(in srgb,var(--link) 13%,transparent)}
+.epic{margin:0 0 1rem;scroll-margin-top:7.5rem}
+.epic>summary{font-size:.8125rem;font-weight:550;color:var(--muted);margin:0 0 .45rem}
+.epic>summary .name{color:var(--ink);overflow-wrap:anywhere}
+.epic[open]>summary .name{display:none}
+.child{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:.25rem .65rem;padding:.5rem 1.1rem .5rem 2.1rem;
+  border-top:1px solid var(--line);font-size:.8125rem}
+.child .key{margin:0}
+.child a.key{color:var(--link)}
+.child-summary{overflow-wrap:anywhere}
+.child .meta{white-space:nowrap}
+.child-done{color:var(--muted)}
+.child-done .key,.child-done .stage{opacity:.7}
+.task.jumped{background:color-mix(in srgb,var(--link) var(--highlight-tint),var(--surface))}
 .icon.stop:hover:not(:disabled),.icon.clean:hover:not(:disabled){border-color:color-mix(in srgb,var(--fail) 50%,var(--line));color:var(--fail)}
 @media (max-width:40rem){
   .legend{display:none}
   .task{grid-template-columns:minmax(0,1fr)}
   .where{grid-column:1;grid-row:auto;max-width:20rem}
+  .child{grid-template-columns:auto minmax(0,1fr)}
+  .child .stage,.child .meta{grid-column:2}
 }
 </style>
 </head>
 <body>
 <header class="top">
   <div class="bar">
-    <h1>Task board</h1>
+    <h1>taskboard</h1>
     <div class="status">
       <span class="updated{{if .Refreshing}} refreshing{{end}}">{{if .Updated.IsZero}}Loading. This page refreshes on its own.{{else}}Updated <time datetime="{{iso .Updated}}">{{.Updated.Format "15:04"}}</time>{{if .Refreshing}}, refreshing{{end}}{{end}}</span>
       <button class="icon refresh" type="button"{{if .Refreshing}} disabled title="Refreshing" aria-label="Refreshing"{{else}} title="Refresh now" aria-label="Refresh now"{{end}}>
@@ -143,45 +160,39 @@ a:hover{text-decoration:underline}
 </div>
 {{end}}
 
-{{if and (not .Groups) (not .PRSections) (not .Updated.IsZero)}}
+{{if and (not .Sections) (not .Updated.IsZero)}}
 <p class="empty">No tasks yet. Check jira.jql, project_keys and repos in your config.</p>
 {{end}}
 
 {{$stations := .Stations}}
-{{if .PRsFirst}}{{template "prsections" .}}{{end}}
-{{range $i, $g := .Groups}}
+{{range .Sections}}
 <section id="{{slug .Name}}"{{if eq .Name "Done"}} class="done"{{end}}>
-  {{if eq .Name "Done"}}<details><summary>{{.Name}} <span class="count">{{len .Tasks}}</span></summary>
-  {{else}}<h2>{{.Name}} <span class="count">{{len .Tasks}}</span></h2>
-  {{if eq $i 0}}<div class="legend" aria-hidden="true"><span></span><ol>{{range $stations}}<li>{{.}}</li>{{end}}</ol></div>{{end}}
+  {{if .Epics}}<h2>{{.Name}} <span class="count">{{.Count}}</span></h2>
+  {{else}}<details{{if ne .Name "Done"}} open{{end}}><summary>{{.Name}} <span class="count">{{.Count}}</span></summary>{{end}}
+  {{if .Legend}}<div class="legend" aria-hidden="true"><span></span><ol>{{range $stations}}<li>{{.}}</li>{{end}}</ol></div>{{end}}
+  {{range .Epics}}
+  <details class="epic" id="epic-{{.Task.Key}}" data-epic="{{.Task.Key}}">
+    <summary><span class="name"><span class="key">{{.Task.Key}}</span>{{.Task.Summary}}</span> <span class="count">{{.Open}} open</span>{{if .Done}} <span class="count">{{.Done}} done</span>{{end}}</summary>
+    <ul class="tasks">
+    {{template "taskrow" (row .Task $)}}
+    {{range .Children}}
+      <li class="child{{if .OnBoard}} tone-{{.Tone}}{{end}}{{if .Done}} child-done{{end}}">
+        {{if .OnBoard}}<a class="key" href="#" data-goto="{{.Key}}" title="Go to its row">{{.Key}}</a>{{else}}<a class="key" href="{{.JiraURL}}" target="{{.JiraURL}}" data-tab title="Open in Jira">{{.Key}}</a>{{end}}
+        <span class="child-summary">{{.Summary}}</span>
+        {{if .OnBoard}}<span class="stage">{{.StageLabel}}</span>{{else}}<span class="meta">{{.Status}}, {{or .Assignee "unassigned"}}</span>{{end}}
+      </li>
+    {{end}}
+    </ul>
+  </details>
   {{end}}
-  <ul class="tasks">
-  {{range .Tasks}}
-    <li class="task tone-{{.Tone}}{{if index $.Highlighted .Key}} highlighted{{end}}" data-id="{{.Key}}">
-      {{if $.CanAct}}{{template "highlightbutton" (index $.Highlighted .Key)}}{{end}}
-      <div class="title">
-        <p><span class="key">{{.DisplayKey}}</span>{{.Summary}}</p>
-      </div>
-      <div class="where">
-        <p class="stage">{{.StageLabel}}</p>
-        {{template "updated" .Updated}}
-        <ol class="track" aria-label="Stage: {{.StageLabel}}">
-          {{range .Track}}<li class="{{.State}}" title="{{.Label}}"></li>{{end}}
-        </ol>
-      </div>
-      <div class="links">
-        {{if not .NoTicket}}<a href="{{.JiraURL}}" target="{{.JiraURL}}" data-tab>Jira{{with .JiraStatus}} <span class="meta">{{.}}</span>{{end}}{{if .JiraMissing}} <span class="meta">not found</span>{{end}}</a>{{end}}
-        {{with .PR}}<a href="{{.URL}}" target="{{.URL}}" data-tab>PR #{{.Number}}{{with .CI.String}} <span class="meta">{{.}}</span>{{end}}</a>{{end}}
-        {{with .Worktree}}<span class="meta" title="{{.Path}}">worktree {{.Dir}}</span>{{end}}
-        {{with .Plan}}<a href="/plan/{{.Key}}">Plan{{if .Approved}} <span class="meta">approved</span>{{end}}</a>{{end}}
-        {{template "controls" (taskControls . $)}}
-      </div>
-    </li>
-  {{end}}
-  </ul>
-  {{if eq .Name "Done"}}</details>{{end}}
+  {{with .Tasks}}<ul class="tasks">
+  {{range .}}{{template "taskrow" (row . $)}}{{end}}
+  </ul>{{end}}
+  {{with .PRs}}<ul class="tasks">
+  {{range .}}{{template "prrow" (prRow . $)}}{{end}}
+  </ul>{{end}}
+  {{if not .Epics}}</details>{{end}}
 </section>
-{{if and (eq $i 0) (not $.PRsFirst)}}{{template "prsections" $}}{{end}}
 {{end}}
 
 {{template "actions"}}
@@ -240,11 +251,31 @@ refreshButton.addEventListener("click", async () => {
 timer = setTimeout(check, refreshing ? 5000 : 15000);
 document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") check(); });
 
-const done = document.querySelector("#done details");
-if (done) {
-  try { done.open = localStorage.getItem("taskboard.doneOpen") === "1"; } catch {}
-  done.addEventListener("toggle", () => {
-    try { localStorage.setItem("taskboard.doneOpen", done.open ? "1" : "0"); } catch {}
+let sectionsOpen = {};
+try {
+  sectionsOpen = JSON.parse(localStorage.getItem("taskboard.sectionsOpen") || "{}");
+  if (localStorage.getItem("taskboard.doneOpen") === "1") sectionsOpen.done = true;
+  localStorage.removeItem("taskboard.doneOpen");
+} catch {}
+for (const details of document.querySelectorAll("section > details")) {
+  const id = details.parentElement.id;
+  if (id in sectionsOpen) details.open = sectionsOpen[id];
+  details.addEventListener("toggle", () => {
+    sectionsOpen[id] = details.open;
+    try { localStorage.setItem("taskboard.sectionsOpen", JSON.stringify(sectionsOpen)); } catch {}
+  });
+}
+let epicsOpen = new Set();
+try {
+  localStorage.removeItem("taskboard.epicsClosed");
+  epicsOpen = new Set(JSON.parse(localStorage.getItem("taskboard.epicsOpen") || "[]"));
+} catch {}
+for (const group of document.querySelectorAll("details.epic")) {
+  if (epicsOpen.has(group.dataset.epic)) group.open = true;
+  group.addEventListener("toggle", () => {
+    if (group.open) epicsOpen.add(group.dataset.epic);
+    else epicsOpen.delete(group.dataset.epic);
+    try { localStorage.setItem("taskboard.epicsOpen", JSON.stringify([...epicsOpen])); } catch {}
   });
 }
 function flash(el, text) {
@@ -274,9 +305,14 @@ function setHighlighted(card, on) {
   button.title = label;
   button.setAttribute("aria-label", label);
 }
+// An epic with work of its own has a row in its stage section and another in its epic group.
+function highlightedCards() {
+  const seen = new Set();
+  return [...document.querySelectorAll(".task.highlighted")].filter(c => !seen.has(c.dataset.id) && seen.add(c.dataset.id));
+}
 function countHighlights() {
   if (!highlightChip) return;
-  const n = document.querySelectorAll(".task.highlighted").length;
+  const n = highlightedCards().length;
   highlightChip.hidden = n === 0;
   highlightChip.querySelector(".count").textContent = n;
 }
@@ -301,14 +337,24 @@ async function toggleHighlight(button) {
   flashIcon(button, "err", "Could not save the highlight");
 }
 let lastHighlight = -1;
+function reveal(card) {
+  for (let d = card.closest("details"); d; d = d.parentElement.closest("details")) d.open = true;
+  card.scrollIntoView({ block: "center" });
+}
 function nextHighlight() {
-  const list = [...document.querySelectorAll(".task.highlighted")];
+  const list = highlightedCards();
   if (!list.length) return;
   lastHighlight = (lastHighlight + 1) % list.length;
   const card = list[lastHighlight];
-  card.closest("details")?.setAttribute("open", "");
-  card.scrollIntoView({ block: "center" });
+  reveal(card);
   card.querySelector("[data-highlight]")?.focus({ preventScroll: true });
+}
+function goToRow(key) {
+  const card = [...cards()].find(c => c.dataset.id === key && !c.closest("#epics"));
+  if (!card) return;
+  reveal(card);
+  card.classList.add("jumped");
+  setTimeout(() => card.classList.remove("jumped"), 1500);
 }
 applyHighlights({{.Highlights}});
 
@@ -321,7 +367,17 @@ document.addEventListener("click", async (e) => {
   }
   const jump = e.target.closest(".jump a");
   if (jump) {
-    document.querySelector(jump.getAttribute("href") + " details")?.setAttribute("open", "");
+    document.querySelector(jump.getAttribute("href") + " > details")?.setAttribute("open", "");
+    return;
+  }
+  const child = e.target.closest("[data-goto]");
+  if (child) {
+    e.preventDefault();
+    return goToRow(child.dataset.goto);
+  }
+  const toEpic = e.target.closest("[data-to-epic]");
+  if (toEpic) {
+    document.getElementById("epic-" + toEpic.dataset.toEpic)?.setAttribute("open", "");
     return;
   }
   const start = e.target.closest("[data-start]");
@@ -412,6 +468,30 @@ function cleanUp(button) {
 </script>
 </body>
 </html>
+
+{{define "taskrow"}}{{$p := .Page}}
+    <li class="task tone-{{.Tone}}{{if index $p.Highlighted .Key}} highlighted{{end}}" data-id="{{.Key}}">
+      {{if $p.CanAct}}{{template "highlightbutton" (index $p.Highlighted .Key)}}{{end}}
+      <div class="title">
+        <p><span class="key">{{.DisplayKey}}</span>{{if .Epic}}<span class="badge">Epic</span>{{end}}{{.Summary}}</p>
+      </div>
+      <div class="where">
+        <p class="stage">{{.StageLabel}}</p>
+        {{template "updated" .Updated}}
+        <ol class="track" aria-label="Stage: {{.StageLabel}}">
+          {{range .Track}}<li class="{{.State}}" title="{{.Label}}"></li>{{end}}
+        </ol>
+      </div>
+      <div class="links">
+        {{if not .NoTicket}}<a href="{{.JiraURL}}" target="{{.JiraURL}}" data-tab>Jira{{with .JiraStatus}} <span class="meta">{{.}}</span>{{end}}{{if .JiraMissing}} <span class="meta">not found</span>{{end}}</a>{{end}}
+        {{if .Parent}}{{if index $p.EpicGroups .Parent}}<a href="#epic-{{.Parent}}" data-to-epic="{{.Parent}}" title="{{.ParentSummary}}">epic {{.Parent}}</a>{{else}}<a href="{{.ParentURL}}" target="{{.ParentURL}}" data-tab title="{{.ParentSummary}}">epic {{.Parent}}</a>{{end}}{{end}}
+        {{with .PR}}<a href="{{.URL}}" target="{{.URL}}" data-tab>PR #{{.Number}}{{with .CI.String}} <span class="meta">{{.}}</span>{{end}}</a>{{end}}
+        {{with .Worktree}}<span class="meta" title="{{.Path}}">worktree {{.Dir}}</span>{{end}}
+        {{with .Plan}}<a href="/plan/{{.Key}}">Plan{{if .Approved}} <span class="meta">approved</span>{{end}}</a>{{end}}
+        {{template "controls" (taskControls .Task $p)}}
+      </div>
+    </li>
+{{end}}
 
 {{define "marks"}}<svg class="ok" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg><svg class="wait" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>{{end}}
 

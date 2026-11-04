@@ -34,6 +34,8 @@ var templates = template.Must(template.New("").Funcs(template.FuncMap{
 	"shortHome":    shortenHome,
 	"taskControls": taskControls,
 	"prControls":   prControls,
+	"row":          func(t Task, d indexData) taskRow { return taskRow{t, d} },
+	"prRow":        func(l PRLink, d indexData) prRow { return prRow{l, d} },
 }).ParseFS(templateFS, "templates/*.html"))
 
 func slug(name string) string {
@@ -78,14 +80,31 @@ type server struct {
 	busy map[string]bool
 }
 
-type group struct {
-	Name  string
-	Tasks []Task
+const (
+	sectionReviews    = "Reviews"
+	sectionOtherRepos = "Other repos"
+)
+
+var sectionOrder = []string{groupNeedsYou, sectionReviews, groupWaiting, groupInProgress, groupCleanup, groupEpics, groupNotStarted, sectionOtherRepos, groupDone}
+
+type section struct {
+	Name   string
+	Legend bool
+	Tasks  []Task
+	Epics  []EpicGroup
+	PRs    []PRLink
 }
 
-type prSection struct {
-	Name string
-	PRs  []PRLink
+func (s section) Count() int { return len(s.Tasks) + len(s.Epics) + len(s.PRs) }
+
+type taskRow struct {
+	Task
+	Page indexData
+}
+
+type prRow struct {
+	PRLink
+	Page indexData
 }
 
 type navItem struct {
@@ -95,9 +114,7 @@ type navItem struct {
 }
 
 type indexData struct {
-	Groups         []group
-	PRSections     []prSection
-	PRsFirst       bool
+	Sections       []section
 	Nav            []navItem
 	Errors         []string
 	Updated        time.Time
@@ -109,6 +126,7 @@ type indexData struct {
 	Stations       []string
 	Highlights     []string
 	Highlighted    map[string]bool
+	EpicGroups     map[string]bool
 }
 
 // controls says which session buttons a row shows; an empty ID shows none. Native buttons open a terminal
@@ -230,7 +248,7 @@ func (s *server) index(w http.ResponseWriter, r *http.Request) {
 	snap := s.board.Snapshot()
 	byGroup := map[string][]Task{}
 	for _, t := range snap.Tasks {
-		byGroup[t.Group()] = append(byGroup[t.Group()], t)
+		byGroup[taskGroup(t)] = append(byGroup[taskGroup(t)], t)
 	}
 	data := indexData{
 		Errors:         snap.Errors,
@@ -243,40 +261,40 @@ func (s *server) index(w http.ResponseWriter, r *http.Request) {
 		Stations:       stations,
 		Highlights:     s.board.highlights.list(),
 		Highlighted:    map[string]bool{},
+		EpicGroups:     map[string]bool{},
 	}
 	for _, id := range data.Highlights {
 		data.Highlighted[id] = true
 	}
-	for _, name := range groupOrder {
-		if tasks := byGroup[name]; len(tasks) > 0 {
-			data.Groups = append(data.Groups, group{Name: name, Tasks: tasks})
-		}
+	for _, e := range snap.Epics {
+		data.EpicGroups[e.Task.Key] = true
 	}
-	for _, sec := range []prSection{{"Reviews", snap.Reviews}, {"Other repos", snap.OtherPRs}} {
-		if len(sec.PRs) > 0 {
-			data.PRSections = append(data.PRSections, sec)
+	legend := true
+	for _, name := range sectionOrder {
+		sec := section{Name: name, Tasks: byGroup[name]}
+		switch name {
+		case groupEpics:
+			sec = section{Name: name, Epics: snap.Epics}
+		case sectionReviews:
+			sec = section{Name: name, PRs: snap.Reviews}
+		case sectionOtherRepos:
+			sec = section{Name: name, PRs: snap.OtherPRs}
 		}
+		if sec.Count() == 0 {
+			continue
+		}
+		if sec.PRs == nil {
+			sec.Legend, legend = legend, false
+		}
+		data.Sections = append(data.Sections, sec)
+		item := navItem{Name: name, Count: sec.Count()}
+		if name == groupNeedsYou {
+			item.Tone = "needs"
+		}
+		data.Nav = append(data.Nav, item)
 	}
 	if data.Refreshing {
 		data.RefreshSeconds = 5
-	}
-	data.PRsFirst = len(data.Groups) == 0 || data.Groups[0].Name != groupNeedsYou
-
-	var prNav, groupNav []navItem
-	for _, sec := range data.PRSections {
-		prNav = append(prNav, navItem{Name: sec.Name, Count: len(sec.PRs)})
-	}
-	for _, g := range data.Groups {
-		item := navItem{Name: g.Name, Count: len(g.Tasks)}
-		if g.Name == groupNeedsYou {
-			item.Tone = "needs"
-		}
-		groupNav = append(groupNav, item)
-	}
-	if data.PRsFirst {
-		data.Nav = append(prNav, groupNav...)
-	} else {
-		data.Nav = append(append(groupNav[:1:1], prNav...), groupNav[1:]...)
 	}
 	render(w, r, "index.html", data)
 }

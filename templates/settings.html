@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 {{template "theme"}}
-<title>Task board settings</title>
+<title>taskboard settings</title>
 <style>
 {{template "tokens"}}
 body{padding-top:1.5rem;max-width:48rem}
@@ -95,7 +95,7 @@ button.primary{background:var(--link);border-color:var(--link);color:var(--surfa
 
 <fieldset id="repos">
   <legend>Repos</legend>
-  <span class="hint">Your PRs in these repos become tasks; PRs elsewhere go under Other repos. With a local checkout, the board also shows its worktrees and the plan files in each worktree's plans folder (default is 'plans'), named after the ticket, like MM-1234.md.</span>
+  <span class="hint">Your PRs in these repos become tasks; PRs elsewhere go under Other repos. With a local checkout, the board also shows its worktrees and the plan files in each worktree's plans folder (default is 'plans'), with the ticket key anywhere in the file name, like MM-1234.md or 2026-10-07-MM-1234-sync.md.</span>
   {{range .Repos}}{{template "repo" .}}{{end}}
   <button class="icon add" type="button" id="add-repo" title="Add repo" aria-label="Add repo"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M12 5v14"/></svg></button>
 </fieldset>
@@ -122,8 +122,8 @@ button.primary{background:var(--link);border-color:var(--link);color:var(--surfa
   <label>Resume command<span class="hint">Typed instead when a task or review already has a worktree. Default is 'claude --continue', or the agent command if you changed it.</span>
     <input name="agent_resume_command" placeholder="claude --continue" value="{{.AgentResume}}"></label>
   <div class="row2">
-    <label>tmux session name<span class="hint">Task and review windows open in this session, which is started if needed. Default is 'work'.</span>
-      <input name="tmux_session" placeholder="work" value="{{.TmuxSession}}"></label>
+    <label>tmux session name<span class="hint">Task and review windows open in this session, which is started if needed. Default is 'taskboard'.</span>
+      <input name="tmux_session" placeholder="taskboard" value="{{.TmuxSession}}"></label>
     <label>Worktree folder<span class="hint">Full path, or starting with ~/ for your home folder. New worktrees go here, as repo-KEY. Leave empty to put each next to its repo's checkout.</span>
       <input name="worktree_dir" placeholder="next to each checkout" value="{{shortHome .WorktreeDir}}"></label>
   </div>
