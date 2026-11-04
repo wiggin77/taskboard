@@ -1,5 +1,9 @@
 # taskboard
 
+[![Build](https://github.com/wiggin77/taskboard/actions/workflows/go.yml/badge.svg?branch=main)](https://github.com/wiggin77/taskboard/actions/workflows/go.yml)
+[![Release](https://img.shields.io/badge/release-v0.1.0-blue)](https://github.com/wiggin77/taskboard/releases/latest)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+
 A local dashboard for multitasking across many coding-agent sessions.
 
 With a dozen coding-agent sessions running in parallel, each in its own worktree on its own ticket, the bottleneck is no longer writing code but keeping track of it: which session is waiting on you, which plan needs review, whose CI broke, what merged and still needs its ticket closed, which worktrees can be cleaned up. taskboard collects that state from where it already lives (the ticket tracker, GitHub PRs, git worktrees, plan files and tmux windows) and shows one row per task, with the work blocked on you at the top. Each row links to the ticket, PR, plan and session, so you can go straight back to the terminal that needs you.
@@ -65,6 +69,15 @@ Plans are read from every worktree of each configured repo. A plan counts as app
 status: approved
 ---
 # MM-1234 plan
+```
+
+The front matter must start on the file's first line. The value is case-insensitive and may be quoted. Any other plan, including one with no front matter, shows as **Plan needs review** until a PR is opened or the ticket is done. When a ticket has several plans, the most recently modified one counts.
+
+This is taskboard's own convention: coding agents don't write it, and taskboard only reads it. Tell the agent in each repo's instructions (`CLAUDE.md`, `AGENTS.md` or similar) where to put plans and how to mark them, for example:
+
+```markdown
+Write plans to `plans/<ticket key>-<short-name>.md`, starting with front matter `status: draft`.
+Change it to `status: approved` once the plan is approved.
 ```
 
 Plan files only attach to tasks found through Jira, a PR, a worktree or a session, so old plans for closed tickets stay off the board.
