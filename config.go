@@ -258,8 +258,10 @@ func (c *Config) validate() error {
 		switch {
 		case org == "":
 			return fmt.Errorf("github.organizations[%d] is empty", i)
-		case strings.ContainsAny(org, "/ \t"):
+		case strings.Contains(org, "/"):
 			return fmt.Errorf("github.organizations[%d]: %q must be an organization or user name, not owner/repo", i, org)
+		case !ownerRE.MatchString(org):
+			return fmt.Errorf("github.organizations[%d]: %q is not a GitHub organization or user name", i, org)
 		}
 		c.GitHub.Organizations[i] = org
 	}
@@ -382,6 +384,8 @@ func (c *Config) repo(name string) (RepoConfig, bool) {
 	}
 	return RepoConfig{}, false
 }
+
+var ownerRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9-]*$`)
 
 // showsOther reports whether a repo outside repos may appear under Other repos. An empty github.organizations shows every repo.
 func (c *Config) showsOther(repo string) bool {
