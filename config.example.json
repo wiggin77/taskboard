@@ -8,7 +8,6 @@
   "merged_pr_limit": 20,
   "done_days": 30,
   "attach_command": ["gnome-terminal", "--", "tmux", "attach", "-t", "{target}"],
-  "tmux_session": "work",
   "repos_dir": "~/src",
   "worktree_dir": "~/worktrees",
   "worktree_links": ["~/src/enterprise"],

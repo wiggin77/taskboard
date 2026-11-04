@@ -1,0 +1,20 @@
+{{define "prrow"}}{{$p := .Page}}{{$id := .ID}}
+    <li class="task tone-{{.Tone}}{{if index $p.Highlighted $id}} highlighted{{end}}" data-id="{{$id}}">
+      {{if $p.CanAct}}{{template "highlightbutton" (index $p.Highlighted $id)}}{{end}}
+      <div class="title">
+        <p>{{.Title}}</p>
+      </div>
+      <div class="where">
+        <p class="stage">{{.StageLabel}}</p>
+        {{template "updated" .UpdatedAt}}
+      </div>
+      <div class="links">
+        {{if .CanAdd}}<button class="icon add-repo" type="button" data-add-repo="{{.Repo}}" title="Add {{.Repo}} to your repos" aria-label="Add {{.Repo}} to your repos"><svg class="main" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M8 12h8"/><path d="M12 8v8"/></svg>{{template "marks"}}</button>{{end}}
+        <a href="{{.URL}}" target="{{.URL}}" data-tab title="{{.Repo}}#{{.Number}}">{{.RepoName}} #{{.Number}}</a>
+        {{if .JiraURL}}<a href="{{.JiraURL}}" target="{{.JiraURL}}" data-tab title="Jira">{{.Key}}</a>{{end}}
+        {{with .Meta}}<span>{{.}}</span>{{end}}
+        {{with .Review}}{{with .Worktree}}<span class="meta" title="{{.Path}}">worktree {{.Dir}}</span>{{end}}{{end}}
+        {{template "controls" (prControls .PRLink $p)}}
+      </div>
+    </li>
+{{end}}
