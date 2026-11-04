@@ -49,33 +49,43 @@ const (
 	groupWaiting    = "Waiting on others"
 	groupInProgress = "In progress"
 	groupNotStarted = "Not started"
+	groupEpics      = "Epics"
 	groupCleanup    = "Needs clean-up"
 	groupDone       = "Done"
 )
 
-var groupOrder = []string{groupNeedsYou, groupWaiting, groupInProgress, groupCleanup, groupNotStarted, groupDone}
-
 var stations = []string{"Ticket", "Plan", "Code", "Review", "Ready", "Merged", "Done"}
 
 type Task struct {
-	Key         string
-	Summary     string
-	JiraURL     string
-	JiraStatus  string
-	JiraDone    bool
-	JiraMissing bool
-	NoTicket    bool
-	Updated     time.Time
-	Stage       Stage
-	PR          *PR
-	Plan        *Plan
-	Session     *Session
-	Worktree    *Worktree
+	Key           string
+	Summary       string
+	JiraURL       string
+	JiraStatus    string
+	JiraDone      bool
+	JiraMissing   bool
+	NoTicket      bool
+	Epic          bool
+	Parent        string
+	ParentSummary string
+	ParentURL     string
+	Updated       time.Time
+	Stage         Stage
+	PR            *PR
+	Plan          *Plan
+	Session       *Session
+	Worktree      *Worktree
 }
 
 func (t Task) StageLabel() string { return stageInfo[t.Stage].label }
 func (t Task) Tone() string       { return stageInfo[t.Stage].tone }
-func (t Task) Group() string      { return stageInfo[t.Stage].group }
+
+// taskGroup leaves an epic with no work of its own out of the stage sections; it shows only under Epics.
+func taskGroup(t Task) string {
+	if t.Epic && t.Stage == StageTicket {
+		return groupEpics
+	}
+	return stageInfo[t.Stage].group
+}
 
 func (t Task) NeedsCleanup() bool { return t.Stage == StageCleanup }
 
@@ -208,6 +218,10 @@ func buildTasks(cfg *Config, s sources, now time.Time) []Task {
 		t.JiraStatus = is.Status
 		t.JiraDone = is.Done
 		t.Updated = is.Updated
+		t.Epic = is.Epic
+		if is.Parent != "" {
+			t.Parent, t.ParentSummary, t.ParentURL = is.Parent, is.ParentSummary, cfg.issueURL(is.Parent)
+		}
 	}
 	for i := range s.prs {
 		pr := &s.prs[i]
@@ -280,4 +294,69 @@ func compareNewerFirst(a, b time.Time) int {
 		return -1
 	}
 	return b.Compare(a)
+}
+
+type EpicGroup struct {
+	Task     Task
+	Children []EpicChild
+	Open     int
+	Done     int
+}
+
+// EpicChild is read-only. OnBoard children also have a full row in a stage section, which holds their actions.
+type EpicChild struct {
+	Key        string
+	Summary    string
+	JiraURL    string
+	Status     string
+	Done       bool
+	Assignee   string
+	OnBoard    bool
+	StageLabel string
+	Tone       string
+}
+
+// buildEpics expects tasks in board order. Children come from both the tasks' parents and the
+// children search, so either one failing still leaves the other's.
+func buildEpics(cfg *Config, tasks []Task, children map[string][]JiraIssue) []EpicGroup {
+	var groups []EpicGroup
+	for _, epic := range tasks {
+		if !epic.Epic || epic.JiraDone {
+			continue
+		}
+		listed := map[string]bool{}
+		for _, is := range children[epic.Key] {
+			listed[is.Key] = true
+		}
+		var onBoard, open, done []EpicChild
+		seen := map[string]bool{}
+		for _, t := range tasks {
+			if t.Key == epic.Key || (t.Parent != epic.Key && !listed[t.Key]) {
+				continue
+			}
+			seen[t.Key] = true
+			c := EpicChild{Key: t.Key, Summary: t.Summary, JiraURL: t.JiraURL, Status: t.JiraStatus, Done: t.JiraDone,
+				OnBoard: true, StageLabel: t.StageLabel(), Tone: t.Tone()}
+			if c.Done {
+				done = append(done, c)
+			} else {
+				onBoard = append(onBoard, c)
+			}
+		}
+		for _, is := range children[epic.Key] {
+			if seen[is.Key] {
+				continue
+			}
+			seen[is.Key] = true
+			c := EpicChild{Key: is.Key, Summary: is.Summary, JiraURL: cfg.issueURL(is.Key), Status: is.Status, Done: is.Done, Assignee: is.Assignee}
+			if c.Done {
+				done = append(done, c)
+			} else {
+				open = append(open, c)
+			}
+		}
+		g := EpicGroup{Task: epic, Children: slices.Concat(onBoard, open, done), Open: len(onBoard) + len(open), Done: len(done)}
+		groups = append(groups, g)
+	}
+	return groups
 }

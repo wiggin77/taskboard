@@ -18,6 +18,7 @@ import (
 
 type Snapshot struct {
 	Tasks    []Task
+	Epics    []EpicGroup
 	Reviews  []PRLink
 	OtherPRs []PRLink
 	Errors   []string
@@ -32,7 +33,7 @@ type Board struct {
 	missingIssues map[string]bool
 	cachesReset   time.Time
 
-	jiraUpdated  map[string]time.Time
+	jiraDetails  map[string]jiraDetail
 	updatedCheck time.Time
 
 	wake chan struct{}
@@ -59,7 +60,7 @@ func NewBoard(cfg *Config) *Board {
 	b := &Board{
 		doneIssues:    map[string]JiraIssue{},
 		missingIssues: map[string]bool{},
-		jiraUpdated:   map[string]time.Time{},
+		jiraDetails:   map[string]jiraDetail{},
 		cachesReset:   time.Now(),
 		wake:          make(chan struct{}, 1),
 		highlights:    &highlights{ids: map[string]bool{}},
@@ -197,6 +198,7 @@ type fetched struct {
 	issues   map[string]JiraIssue
 	resolved map[string]bool
 	missing  map[string]bool
+	children map[string][]JiraIssue
 	prs      []PR
 	reviews  []PRLink
 	otherPRs []PRLink
@@ -312,6 +314,20 @@ func (b *Board) refresh(ctx context.Context) {
 	}
 	r.missing = maps.Clone(b.missingIssues)
 
+	var epics []string
+	for key, is := range r.issues {
+		if is.Epic && !is.Done {
+			epics = append(epics, key)
+		}
+	}
+	slices.Sort(epics)
+	var childErrs []string
+	childrenDone := make(chan struct{})
+	go func() {
+		defer close(childrenDone)
+		r.children, childErrs = epicChildren(ctx, epics)
+	}()
+
 	_, leftovers := attachReviews(cfg, reviews, loc.worktrees, loc.windows)
 	for _, l := range leftovers {
 		url := l.URL
@@ -322,9 +338,11 @@ func (b *Board) refresh(ctx context.Context) {
 		r.views[url] = l
 	}
 
-	if err := b.fillJiraUpdated(ctx, r.issues); err != nil {
-		r.errs = append(r.errs, "Jira updated dates: "+err.Error())
+	if err := b.fillJiraDetails(ctx, r.issues); err != nil {
+		r.errs = append(r.errs, "Jira details: "+err.Error())
 	}
+	<-childrenDone
+	r.errs = append(r.errs, childErrs...)
 	r.updated = time.Now()
 
 	for _, e := range b.compose(ctx, r, &loc, gen) {
@@ -366,7 +384,8 @@ func (b *Board) compose(ctx context.Context, r *fetched, loc *localState, gen ui
 		}
 	}
 	errs := append(slices.Clone(r.errs), loc.errs...)
-	snap := Snapshot{Tasks: buildTasks(r.cfg, s, time.Now()), Reviews: append(reviews, leftovers...), OtherPRs: r.otherPRs, Errors: errs, Updated: r.updated}
+	tasks := buildTasks(r.cfg, s, time.Now())
+	snap := Snapshot{Tasks: tasks, Epics: buildEpics(r.cfg, tasks, r.children), Reviews: append(reviews, leftovers...), OtherPRs: r.otherPRs, Errors: errs, Updated: r.updated}
 	snap.Version = snapshotVersion(snap)
 	b.mu.Lock()
 	b.snap = snap
@@ -446,9 +465,20 @@ func (b *Board) unknownKeys(s sources) []string {
 	return keys
 }
 
-// acli search cannot return the updated field, so dates come from one view call per issue. They are
-// cached, and each refresh re-fetches only the issues a search reports as changed since the last check.
-func (b *Board) fillJiraUpdated(ctx context.Context, issues map[string]JiraIssue) error {
+type jiraDetail struct {
+	Updated       time.Time
+	Parent        string
+	ParentSummary string
+}
+
+func detailOf(is JiraIssue) jiraDetail {
+	return jiraDetail{Updated: is.Updated, Parent: is.Parent, ParentSummary: is.ParentSummary}
+}
+
+// acli search cannot return the updated or parent fields, so they come from one view call per issue. They
+// are cached, and each refresh re-fetches only the issues a search reports as changed since the last check.
+// Moving an issue to another epic changes its updated date, so that check catches new parents too.
+func (b *Board) fillJiraDetails(ctx context.Context, issues map[string]JiraIssue) error {
 	if b.updatedCheck.IsZero() {
 		b.updatedCheck = time.Now()
 	}
@@ -456,8 +486,8 @@ func (b *Board) fillJiraUpdated(ctx context.Context, issues map[string]JiraIssue
 	for key, is := range issues {
 		switch {
 		case !is.Updated.IsZero():
-			b.jiraUpdated[key] = is.Updated
-		case b.jiraUpdated[key].IsZero():
+			b.jiraDetails[key] = detailOf(is)
+		case b.jiraDetails[key].Updated.IsZero():
 			missing = append(missing, key)
 		default:
 			cached = append(cached, key)
@@ -475,7 +505,7 @@ func (b *Board) fillJiraUpdated(ctx context.Context, issues map[string]JiraIssue
 		}
 	}
 
-	fetched := make([]time.Time, len(missing))
+	fetched := make([]JiraIssue, len(missing))
 	errs := make([]error, len(missing))
 	sem := make(chan struct{}, 8)
 	var wg sync.WaitGroup
@@ -483,15 +513,13 @@ func (b *Board) fillJiraUpdated(ctx context.Context, issues map[string]JiraIssue
 		wg.Go(func() {
 			sem <- struct{}{}
 			defer func() { <-sem }()
-			var is JiraIssue
-			is, _, errs[i] = jiraGet(ctx, key)
-			fetched[i] = is.Updated
+			fetched[i], _, errs[i] = jiraGet(ctx, key)
 		})
 	}
 	wg.Wait()
 	for i, key := range missing {
-		if !fetched[i].IsZero() {
-			b.jiraUpdated[key] = fetched[i]
+		if !fetched[i].Updated.IsZero() {
+			b.jiraDetails[key] = detailOf(fetched[i])
 		}
 	}
 	err := errors.Join(append(errs, searchErr)...)
@@ -499,21 +527,47 @@ func (b *Board) fillJiraUpdated(ctx context.Context, issues map[string]JiraIssue
 		b.updatedCheck = checked
 	}
 
-	for key := range b.jiraUpdated {
+	for key := range b.jiraDetails {
 		if _, ok := issues[key]; !ok {
-			delete(b.jiraUpdated, key)
+			delete(b.jiraDetails, key)
 		}
 	}
 	for key, is := range issues {
-		is.Updated = b.jiraUpdated[key]
+		d := b.jiraDetails[key]
+		is.Updated, is.Parent, is.ParentSummary = d.Updated, d.Parent, d.ParentSummary
 		issues[key] = is
 	}
 	return err
 }
 
+func epicChildren(ctx context.Context, epics []string) (map[string][]JiraIssue, []string) {
+	found := make([][]JiraIssue, len(epics))
+	errs := make([]error, len(epics))
+	sem := make(chan struct{}, 8)
+	var wg sync.WaitGroup
+	for i, key := range epics {
+		wg.Go(func() {
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			found[i], errs[i] = jiraChildren(ctx, key)
+		})
+	}
+	wg.Wait()
+	children := map[string][]JiraIssue{}
+	var msgs []string
+	for i, key := range epics {
+		if errs[i] != nil {
+			msgs = append(msgs, fmt.Sprintf("Jira children of %s: %v", key, errs[i]))
+			continue
+		}
+		children[key] = found[i]
+	}
+	return children, msgs
+}
+
 // The version leaves out Updated so a refresh that finds nothing new does not reload open pages.
 func snapshotVersion(snap Snapshot) string {
-	b, err := json.Marshal([]any{snap.Tasks, snap.Reviews, snap.OtherPRs, snap.Errors})
+	b, err := json.Marshal([]any{snap.Tasks, snap.Epics, snap.Reviews, snap.OtherPRs, snap.Errors})
 	if err != nil {
 		return snap.Updated.String()
 	}

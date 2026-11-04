@@ -32,6 +32,10 @@ The Refresh button refreshes on demand, so a long `poll_interval` works if you w
 
 To keep track of the items you're working on right now, highlight them with the bookmark in the left edge of a row; it appears when you hover over the row. Highlighted rows are tinted, and the Highlighted chip at the top jumps to each one in turn. Highlights are saved on the server in `taskboard-highlights.json`, next to the config file, so they survive restarts and show on every device you use the board from; other open pages pick up a change within 15 seconds. A highlight is dropped once its item leaves the board. Like the session buttons, highlighting needs a browser on the taskboard machine or a client certificate; other browsers see highlights but can't change them.
 
+Click a section's heading to collapse or expand it; the browser remembers your choice. Done starts collapsed and the others start expanded. The section chips at the top jump to their section and expand it.
+
+Epics are marked with an Epic badge and get their own Epics section, just above Not started, listing each open epic's child tickets, including ones assigned to other people. An epic with no plan, PR, worktree or session of its own shows only there; one with work of its own also stays in its stage section, and a Done epic stays in Done with no group. Your own children keep their full rows, with their buttons, in the stage sections; under the epic they are compact rows, and clicking one jumps to its full row. Other people's children are read-only and show their Jira status and assignee. A row whose ticket belongs to an epic links to the epic's group, or to the epic in Jira when it has none. Epic groups start collapsed, and the browser remembers which ones you expanded.
+
 The theme button (on every page) cycles between matching the system's light or dark setting (the default), light and dark. The choice is saved in the browser, so each browser keeps its own.
 
 ## Settings
@@ -49,8 +53,10 @@ Everything is joined on the ticket key, currently any Jira key matching `project
 | Jira | Tickets returned by `jira.jql`, plus any key found below |
 | PR | Branch name, or PR title as a fallback. A PR without a key becomes its own task, shown as `repo#number` with no Jira link |
 | Worktree | Branch name |
-| Plan | File name in `plans_dir`, e.g. `plans/MM-1234.md` |
+| Plan | File name in `plans_dir`, e.g. `plans/MM-1234.md` or `plans/2026-10-07-MM-1234-history-sync.md` |
 | Session | tmux window name |
+
+The key can be anywhere in a name, as long as no letter or digit comes right before it and no digit right after it. `fix-mm-1234-login` matches MM-1234, but `xMM-1234` matches nothing and `MM-12345` is a different ticket. When a name has more than one key, the first one counts.
 
 Plans are read from every worktree of each configured repo. A plan counts as approved when its front matter has `status: approved`:
 
@@ -77,7 +83,7 @@ Either way, taskboard works out where the work lives:
 3. Otherwise, if the task has an open PR in a repo with a local checkout, it adds a worktree and runs `gh pr checkout`, which also handles PRs from forks.
 4. Otherwise it asks for the repo (when more than one has a local checkout) and a branch name, suggesting `MM-1234-summary-words`. It then fetches the repo's `base_branch` (default: whatever `origin/HEAD` points at) and creates the branch from it, without tracking it.
 
-New worktrees go in `worktree_dir` as `<repo>-<KEY>`, for example `~/worktrees/mattermost-MM-1234`. When `worktree_dir` is empty, each goes next to its repo's checkout. The window is named after the ticket and opened in the `tmux_session` session (default `work`), which is started if no tmux server is running. The agent command is typed into the window's shell, so quitting the agent leaves you at a prompt in the worktree. `{key}` in either command becomes the ticket key. If `attach_command` is set, a terminal attached to the new window opens right away.
+New worktrees go in `worktree_dir` as `<repo>-<KEY>`, for example `~/worktrees/mattermost-MM-1234`. When `worktree_dir` is empty, each goes next to its repo's checkout. The window is named after the ticket and opened in the `tmux_session` session (default `taskboard`), which is created if it does not exist. The agent command is typed into the window's shell, so quitting the agent leaves you at a prompt in the worktree. `{key}` in either command becomes the ticket key. If `attach_command` is set, a terminal attached to the new window opens right away.
 
 A tmux server that taskboard starts inherits taskboard's environment, so start taskboard from a shell that has the agent on its `PATH`.
 
@@ -156,6 +162,7 @@ Keep `listen` on 127.0.0.1. It has no login, so a browser that reaches it from a
 - Jira is read through `acli`, so taskboard uses whatever account acli is logged in as. `jira.base_url` is only used to build ticket links.
 - Within each section, items are sorted by stage, then most recently updated first. A task's date is the later of its Jira ticket's and its PR's last update. Dates turn orange after 2 days and red after a week.
 - `acli` search cannot return a ticket's updated date, so the first refresh fetches each ticket with `acli jira workitem view` (about 30s for 100 tickets). Later refreshes only re-fetch tickets that a search reports as changed since the last check.
+- Each refresh runs one extra Jira search per open epic to list its children. Ticket parents come from the same `view` call as updated dates, since `acli` search cannot return them either.
 - Jira tickets in a done status category are cached for 24 hours, since merged PRs are rechecked every poll. So are tickets acli cannot find (deleted, or not visible to you); a merged PR whose ticket cannot be found counts as Done.
 - The Reviews section lists open PRs in the configured repos where your review is requested, then ones you have already reviewed (GitHub drops the request once you submit a review). Other repos lists the same for every repo not in `repos`, plus open PRs you authored there. `github.organizations` limits Other repos to the organizations (or user accounts) it lists, for example `"github": {"organizations": ["mattermost", "mattermost-community"]}`; PRs in any other organization are hidden, including direct review requests. An empty list shows every repo, and repos in `repos` are never filtered. The filter runs after the search, and each search returns at most 100 PRs, so hidden PRs still count toward that limit. Neither section is joined on Jira keys, but each row links to the ticket whose key appears in the PR title, or failing that the description.
 - `merged_pr_limit` controls how many recent merged PRs per repo are checked for the "merged, update Jira" stage. It is independent of `done_days`, so a merged PR older than the Done window still shows when its ticket needs updating.
