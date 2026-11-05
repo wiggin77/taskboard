@@ -146,10 +146,7 @@ func (b *Board) Task(key string) (Task, bool) {
 
 func (b *Board) Review(name string) (PRLink, bool) {
 	reviews := b.Snapshot().Reviews
-	if name == "" {
-		return PRLink{}, false
-	}
-	if i := slices.IndexFunc(reviews, func(l PRLink) bool { return l.ReviewName == name }); i >= 0 {
+	if i := slices.IndexFunc(reviews, func(l PRLink) bool { return l.ReviewName != "" && l.ReviewName == name }); i >= 0 {
 		return reviews[i], true
 	}
 	return PRLink{}, false

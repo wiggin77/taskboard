@@ -80,12 +80,11 @@ func (h *highlights) set(id string, on bool, present map[string]bool) ([]string,
 }
 
 func pruneHighlights(ids, present map[string]bool) map[string]bool {
-	next := maps.Clone(ids)
-	if next == nil {
-		next = map[string]bool{}
-	}
-	if present != nil {
-		maps.DeleteFunc(next, func(id string, _ bool) bool { return !present[id] })
+	next := map[string]bool{}
+	for id := range ids {
+		if present == nil || present[id] {
+			next[id] = true
+		}
 	}
 	return next
 }
