@@ -32,6 +32,7 @@ type Config struct {
 	WorktreeLinks    []string     `json:"worktree_links,omitempty"`
 	Jira             JiraConfig   `json:"jira"`
 	Repos            []RepoConfig `json:"repos"`
+	GitHub           GitHubConfig `json:"github"`
 
 	keyRE *regexp.Regexp
 }
@@ -50,6 +51,10 @@ const defaultJQL = "assignee = currentUser() AND statusCategory != Done ORDER BY
 type JiraConfig struct {
 	BaseURL string `json:"base_url"`
 	JQL     string `json:"jql"`
+}
+
+type GitHubConfig struct {
+	Organizations []string `json:"organizations,omitempty"`
 }
 
 type RepoConfig struct {
@@ -143,6 +148,25 @@ func parseConfig(b []byte) (*Config, error) {
 	return cfg, nil
 }
 
+// MarshalJSON leaves out the github block while github.organizations is empty, so saving never writes an unset setting.
+func (c Config) MarshalJSON() ([]byte, error) {
+	type plain Config
+	out := struct {
+		plain
+		GitHub *GitHubConfig `json:"github,omitempty"`
+	}{plain: plain(c)}
+	if len(c.GitHub.Organizations) > 0 {
+		out.GitHub = &c.GitHub
+	}
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(out); err != nil {
+		return nil, err
+	}
+	return bytes.TrimSpace(buf.Bytes()), nil
+}
+
 func SaveConfig(path string, cfg *Config) error {
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
@@ -198,6 +222,18 @@ func (c *Config) validate() error {
 		if r.BaseBranch != "" && !strings.Contains(strings.Trim(r.BaseBranch, "/"), "/") {
 			return fmt.Errorf("repos[%d].base_branch must name a remote branch, like origin/main", i)
 		}
+	}
+	for i, org := range c.GitHub.Organizations {
+		org = strings.TrimSpace(org)
+		switch {
+		case org == "":
+			return fmt.Errorf("github.organizations[%d] is empty", i)
+		case strings.Contains(org, "/"):
+			return fmt.Errorf("github.organizations[%d]: %q must be an organization or user name, not owner/repo", i, org)
+		case !ownerRE.MatchString(org):
+			return fmt.Errorf("github.organizations[%d]: %q is not a GitHub organization or user name", i, org)
+		}
+		c.GitHub.Organizations[i] = org
 	}
 	for i, serial := range c.RevokedCerts {
 		c.RevokedCerts[i] = normalizeSerial(serial)
@@ -311,6 +347,22 @@ func (c *Config) repo(name string) (RepoConfig, bool) {
 		}
 	}
 	return RepoConfig{}, false
+}
+
+var ownerRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9-]*$`)
+
+// showsOther reports whether a repo outside repos may appear under Other repos. An empty github.organizations shows every repo.
+func (c *Config) showsOther(repo string) bool {
+	if len(c.GitHub.Organizations) == 0 {
+		return true
+	}
+	owner, _, _ := strings.Cut(repo, "/")
+	for _, org := range c.GitHub.Organizations {
+		if strings.EqualFold(org, owner) {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *Config) hasRepo(name string) bool {
