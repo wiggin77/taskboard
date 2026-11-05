@@ -16,7 +16,7 @@ Done tasks that still have a worktree or a tmux window go to "Needs clean-up" in
 
 ## Requirements
 
-- Go 1.22+, only to build from source
+- Go 1.27+, only to build from source
 - `gh`, authenticated (`gh auth login`)
 - `acli`, logged in to your Jira site (`acli jira auth login`)
 - `git`, and `tmux` if you want sessions

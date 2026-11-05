@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 )
@@ -32,7 +33,7 @@ type Config struct {
 	WorktreeLinks    []string     `json:"worktree_links,omitempty"`
 	Jira             JiraConfig   `json:"jira"`
 	Repos            []RepoConfig `json:"repos"`
-	GitHub           GitHubConfig `json:"github"`
+	GitHub           GitHubConfig `json:"github,omitzero"`
 
 	keyRE *regexp.Regexp
 }
@@ -56,6 +57,9 @@ type JiraConfig struct {
 type GitHubConfig struct {
 	Organizations []string `json:"organizations,omitempty"`
 }
+
+// IsZero lets omitzero drop an empty github block, including one loaded with an empty organizations list.
+func (g GitHubConfig) IsZero() bool { return len(g.Organizations) == 0 }
 
 type RepoConfig struct {
 	Name       string `json:"name"`
@@ -146,25 +150,6 @@ func parseConfig(b []byte) (*Config, error) {
 		return nil, err
 	}
 	return cfg, nil
-}
-
-// MarshalJSON leaves out the github block while github.organizations is empty, so saving never writes an unset setting.
-func (c Config) MarshalJSON() ([]byte, error) {
-	type plain Config
-	out := struct {
-		plain
-		GitHub *GitHubConfig `json:"github,omitempty"`
-	}{plain: plain(c)}
-	if len(c.GitHub.Organizations) > 0 {
-		out.GitHub = &c.GitHub
-	}
-	var buf bytes.Buffer
-	enc := json.NewEncoder(&buf)
-	enc.SetEscapeHTML(false)
-	if err := enc.Encode(out); err != nil {
-		return nil, err
-	}
-	return bytes.TrimSpace(buf.Bytes()), nil
 }
 
 func SaveConfig(path string, cfg *Config) error {
@@ -357,19 +342,9 @@ func (c *Config) showsOther(repo string) bool {
 		return true
 	}
 	owner, _, _ := strings.Cut(repo, "/")
-	for _, org := range c.GitHub.Organizations {
-		if strings.EqualFold(org, owner) {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(c.GitHub.Organizations, func(org string) bool { return strings.EqualFold(org, owner) })
 }
 
 func (c *Config) hasRepo(name string) bool {
-	for _, r := range c.Repos {
-		if strings.EqualFold(r.Name, name) {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(c.Repos, func(r RepoConfig) bool { return strings.EqualFold(r.Name, name) })
 }

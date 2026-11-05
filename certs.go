@@ -78,7 +78,7 @@ func runCerts(args []string) error {
 
 func splitHosts(s string) []string {
 	var hosts []string
-	for _, h := range strings.Split(s, ",") {
+	for h := range strings.SplitSeq(s, ",") {
 		if h = strings.TrimSpace(h); h != "" {
 			hosts = append(hosts, h)
 		}
@@ -126,7 +126,7 @@ func certsServer(dir string, hosts []string, now time.Time) error {
 		return err
 	}
 	fmt.Printf("Wrote the server certificate for %s, valid until %s. Restart taskboard to use it.\n",
-		strings.Join(append(cert.DNSNames, ipStrings(cert.IPAddresses)...), ", "), cert.NotAfter.Format("2006-01-02"))
+		strings.Join(slices.Concat(cert.DNSNames, ipStrings(cert.IPAddresses)), ", "), cert.NotAfter.Format("2006-01-02"))
 	return nil
 }
 
@@ -252,7 +252,7 @@ func randomPassword() (string, error) {
 	return base64.RawURLEncoding.EncodeToString(b), nil
 }
 
-func serialHex(n *big.Int) string { return fmt.Sprintf("%x", n) }
+func serialHex(n *big.Int) string { return n.Text(16) }
 
 func ipStrings(ips []net.IP) []string {
 	s := make([]string, len(ips))

@@ -9,6 +9,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -72,7 +73,7 @@ func startPlan(cfg *Config, t Task, branches map[string][]string) (StartPlan, er
 	for i, r := range repos {
 		if t.PR != nil && strings.EqualFold(r.Name, t.PR.Repo) {
 			prRepo = &repos[i]
-			ordered = append([]RepoConfig{r}, ordered...)
+			ordered = slices.Insert(ordered, 0, r)
 		} else {
 			ordered = append(ordered, r)
 		}
@@ -320,7 +321,7 @@ func closeLinked(name string) {
 // staleLinked lists linked sessions nobody attached to, such as ones whose terminal failed to open.
 func staleLinked(out []byte, now time.Time) []string {
 	var stale []string
-	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+	for line := range strings.SplitSeq(strings.TrimSpace(string(out)), "\n") {
 		f := strings.Split(line, "\t")
 		if len(f) != 4 || f[1] != "1" || f[2] != "0" {
 			continue
@@ -350,7 +351,7 @@ func stopSession(ctx context.Context, s *Session) error {
 
 func outputLines(out []byte) []string {
 	var lines []string
-	for _, l := range strings.Split(string(out), "\n") {
+	for l := range strings.SplitSeq(string(out), "\n") {
 		if l = strings.TrimRight(l, "\r"); strings.TrimSpace(l) != "" {
 			lines = append(lines, l)
 		}
