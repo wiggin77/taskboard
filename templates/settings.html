@@ -82,7 +82,7 @@ button.primary{background:var(--link);border-color:var(--link);color:var(--surfa
   <label>Jira site URL<span class="hint">Only used to build ticket links. Tickets are read through acli, as whoever it is logged in as.</span>
     <input name="jira.base_url" type="url" required placeholder="e.g. https://yourcompany.atlassian.net" value="{{.Jira.BaseURL}}"></label>
   <label>Tickets to show (JQL)<span class="hint">Tickets matching this query always appear. Tickets named by a PR, worktree or session appear even if it misses them.</span>
-    <textarea name="jira.jql" rows="2" placeholder="assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC">{{.Jira.JQL}}</textarea></label>
+    <textarea name="jira.jql" rows="3" placeholder="(assignee = currentUser() OR &quot;matty code assigner[user picker (single user)]&quot; = currentUser()) AND statusCategory != Done ORDER BY updated DESC">{{.Jira.JQL}}</textarea></label>
   <label>Project keys<span class="hint">Comma separated. A key like MM-1234 in a branch name, PR title, plan file name or tmux window name ties it to that ticket.</span>
     <input name="project_keys" required placeholder="e.g. MM, PLUG" value="{{join .ProjectKeys ", "}}"></label>
   <div class="row2">

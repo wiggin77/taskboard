@@ -49,6 +49,8 @@ The theme button (on every page) cycles between matching the system's light or d
 
 The Settings link in the header opens a form for every config option. Saving checks the config, writes it back to the `-config` file and applies it right away, then refreshes the board; only `listen` waits for a restart. Saving rewrites the file in a standard layout, so hand formatting and unknown keys are not kept. A field left empty uses the default shown as its placeholder, and the default isn't written to the file; placeholders starting with "e.g." are only examples.
 
+The default `jira.jql` lists open tickets assigned to you. It also lists open tickets that name you in the Matty code assigner field.
+
 Like the session buttons, Settings is only available to a browser on the machine running taskboard or one with a client certificate (see [Remote access](#remote-access)), since `attach_command` and `agent_command` run commands there.
 
 ## Conventions

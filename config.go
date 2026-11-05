@@ -45,7 +45,7 @@ const (
 	defaultPlansDir    = "plans"
 )
 
-const defaultJQL = "assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC"
+const defaultJQL = `(assignee = currentUser() OR "matty code assigner[user picker (single user)]" = currentUser()) AND statusCategory != Done ORDER BY updated DESC`
 
 type JiraConfig struct {
 	BaseURL string `json:"base_url"`
