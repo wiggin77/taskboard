@@ -1,5 +1,9 @@
 # taskboard
 
+[![Build](https://github.com/wiggin77/taskboard/actions/workflows/go.yml/badge.svg?branch=main)](https://github.com/wiggin77/taskboard/actions/workflows/go.yml)
+[![Release](https://img.shields.io/badge/release-v0.1.0-blue)](https://github.com/wiggin77/taskboard/releases/latest)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+
 A local dashboard for multitasking across many coding-agent sessions.
 
 With a dozen coding-agent sessions running in parallel, each in its own worktree on its own ticket, the bottleneck is no longer writing code but keeping track of it: which session is waiting on you, which plan needs review, whose CI broke, what merged and still needs its ticket closed, which worktrees can be cleaned up. taskboard collects that state from where it already lives (the ticket tracker, GitHub PRs, git worktrees, plan files and tmux windows) and shows one row per task, with the work blocked on you at the top. Each row links to the ticket, PR, plan and session, so you can go straight back to the terminal that needs you.
@@ -12,7 +16,7 @@ Done tasks that still have a worktree or a tmux window go to "Needs clean-up" in
 
 ## Requirements
 
-- Go 1.27+
+- Go 1.27+, only to build from source
 - `gh`, authenticated (`gh auth login`)
 - `acli`, logged in to your Jira site (`acli jira auth login`)
 - `git`, and `tmux` if you want sessions
@@ -20,11 +24,14 @@ Done tasks that still have a worktree or a tmux window go to "Needs clean-up" in
 
 ## Run
 
+Download the archive for your platform (Linux or macOS, amd64 or arm64) from the [latest release](https://github.com/wiggin77/taskboard/releases/latest) and unpack it, or build from source with `go build -o taskboard .`. Then:
+
 ```sh
-go build -o taskboard .
 cp config.example.json taskboard.json   # edit jira, project_keys and repos
 ./taskboard -config taskboard.json
 ```
+
+The macOS builds aren't signed. If macOS refuses to open a binary downloaded with a browser, clear the quarantine flag with `xattr -d com.apple.quarantine taskboard`.
 
 Open http://127.0.0.1:8484. While the page has been viewed in the last 15 minutes, the server polls every `poll_interval` (default 2m). While its tab is visible, the page checks every 15 seconds whether the board changed and reloads only if it did (and at least hourly, so ages stay current). Otherwise the server polls every `idle_poll_interval`, or not at all when it is 0 (the default), and the first view after that refreshes right away.
 
@@ -65,6 +72,15 @@ Plans are read from every worktree of each configured repo. A plan counts as app
 status: approved
 ---
 # MM-1234 plan
+```
+
+The front matter must start on the file's first line. The value is case-insensitive and may be quoted. Any other plan, including one with no front matter, shows as **Plan needs review** until a PR is opened or the ticket is done. When a ticket has several plans, the most recently modified one counts.
+
+This is taskboard's own convention: coding agents don't write it, and taskboard only reads it. Tell the agent in each repo's instructions (`CLAUDE.md`, `AGENTS.md` or similar) where to put plans and how to mark them, for example:
+
+```markdown
+Write plans to `plans/<ticket key>-<short-name>.md`, starting with front matter `status: draft`.
+Change it to `status: approved` once the plan is approved.
 ```
 
 Plan files only attach to tasks found through Jira, a PR, a worktree or a session, so old plans for closed tickets stay off the board.
@@ -167,6 +183,12 @@ Keep `listen` on 127.0.0.1. It has no login, so a browser that reaches it from a
 - The Reviews section lists open PRs in the configured repos where your review is requested, then ones you have already reviewed (GitHub drops the request once you submit a review). Other repos lists the same for every repo not in `repos`, plus open PRs you authored there. `github.organizations` limits Other repos to the organizations (or user accounts) it lists, for example `"github": {"organizations": ["mattermost", "mattermost-community"]}`; PRs in any other organization are hidden, including direct review requests. An empty list shows every repo, and repos in `repos` are never filtered. Neither section is joined on Jira keys, but each row links to the ticket whose key appears in the PR title, or failing that the description.
 - `merged_pr_limit` controls how many recent merged PRs per repo are checked for the "merged, update Jira" stage. It is independent of `done_days`, so a merged PR older than the Done window still shows when its ticket needs updating.
 - Source failures show in a banner at the top of the page and in the log; the rest of the board still renders.
+
+## Releasing
+
+Push a tag like `v0.2.0`. The Release workflow runs [GoReleaser](https://goreleaser.com) (`.goreleaser.yaml`), which runs the tests, builds Linux and macOS binaries for amd64 and arm64, and publishes them with a checksums file and generated notes as a GitHub release. To try the build locally without publishing, run `goreleaser release --snapshot --clean`; the archives land in `dist/`.
+
+After a release, update the version in the Release badge at the top of this file.
 
 ## License
 
