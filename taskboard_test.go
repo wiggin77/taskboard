@@ -380,23 +380,6 @@ func TestShowsOther(t *testing.T) {
 	}
 }
 
-func TestPRSearchScopes(t *testing.T) {
-	cfg := testConfig(t)
-	cfg.Repos = []RepoConfig{{Name: "mattermost/mattermost"}, {Name: "wiggin77/taskboard"}}
-	if got := prSearchScopes(cfg); len(got) != 1 || got[0] != nil {
-		t.Errorf("no organizations: %q, want one unscoped search", got)
-	}
-	cfg.GitHub.Organizations = []string{"Mattermost", "acme"}
-	want := [][]string{{"--owner", "Mattermost", "--owner", "acme"}, {"--repo", "wiggin77/taskboard"}}
-	if got := prSearchScopes(cfg); !slices.EqualFunc(got, want, slices.Equal) {
-		t.Errorf("scopes = %q, want %q", got, want)
-	}
-	cfg.Repos = cfg.Repos[:1]
-	if got := prSearchScopes(cfg); len(got) != 1 {
-		t.Errorf("all repos inside the organizations: %q, want only the owner search", got)
-	}
-}
-
 func TestOtherOrgsConfig(t *testing.T) {
 	base := `"project_keys":["MM"],"jira":{"base_url":"https://x.atlassian.net"},"repos":[{"name":"a/b"}]`
 	cfg, err := parseConfig([]byte(`{` + base + `,"github":{"organizations":["mattermost","  mattermost-community "]}}`))

@@ -256,46 +256,18 @@ func listPRLinks(ctx context.Context, cfg *Config) (reviews, others []PRLink, er
 		RoleAuthor:    {"author:@me"},
 		RoleReviewed:  {"reviewed-by:@me", "-author:@me"},
 	}
-	scopes := prSearchScopes(cfg)
 	for role, q := range queries {
-		for _, scope := range scopes {
-			prs, err := searchPRs(ctx, scope, q...)
-			if err != nil {
-				return nil, nil, err
-			}
-			found[role] = append(found[role], prs...)
+		if found[role], err = searchPRs(ctx, q...); err != nil {
+			return nil, nil, err
 		}
 	}
 	reviews, others = splitPRLinks(cfg, mergePRLinks(cfg, found))
 	return reviews, others, nil
 }
 
-// gh ORs repeated --owner flags and repeated --repo flags but ANDs an --owner with a --repo, so configured
-// repos outside github.organizations get a search of their own. Scoping the search, rather than filtering
-// its results, keeps PRs from other organizations from using up the --limit.
-func prSearchScopes(cfg *Config) [][]string {
-	if len(cfg.GitHub.Organizations) == 0 {
-		return [][]string{nil}
-	}
-	var owners, repos []string
-	for _, org := range cfg.GitHub.Organizations {
-		owners = append(owners, "--owner", org)
-	}
-	for _, r := range cfg.Repos {
-		if !cfg.showsOther(r.Name) {
-			repos = append(repos, "--repo", r.Name)
-		}
-	}
-	if repos == nil {
-		return [][]string{owners}
-	}
-	return [][]string{owners, repos}
-}
-
-func searchPRs(ctx context.Context, scope []string, query ...string) ([]ghSearchPR, error) {
+func searchPRs(ctx context.Context, query ...string) ([]ghSearchPR, error) {
 	args := []string{"search", "prs", "--state", "open", "--limit", "100",
-		"--json", "repository,number,title,url,body,author,isDraft,updatedAt"}
-	args = append(append(args, scope...), "--")
+		"--json", "repository,number,title,url,body,author,isDraft,updatedAt", "--"}
 	out, err := runCmd(ctx, "", "gh", append(args, query...)...)
 	if err != nil {
 		return nil, err
