@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"path"
@@ -47,7 +48,8 @@ type Session struct {
 	Name   string
 }
 
-// commandWaitDelay bounds how long Output waits for a command's pipes after its context ends, so a child that keeps them open cannot hang a refresh.
+// commandWaitDelay bounds how long Output waits for a command's pipes once it exits or its context ends, so a child that
+// keeps them open (such as a backgrounded ssh ControlPersist master) cannot hang a refresh or session action.
 const commandWaitDelay = 5 * time.Second
 
 func runCmd(ctx context.Context, dir, name string, args ...string) ([]byte, error) {
@@ -59,6 +61,7 @@ func runCmd(ctx context.Context, dir, name string, args ...string) ([]byte, erro
 	out, err := cmd.Output()
 	if errors.Is(err, exec.ErrWaitDelay) {
 		// The command itself succeeded; only a leftover child kept its pipes open.
+		log.Printf("%s %s: closed pipes held open by a leftover child after %s", name, strings.Join(args, " "), commandWaitDelay)
 		err = nil
 	}
 	if err != nil {
