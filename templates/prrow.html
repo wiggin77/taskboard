@@ -9,8 +9,8 @@
         {{template "updated" .UpdatedAt}}
       </div>
       <div class="links">
-        <a href="{{.URL}}" target="{{.URL}}" data-tab title="{{.Repo}}#{{.Number}}">{{.RepoName}} #{{.Number}}</a>
-        {{if .JiraURL}}<a href="{{.JiraURL}}" target="{{.JiraURL}}" data-tab title="Jira">{{.Key}}</a>{{end}}
+        <a href="{{.URL}}" target="{{.URL}}" data-tab data-group="{{.Group}}" title="{{.Repo}}#{{.Number}}">{{.RepoName}} #{{.Number}}</a>
+        {{if .JiraURL}}<a href="{{.JiraURL}}" target="{{.JiraURL}}" data-tab data-group="{{.Group}}" title="Jira">{{.Key}}</a>{{end}}
         {{with .Meta}}<span>{{.}}</span>{{end}}
         {{with .Review}}{{with .Worktree}}<span class="meta" title="{{.Path}}">worktree {{.Dir}}</span>{{end}}{{end}}
         {{template "controls" (prControls .PRLink $p)}}

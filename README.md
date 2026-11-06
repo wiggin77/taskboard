@@ -83,7 +83,7 @@ Write plans to `plans/<ticket key>-<short-name>.md`, starting with front matter 
 Change it to `status: approved` once the plan is approved.
 ```
 
-Plan files only attach to tasks found through Jira, a PR, a worktree or a session, so old plans for closed tickets stay off the board.
+Plan files only attach to tasks found through Jira, a PR, a worktree or a session, so old plans for closed tickets stay off the board. A row's Plan link opens the plan in a tab of its own, rendered as GitHub-flavored Markdown. The plan's status is shown at the top (green when approved, orange otherwise), along with any other front matter fields; raw HTML in the file is not shown.
 
 ## Sessions
 
@@ -172,6 +172,24 @@ To use the board from another machine, for example a browser on a Mac with taskb
 A browser without a valid certificate gets a TLS error rather than a page. Names the server certificate covers are accepted, so `allowed_hosts` only matters for the plain `listen` address. When the box gets a new name, re-issue the server certificate with `./taskboard certs server -host ...` and restart; client certificates stay valid. To cut off a lost device, add its serial to `revoked_certs`; that takes effect immediately, even on open connections.
 
 Keep `listen` on 127.0.0.1. It has no login, so a browser that reaches it from another machine can only view the board.
+
+## Tab groups
+
+The board opens each Jira ticket, PR, plan and browser terminal in a tab of its own, and clicking a link again goes back to its tab. With the taskboard tab groups extension in `extension/` (also included in the release archives), those tabs open in a browser tab group named after the ticket, so a ticket's Jira issue, PR, plan and terminal sit together. It works in Chrome, Edge and Firefox 140 or later.
+
+- A task's links, its plan and its terminal go in the ticket's group. A PR without a ticket gets a group named `repo#number`.
+- A Reviews or Other repos row joins the group of the ticket its PR mentions, so reviewing a PR for MM-1234 puts the PR and the review terminal next to the MM-1234 tabs.
+- An epic link opens in the epic's group, and the Jira links on the Epics section's child rows open in each child's group.
+- Groups are found by name, so groups you make yourself or that the browser restores after a restart are reused. A tab you move to another group stays there.
+- Only plain clicks are grouped. Middle-click and Ctrl/Cmd-click open a tab as usual. Without the extension, links open exactly as they always have.
+- Native terminals (`attach_command`) aren't browser tabs, so they can't be grouped.
+
+To install:
+
+- **Chrome or Edge:** open `chrome://extensions` (`edge://extensions`), turn on Developer mode, choose Load unpacked and select the `extension` folder.
+- **Firefox:** release Firefox removes unsigned extensions when it restarts. For a quick try, use Load Temporary Add-on in `about:debugging#/runtime/this-firefox` and pick `extension/manifest.json`. To keep it installed, sign it as an unlisted add-on with your own [addons.mozilla.org API key](https://addons.mozilla.org/developers/addon/api/key/) and install the `.xpi` it produces: `npx web-ext sign -s extension --channel=unlisted --api-key=... --api-secret=...`.
+
+The extension works on taskboard pages at `http://127.0.0.1` and `http://localhost`, on any port. To use it with the [HTTPS listener](#remote-access) or any other address, add that address in the extension's options and allow access when the browser asks, then reload the board.
 
 ## Notes
 

@@ -27,6 +27,7 @@ archives:
       - README.md
       - LICENSE
       - config.example.json
+      - extension/*
 
 checksum:
   name_template: checksums.txt
