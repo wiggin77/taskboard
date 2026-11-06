@@ -1242,6 +1242,15 @@ func TestControls(t *testing.T) {
 	if c := prControls(PRLink{ReviewName: "mm-pr1", Role: RoleLeftover, Review: &Review{Worktree: &Worktree{}}}, local); c.Start != "" || c.Clean == "" {
 		t.Errorf("leftover review: %+v", c)
 	}
+	if c := taskControls(Task{Key: "MM-1", Stage: StageTicket}, indexData{}); c.Group != "MM-1" {
+		t.Errorf("task tab group: %+v", c)
+	}
+	if c := prControls(PRLink{Repo: "o/r", Number: 1, Key: "MM-2", ReviewName: "r-pr1", Role: RoleRequested}, remote); c.Group != "MM-2" {
+		t.Errorf("review of a PR with a ticket joins the ticket's tab group: %+v", c)
+	}
+	if c := prControls(PRLink{Repo: "o/r", Number: 1, ReviewName: "r-pr1", Role: RoleRequested}, remote); c.Group != "o/r#1" {
+		t.Errorf("review of a PR without a ticket: %+v", c)
+	}
 }
 
 func TestReviewEndpointGuards(t *testing.T) {
@@ -1832,5 +1841,42 @@ func TestIndexEpics(t *testing.T) {
 	}
 	if viewer := get("192.0.2.1:1234"); !strings.Contains(viewer, `id="epic-MM-10"`) || strings.Contains(viewer, "data-highlight ") {
 		t.Error("a viewer should see the epics read-only")
+	}
+}
+
+func TestRenderMarkdown(t *testing.T) {
+	got, err := renderMarkdown([]byte("# MM-1 plan\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\n<script>alert(1)</script>\n\n[x](javascript:alert(1))\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(got)
+	for _, want := range []string{"<h1", "MM-1 plan</h1>", "<table>", "<td>1</td>"} {
+		if !strings.Contains(s, want) {
+			t.Errorf("missing %q in %s", want, s)
+		}
+	}
+	for _, bad := range []string{"<script", "javascript:"} {
+		if strings.Contains(s, bad) {
+			t.Errorf("unexpected %q in %s", bad, s)
+		}
+	}
+}
+
+func TestSplitFrontMatter(t *testing.T) {
+	for _, tc := range []struct {
+		in     string
+		fields []planField
+		body   string
+	}{
+		{"---\nstatus: approved\n---\nbody\n", []planField{{"status", "approved"}}, "body\n"},
+		{"---\r\nstatus: \"draft\"\r\nreviewers:\r\n  - alice\r\n  - bob\r\n---\r\nbody", []planField{{"status", "draft"}, {"reviewers", "- alice - bob"}}, "body"},
+		{"---\n---\nbody", nil, "body"},
+		{"# title\n---\n", nil, "# title\n---\n"},
+		{"---\nstatus: draft\n", nil, "---\nstatus: draft\n"},
+	} {
+		fields, body := splitFrontMatter([]byte(tc.in))
+		if !slices.Equal(fields, tc.fields) || string(body) != tc.body {
+			t.Errorf("splitFrontMatter(%q) = %q, %q, want %q, %q", tc.in, fields, body, tc.fields, tc.body)
+		}
 	}
 }

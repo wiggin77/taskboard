@@ -38,7 +38,7 @@
 // A plain link to a named tab reloads it; window.open with no URL just finds it.
 document.addEventListener("click", e => {
   const a = e.target.closest("a[data-tab]");
-  if (!a || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+  if (!a || e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
   const w = window.open("", a.target);
   if (!w) return;
   e.preventDefault();

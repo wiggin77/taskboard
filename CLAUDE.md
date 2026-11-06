@@ -12,7 +12,7 @@ go test ./...
 go test -run TestBuildTasks ./...    # single test
 ```
 
-Single `main` package (Go 1.27, uses `ServeMux` method/path patterns). Dependencies are limited to `coder/websocket` and `creack/pty` (browser terminal) and `go-pkcs12` (client certificate files); xterm.js is vendored in `static/` and embedded. All tests are in `taskboard_test.go` and use `testConfig(t)`; they never shell out, so they run without `gh`/`acli`. The binary requires `acli`, `gh` and `git` on PATH at startup.
+Single `main` package (Go 1.27, uses `ServeMux` method/path patterns). Dependencies are limited to `coder/websocket` and `creack/pty` (browser terminal), `go-pkcs12` (client certificate files) and `goldmark` (plan pages, which leaves raw HTML out of the rendered Markdown; keep it that way); xterm.js is vendored in `static/` and embedded. All tests are in `taskboard_test.go` and use `testConfig(t)`; they never shell out, so they run without `gh`/`acli`. The binary requires `acli`, `gh` and `git` on PATH at startup.
 
 ## Architecture
 
@@ -28,6 +28,8 @@ Data flow:
 6. **Server** (`server.go`) renders the snapshot with embedded `html/template`s (`templates/*.html`; `tokens`, `updated`, `prrow` are partials; `sectionOrder` sets the order of the sections). Reviews/Other repos PR sections (`PRLink`) are separate from tasks and not joined on Jira keys; `splitPRLinks` drops Other repos PRs whose owner is not in `github.organizations` (empty means all); review sessions are matched by worktree/window name instead.
 
 Config: the settings page saves the config file (`SaveConfig`) and swaps it into the running board (`Board.SetConfig`). Read it through `Board.Config()` once per refresh or request and treat it as immutable; only `listen` is fixed at startup. Settings with a default (`agent`, `jql`, `tmuxSession`, `plansDir`, `tlsDir`) stay empty in `Config` and are resolved by accessor methods at use, never filled in by `validate`, so the settings page shows each default as its field's placeholder and saving never writes it to the file.
+
+Tab groups (`extension/`): a plain-JS Manifest V3 extension for Chrome, Edge and Firefox, with no build step. Every link that opens a tab carries `data-group` (the ticket key, or `PRLink.Group()` for PR rows); terminal links get it from `controls.Group`. The extension acts only on pages with `<meta name="application-name" content="taskboard">`, intercepts plain clicks on those links and opens them into a tab group titled with the key; the page's own `tabs` script stands down when the click is `defaultPrevented`, so the board works unchanged without it.
 
 Highlights (`highlights.go`): the set of highlighted IDs (task key, or `PRLink.ID()` for PR rows) lives in `taskboard-highlights.json` next to the config. `/version` returns it so open pages update in place; it is deliberately not part of `Snapshot.Version`, so highlighting never forces a reload.
 

@@ -3,6 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="application-name" content="taskboard">
 {{template "theme"}}
 {{template "tabs"}}
 <noscript><meta http-equiv="refresh" content="{{.RefreshSeconds}}"></noscript>
@@ -177,7 +178,7 @@ a:hover{text-decoration:underline}
     {{template "taskrow" (row .Task $)}}
     {{range .Children}}
       <li class="child{{if .OnBoard}} tone-{{.Tone}}{{end}}{{if .Done}} child-done{{end}}">
-        {{if .OnBoard}}<a class="key" href="#" data-goto="{{.Key}}" title="Go to its row">{{.Key}}</a>{{else}}<a class="key" href="{{.JiraURL}}" target="{{.JiraURL}}" data-tab title="Open in Jira">{{.Key}}</a>{{end}}
+        {{if .OnBoard}}<a class="key" href="#" data-goto="{{.Key}}" title="Go to its row">{{.Key}}</a>{{else}}<a class="key" href="{{.JiraURL}}" target="{{.JiraURL}}" data-tab data-group="{{.Key}}" title="Open in Jira">{{.Key}}</a>{{end}}
         <span class="child-summary">{{.Summary}}</span>
         {{if .OnBoard}}<span class="stage">{{.StageLabel}}</span>{{else}}<span class="meta">{{.Status}}, {{or .Assignee "unassigned"}}</span>{{end}}
       </li>
@@ -483,11 +484,11 @@ function cleanUp(button) {
         </ol>
       </div>
       <div class="links">
-        {{if not .NoTicket}}<a href="{{.JiraURL}}" target="{{.JiraURL}}" data-tab>Jira{{with .JiraStatus}} <span class="meta">{{.}}</span>{{end}}{{if .JiraMissing}} <span class="meta">not found</span>{{end}}</a>{{end}}
-        {{if .Parent}}{{if index $p.EpicGroups .Parent}}<a href="#epic-{{.Parent}}" data-to-epic="{{.Parent}}" title="{{.ParentSummary}}">epic {{.Parent}}</a>{{else}}<a href="{{.ParentURL}}" target="{{.ParentURL}}" data-tab title="{{.ParentSummary}}">epic {{.Parent}}</a>{{end}}{{end}}
-        {{with .PR}}<a href="{{.URL}}" target="{{.URL}}" data-tab>PR #{{.Number}}{{with .CI.String}} <span class="meta">{{.}}</span>{{end}}</a>{{end}}
+        {{if not .NoTicket}}<a href="{{.JiraURL}}" target="{{.JiraURL}}" data-tab data-group="{{.Key}}">Jira{{with .JiraStatus}} <span class="meta">{{.}}</span>{{end}}{{if .JiraMissing}} <span class="meta">not found</span>{{end}}</a>{{end}}
+        {{if .Parent}}{{if index $p.EpicGroups .Parent}}<a href="#epic-{{.Parent}}" data-to-epic="{{.Parent}}" title="{{.ParentSummary}}">epic {{.Parent}}</a>{{else}}<a href="{{.ParentURL}}" target="{{.ParentURL}}" data-tab data-group="{{.Parent}}" title="{{.ParentSummary}}">epic {{.Parent}}</a>{{end}}{{end}}
+        {{with .PR}}<a href="{{.URL}}" target="{{.URL}}" data-tab data-group="{{$.Key}}">PR #{{.Number}}{{with .CI.String}} <span class="meta">{{.}}</span>{{end}}</a>{{end}}
         {{with .Worktree}}<span class="meta" title="{{.Path}}">worktree {{.Dir}}</span>{{end}}
-        {{with .Plan}}<a href="/plan/{{.Key}}">Plan{{if .Approved}} <span class="meta">approved</span>{{end}}</a>{{end}}
+        {{with .Plan}}<a href="/plan/{{.Key}}" target="plan-{{.Key}}" data-tab data-group="{{$.Key}}">Plan{{if .Approved}} <span class="meta">approved</span>{{end}}</a>{{end}}
         {{template "controls" (taskControls .Task $p)}}
       </div>
     </li>
@@ -500,11 +501,11 @@ function cleanUp(button) {
 {{define "controls"}}{{if .ID}}{{$c := .}}
         {{if .Session}}
         {{if .Native}}<button class="icon" type="button" data-attach="{{.ID}}"{{with $c.Path}} data-path="{{.}}"{{end}} title="Open in a terminal" aria-label="Open in a terminal"><svg class="main" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m7 11 2-2-2-2"/><path d="M11 13h4"/><rect width="18" height="18" x="3" y="3" rx="2"/></svg><svg class="ok" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg><svg class="err" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg></button>{{end}}
-        {{if .Web}}<a class="icon" href="/term/{{.ID}}" target="term-{{.ID}}" title="Open in the browser" aria-label="Open in the browser"><svg class="main" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M2 8h20"/><path d="M6 4v4"/><path d="M10 4v4"/></svg></a>{{end}}
+        {{if .Web}}<a class="icon" href="/term/{{.ID}}" target="term-{{.ID}}" data-group="{{.Group}}" title="Open in the browser" aria-label="Open in the browser"><svg class="main" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M2 8h20"/><path d="M6 4v4"/><path d="M10 4v4"/></svg></a>{{end}}
         {{if .Stop}}<button class="icon stop" type="button" data-stop="{{.ID}}"{{with $c.Path}} data-path="{{.}}"{{end}} title="Stop session" aria-label="Stop session"><svg class="main" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><rect x="9" y="9" width="6" height="6" rx="1"/></svg>{{template "marks"}}</button>{{end}}
         {{else}}{{with .Start}}
         {{if $c.Native}}<button class="icon" type="button" data-start="{{$c.ID}}"{{with $c.Path}} data-path="{{.}}"{{end}} title="{{.}} in a terminal" aria-label="{{.}} in a terminal"><svg class="main" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="6 3 20 12 6 21 6 3"/></svg>{{template "marks"}}</button>{{end}}
-        {{if $c.Web}}<a class="icon" href="/term/{{$c.ID}}?start=1" target="term-{{$c.ID}}" title="{{.}} in the browser" aria-label="{{.}} in the browser"><svg class="main" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/><path d="m10 7 5 3-5 3z"/></svg></a>{{end}}
+        {{if $c.Web}}<a class="icon" href="/term/{{$c.ID}}?start=1" target="term-{{$c.ID}}" data-group="{{$c.Group}}" title="{{.}} in the browser" aria-label="{{.}} in the browser"><svg class="main" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/><path d="m10 7 5 3-5 3z"/></svg></a>{{end}}
         {{end}}{{end}}
         {{with .Clean}}<button class="icon clean" type="button" data-cleanup="{{$c.ID}}"{{with $c.Path}} data-path="{{.}}"{{end}} title="{{.}}" aria-label="Clean up"><svg class="main" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>{{template "marks"}}</button>{{end}}
 {{end}}{{end}}

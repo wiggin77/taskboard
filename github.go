@@ -172,6 +172,14 @@ func (p PRLink) RepoName() string { return path.Base(p.Repo) }
 
 func (p PRLink) ID() string { return p.Repo + "#" + strconv.Itoa(p.Number) }
 
+// Group is the browser tab group for the PR's links; using the ticket puts a review with the ticket's tabs.
+func (p PRLink) Group() string {
+	if p.Key != "" {
+		return p.Key
+	}
+	return p.ID()
+}
+
 func (p PRLink) Meta() string {
 	var parts []string
 	if p.Role != RoleAuthor {

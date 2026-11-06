@@ -19,6 +19,9 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/yuin/goldmark"
+	"github.com/yuin/goldmark/extension"
 )
 
 //go:embed templates/*.html
@@ -133,6 +136,7 @@ type indexData struct {
 // on the taskboard machine; web ones open the browser terminal.
 type controls struct {
 	ID      string
+	Group   string
 	Path    string
 	Session bool
 	Native  bool
@@ -143,7 +147,7 @@ type controls struct {
 }
 
 func taskControls(t Task, d indexData) controls {
-	c := controls{ID: t.Key, Session: t.Session != nil}
+	c := controls{ID: t.Key, Group: t.Key, Session: t.Session != nil}
 	if c.Session {
 		c.Native, c.Web, c.Stop = d.Native, d.CanAct, d.CanAct
 	} else if d.CanAct && t.CanStart() {
@@ -163,7 +167,7 @@ func prControls(p PRLink, d indexData) controls {
 	if p.ReviewName == "" {
 		return controls{}
 	}
-	c := controls{ID: p.ReviewName, Path: "/review"}
+	c := controls{ID: p.ReviewName, Group: p.Group(), Path: "/review"}
 	var wt *Worktree
 	if p.Review != nil {
 		c.Session, wt = p.Review.Session != nil, p.Review.Worktree
@@ -192,8 +196,59 @@ type settingsData struct {
 }
 
 type planData struct {
-	Task    Task
-	Content string
+	Task        Task
+	FrontMatter []planField
+	Content     template.HTML
+}
+
+type planField struct{ Key, Value string }
+
+func (d planData) Status() string {
+	for _, f := range d.FrontMatter {
+		if f.Key == "status" {
+			return f.Value
+		}
+	}
+	return ""
+}
+
+var planMarkdown = goldmark.New(goldmark.WithExtensions(extension.GFM))
+
+// Goldmark leaves out raw HTML and unsafe link schemes unless told otherwise, which keeps plan files from running script on this origin.
+func renderMarkdown(src []byte) (template.HTML, error) {
+	var buf bytes.Buffer
+	if err := planMarkdown.Convert(src, &buf); err != nil {
+		return "", err
+	}
+	return template.HTML(buf.String()), nil
+}
+
+// splitFrontMatter returns the "key: value" lines of a leading --- block and the Markdown after it;
+// other lines in the block, such as YAML list items, are appended to the field before them.
+func splitFrontMatter(src []byte) ([]planField, []byte) {
+	first, rest, ok := bytes.Cut(src, []byte("\n"))
+	if !ok || string(bytes.TrimSpace(first)) != "---" {
+		return nil, src
+	}
+	var fields []planField
+	for len(rest) > 0 {
+		var raw []byte
+		raw, rest, _ = bytes.Cut(rest, []byte("\n"))
+		line := strings.TrimSpace(string(raw))
+		if line == "---" {
+			return fields, rest
+		}
+		k, v, ok := strings.Cut(line, ":")
+		switch {
+		case line == "":
+		case ok && k != "" && !strings.ContainsAny(k, " \t-"):
+			fields = append(fields, planField{k, strings.Trim(strings.TrimSpace(v), `"'`)})
+		case len(fields) > 0:
+			f := &fields[len(fields)-1]
+			f.Value = strings.TrimSpace(f.Value + " " + line)
+		}
+	}
+	return nil, src
 }
 
 func newServer(board *Board, configPath string) http.Handler {
@@ -353,7 +408,13 @@ func (s *server) plan(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	render(w, r, "plan.html", planData{Task: t, Content: string(content)})
+	fields, body := splitFrontMatter(content)
+	html, err := renderMarkdown(body)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	render(w, r, "plan.html", planData{Task: t, FrontMatter: fields, Content: html})
 }
 
 // The custom header forces a CORS preflight, which this server never answers, so other sites cannot trigger it.
