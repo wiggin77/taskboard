@@ -94,7 +94,7 @@ Every task that hasn't merged and has no session gets start buttons. They start 
 
 Either way, taskboard works out where the work lives:
 
-1. If the task already has a worktree, it opens a window there and types `agent_resume_command` (default `claude --continue`, or `agent_command` if you changed that).
+1. If the task already has a worktree, it opens a window there and types `agent_resume_command` (default `claude --continue`, or `agent_command` if you changed that). With the default, a worktree Claude has never run in, such as one another agent created, gets `claude` instead, since there is no conversation to continue.
 2. Otherwise, if a local branch contains the ticket key, it adds a worktree for that branch.
 3. Otherwise, if the task has an open PR in a repo with a local checkout, it adds a worktree and runs `gh pr checkout`, which also handles PRs from forks.
 4. Otherwise it asks for the repo (when more than one has a local checkout) and a branch name, suggesting `MM-1234-summary-words`. It then fetches the repo's `base_branch` (default: whatever `origin/HEAD` points at) and creates the branch from it, without tracking it.

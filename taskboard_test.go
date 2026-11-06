@@ -1510,6 +1510,42 @@ func TestAgentCommandDefault(t *testing.T) {
 	}
 }
 
+func TestCanResume(t *testing.T) {
+	if got, _ := claudeProjectName("/home/me/src/my_repo.v2-MM-1"); got != "-home-me-src-my-repo-v2-MM-1" {
+		t.Errorf("project name %q", got)
+	}
+	if _, ok := claudeProjectName("/" + strings.Repeat("a", 200)); ok {
+		t.Error("over-long project name accepted")
+	}
+
+	base := t.TempDir()
+	t.Setenv("CLAUDE_CONFIG_DIR", base)
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := testConfig(t)
+	cfg.AgentCommand, cfg.AgentResume = "", ""
+	if canResume(cfg, dir) {
+		t.Error("resumed with no conversation")
+	}
+	cfg.AgentResume = "aider --restore"
+	if !canResume(cfg, dir) {
+		t.Error("custom resume command not trusted")
+	}
+	cfg.AgentResume = ""
+	name, _ := claudeProjectName(dir)
+	if err := os.MkdirAll(filepath.Join(base, "projects", name), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(base, "projects", name, "s.jsonl"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if !canResume(cfg, dir) {
+		t.Error("conversation not found")
+	}
+}
+
 func TestDefaultsAreNotSaved(t *testing.T) {
 	cfg, err := parseConfig([]byte(`{"project_keys":["MM"],"jira":{"base_url":"https://x.atlassian.net","jql":"  "},"repos":[{"name":"a/b"}]}`))
 	if err != nil {

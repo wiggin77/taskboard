@@ -198,8 +198,46 @@ func startSession(ctx context.Context, cfg *Config, key string, p StartPlan) (st
 			return "", err
 		}
 	}
-	command := cfg.agent(p.Mode == StartResume)
+	command := cfg.agent(p.Mode == StartResume && canResume(cfg, p.Path))
 	return openWindow(ctx, cfg, key, p.Path, strings.ReplaceAll(command, "{key}", key))
+}
+
+// canResume reports whether the resume command has something to resume in dir. claude --continue fails
+// where Claude has never run, such as a worktree another agent created; a custom resume command is trusted.
+func canResume(cfg *Config, dir string) bool {
+	if cfg.agent(true) != defaultAgentResume {
+		return true
+	}
+	base := os.Getenv("CLAUDE_CONFIG_DIR")
+	if base == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return true
+		}
+		base = filepath.Join(home, ".claude")
+	}
+	if d, err := filepath.EvalSymlinks(dir); err == nil {
+		dir = d
+	}
+	name, ok := claudeProjectName(dir)
+	if !ok {
+		return true
+	}
+	found, _ := filepath.Glob(filepath.Join(base, "projects", name, "*.jsonl"))
+	return len(found) > 0
+}
+
+// claudeProjectName is the directory under ~/.claude/projects where Claude Code keeps dir's conversations:
+// the path with every non-alphanumeric character replaced by '-'. Claude shortens names over 200 characters
+// with a hash, which isn't reproduced here, so those report false.
+func claudeProjectName(dir string) (string, bool) {
+	name := strings.Map(func(c rune) rune {
+		if 'a' <= c && c <= 'z' || 'A' <= c && c <= 'Z' || '0' <= c && c <= '9' {
+			return c
+		}
+		return '-'
+	}, dir)
+	return name, len(name) <= 200
 }
 
 func createWorktree(ctx context.Context, cfg *Config, p StartPlan) error {
@@ -620,7 +658,7 @@ func startReview(ctx context.Context, cfg *Config, l PRLink) (string, error) {
 			return "", err
 		}
 	}
-	return openWindow(ctx, cfg, name, dir, reviewCommand(cfg, resume))
+	return openWindow(ctx, cfg, name, dir, reviewCommand(cfg, resume && canResume(cfg, dir)))
 }
 
 // Reviews have no ticket, so {key} is dropped; the user types the review prompt themselves.
