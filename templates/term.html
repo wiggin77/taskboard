@@ -60,6 +60,8 @@ const sendSize = () => send(JSON.stringify({ cols: term.cols, rows: term.rows })
 term.onData(d => send(encoder.encode(d)));
 term.onBinary(d => send(Uint8Array.from(d, c => c.charCodeAt(0))));
 term.onResize(sendSize);
+const sendFlow = () => send(document.hidden ? "pause" : "resume");
+document.addEventListener("visibilitychange", sendFlow);
 
 function connect() {
   status("Connecting to " + id);
@@ -69,6 +71,7 @@ function connect() {
     status("");
     term.reset();
     sendSize();
+    sendFlow();
     term.focus();
   };
   ws.onmessage = e => term.write(new Uint8Array(e.data));

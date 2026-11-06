@@ -94,7 +94,7 @@ Every task that hasn't merged and has no session gets start buttons. They start 
 
 Either way, taskboard works out where the work lives:
 
-1. If the task already has a worktree, it opens a window there and types `agent_resume_command` (default `claude --continue`, or `agent_command` if you changed that).
+1. If the task already has a worktree, it opens a window there and types `agent_resume_command` (default `claude --continue`, or `agent_command` if you changed that). With the default, a worktree Claude has never run in, such as one another agent created, gets `claude` instead, since there is no conversation to continue.
 2. Otherwise, if a local branch contains the ticket key, it adds a worktree for that branch.
 3. Otherwise, if the task has an open PR in a repo with a local checkout, it adds a worktree and runs `gh pr checkout`, which also handles PRs from forks.
 4. Otherwise it asks for the repo (when more than one has a local checkout) and a branch name, suggesting `MM-1234-summary-words`. It then fetches the repo's `base_branch` (default: whatever `origin/HEAD` points at) and creates the branch from it, without tracking it.
@@ -135,7 +135,7 @@ tmux new-window -n MM-1234 -c ~/src/mattermost-MM-1234 <agent>
 
 Rows with a session get matching open buttons, plus Stop:
 
-- **Open in the browser** (the window icon) opens `/term/<key>` in a tab of its own, one per session. The terminal shows the full tmux window, and closing the tab or detaching (Ctrl-b d) leaves the session running. If the connection drops, the page offers Reconnect. When the session itself ends, for example after you quit the agent and `exit` the shell, the board refreshes right away and the page offers Resume, which starts a new window in the same worktree. With tmux mouse mode on, hold Option while dragging to select text on a Mac, or Shift elsewhere.
+- **Open in the browser** (the window icon) opens `/term/<key>` in a tab of its own, one per session. The terminal shows the full tmux window, and closing the tab or detaching (Ctrl-b d) leaves the session running. While its tab is hidden the terminal pauses, and tmux redraws it when you come back. If the connection drops, the page offers Reconnect. When the session itself ends, for example after you quit the agent and `exit` the shell, the board refreshes right away and the page offers Resume, which starts a new window in the same worktree. With tmux mouse mode on, hold Option while dragging to select text on a Mac, or Shift elsewhere.
 - **Open in a terminal** (the terminal icon) runs `attach_command` on the taskboard machine, with the same rules as Start in a terminal.
 
 Both attach through a new linked tmux session, which shares the windows of the task's session but has its own current window. Several terminals can then be attached at once, each on a different task, without switching each other's window. The linked session closes when its terminal detaches, and the board ignores linked sessions. For `attach_command`, taskboard creates the linked session first and sets `{target}` to its name, so the usual `tmux attach -t {target}` works (by default in a new gnome-terminal). A linked session whose terminal never attaches is removed on a later refresh.
