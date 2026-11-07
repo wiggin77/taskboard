@@ -1,6 +1,7 @@
 (() => {
   const api = globalThis.browser ?? globalThis.chrome;
   if (!document.querySelector('meta[name="application-name"][content="taskboard"]')) return;
+  document.documentElement.dataset.taskboardExtension = api.runtime.getManifest().version;
 
   // Capture on window runs before the page's own data-tab handler on document, which then stands down.
   addEventListener("click", e => {

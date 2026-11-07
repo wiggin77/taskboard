@@ -271,6 +271,8 @@ func newServer(board *Board, configPath string) http.Handler {
 	mux.HandleFunc("GET /term/{id}", s.termPage)
 	mux.HandleFunc("GET /term/{id}/ws", s.termSocket)
 	mux.HandleFunc("GET /static/{file}", s.static)
+	mux.HandleFunc("GET /extension", s.extensionPage)
+	mux.HandleFunc("GET /"+extensionZipName, s.extensionDownload)
 	mux.HandleFunc("GET /settings", s.settings)
 	mux.HandleFunc("POST /settings", s.saveSettings)
 	return s.checkHost(mux)

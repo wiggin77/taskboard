@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="application-name" content="taskboard">
+{{template "theme"}}
+<title>taskboard tab groups</title>
+<style>
+{{template "tokens"}}
+body{padding-top:1.5rem;max-width:48rem}
+a{color:var(--link);text-decoration:none}
+a:hover{text-decoration:underline}
+:focus-visible{outline:2px solid var(--link);outline-offset:2px;border-radius:4px}
+header{display:flex;align-items:center;justify-content:space-between;gap:1rem;margin-bottom:.75rem}
+.nav{display:flex;align-items:center;gap:1rem}
+h1{font-size:1.25rem;font-weight:700;letter-spacing:-.02em;margin:0}
+h2{font-size:.9375rem;font-weight:650;margin:0 0 .5rem}
+.lead{color:var(--muted);margin:0 0 1.25rem}
+section{margin:0 0 1rem;padding:1rem 1.1rem;background:var(--surface);border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow)}
+ol{margin:0;padding-left:1.25rem}
+li+li{margin-top:.35rem}
+code{font:.875em/1.5 ui-monospace,"JetBrains Mono","SF Mono",Menlo,monospace;background:var(--chip);border-radius:4px;padding:.1em .35em;overflow-wrap:anywhere}
+.download{display:inline-block;margin:0 0 1.25rem;padding:.45rem 1rem;border-radius:999px;background:var(--link);color:var(--surface);font-weight:600}
+.download:hover{text-decoration:none;filter:brightness(1.1)}
+.installed{display:none;margin:0 0 1.25rem;padding:.6rem .9rem;border-radius:8px;color:var(--ok);background:color-mix(in srgb,var(--ok) 12%,transparent);font-weight:600}
+:root[data-taskboard-extension] .installed{display:block}
+.note{color:var(--muted);font-size:.875rem;margin:.6rem 0 0}
+</style>
+</head>
+<body>
+<header>
+  <h1>Tab groups extension</h1>
+  <div class="nav">
+    <a href="/">Back to board</a>
+    {{template "themebutton"}}
+  </div>
+</header>
+<p class="lead">Opens each ticket's Jira issue, PR, plan and terminal in a browser tab group named after the ticket. Works in Chrome, Edge and Firefox 140 or later.</p>
+<p class="installed" role="status">The extension is installed and active on this page.</p>
+<a class="download" href="/{{.ZipName}}" download>Download {{.ZipName}}</a>
+
+<section>
+  <h2>Chrome or Edge</h2>
+  <ol>
+    <li>Unzip {{.ZipName}} into a folder you'll keep. The browser loads it from there.</li>
+    <li>Open <code>chrome://extensions</code> (or <code>edge://extensions</code>) and turn on Developer mode.</li>
+    <li>Choose Load unpacked and select the unzipped folder.</li>
+  </ol>
+</section>
+
+<section>
+  <h2>Firefox</h2>
+  <ol>
+    <li>Open <code>about:debugging#/runtime/this-firefox</code>.</li>
+    <li>Choose Load Temporary Add-on and pick {{.ZipName}}.</li>
+  </ol>
+  <p class="note">Firefox removes temporary add-ons when it restarts. To keep it installed, sign it as an unlisted add-on with your own <a href="https://addons.mozilla.org/developers/addon/api/key/" target="_blank" rel="noopener">addons.mozilla.org API key</a>: <code>npx web-ext sign -s &lt;unzipped folder&gt; --channel=unlisted --api-key=... --api-secret=...</code>, then install the <code>.xpi</code> it produces.</p>
+</section>
+
+{{if .NeedsAdd}}<section>
+  <h2>This address</h2>
+  <p>The extension only acts on <code>http://127.0.0.1</code> and <code>http://localhost</code> by default. Add <code>{{.Origin}}</code> in the extension's options, allow access when the browser asks, then reload the board.</p>
+</section>{{end}}
+</body>
+</html>

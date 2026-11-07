@@ -1,6 +1,8 @@
 package main
 
 import (
+	"archive/zip"
+	"bytes"
 	"compress/gzip"
 	"context"
 	"crypto"
@@ -1913,6 +1915,57 @@ func TestSplitFrontMatter(t *testing.T) {
 		fields, body := splitFrontMatter([]byte(tc.in))
 		if !slices.Equal(fields, tc.fields) || string(body) != tc.body {
 			t.Errorf("splitFrontMatter(%q) = %q, %q, want %q, %q", tc.in, fields, body, tc.fields, tc.body)
+		}
+	}
+}
+
+func TestExtensionDownload(t *testing.T) {
+	h := newServer(NewBoard(testConfig(t)), "")
+
+	req := httptest.NewRequest("GET", "/"+extensionZipName, nil)
+	req.Host = "localhost"
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || rec.Header().Get("Content-Type") != "application/zip" {
+		t.Fatalf("download: %d %q", rec.Code, rec.Header().Get("Content-Type"))
+	}
+	zr, err := zip.NewReader(bytes.NewReader(rec.Body.Bytes()), int64(rec.Body.Len()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, f := range zr.File {
+		names = append(names, f.Name)
+	}
+	for _, want := range []string{"manifest.json", "background.js", "content.js"} {
+		if !slices.Contains(names, want) {
+			t.Errorf("zip lacks %s at its root: %v", want, names)
+		}
+	}
+
+	for _, c := range []struct {
+		host     string
+		tls      bool
+		needsAdd bool
+	}{
+		{"localhost:8080", false, false},
+		{"127.0.0.1:8080", false, false},
+		{"board.example:8443", true, true},
+		{"localhost:8443", true, true},
+	} {
+		req := httptest.NewRequest("GET", "/extension", nil)
+		req.Host = c.host
+		if c.tls {
+			req.TLS = &tls.ConnectionState{}
+		}
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		body := rec.Body.String()
+		if !strings.Contains(body, "/"+extensionZipName) {
+			t.Errorf("%s: page lacks the download link (status %d)", c.host, rec.Code)
+		}
+		if got := strings.Contains(body, "in the extension's options"); got != c.needsAdd {
+			t.Errorf("%s: shows add-origin hint = %v, want %v", c.host, got, c.needsAdd)
 		}
 	}
 }

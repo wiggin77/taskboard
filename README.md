@@ -184,10 +184,10 @@ The board opens each Jira ticket, PR, plan and browser terminal in a tab of its 
 - Only plain clicks are grouped. Middle-click and Ctrl/Cmd-click open a tab as usual. Without the extension, links open exactly as they always have.
 - Native terminals (`attach_command`) aren't browser tabs, so they can't be grouped.
 
-To install:
+To install, click the puzzle-piece button in the board's header. It opens a page that downloads the extension as `taskboard-tab-groups.zip` and has these steps; the button disappears once the extension is active on the board.
 
-- **Chrome or Edge:** open `chrome://extensions` (`edge://extensions`), turn on Developer mode, choose Load unpacked and select the `extension` folder.
-- **Firefox:** release Firefox removes unsigned extensions when it restarts. For a quick try, use Load Temporary Add-on in `about:debugging#/runtime/this-firefox` and pick `extension/manifest.json`. To keep it installed, sign it as an unlisted add-on with your own [addons.mozilla.org API key](https://addons.mozilla.org/developers/addon/api/key/) and install the `.xpi` it produces: `npx web-ext sign -s extension --channel=unlisted --api-key=... --api-secret=...`.
+- **Chrome or Edge:** unzip the download (or use the `extension` folder), open `chrome://extensions` (`edge://extensions`), turn on Developer mode, choose Load unpacked and select the folder.
+- **Firefox:** release Firefox removes unsigned extensions when it restarts. For a quick try, use Load Temporary Add-on in `about:debugging#/runtime/this-firefox` and pick the zip or `extension/manifest.json`. To keep it installed, sign it as an unlisted add-on with your own [addons.mozilla.org API key](https://addons.mozilla.org/developers/addon/api/key/) and install the `.xpi` it produces: `npx web-ext sign -s extension --channel=unlisted --api-key=... --api-secret=...`.
 
 The extension works on taskboard pages at `http://127.0.0.1` and `http://localhost`, on any port. To use it with the [HTTPS listener](#remote-access) or any other address, add that address in the extension's options and allow access when the browser asks, then reload the board.
 
