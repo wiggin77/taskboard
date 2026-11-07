@@ -4,11 +4,11 @@ import (
 	"archive/zip"
 	"bytes"
 	"embed"
-	"io/fs"
 	"net/http"
 	"net/url"
 	"slices"
 	"sync"
+	"time"
 )
 
 //go:embed extension
@@ -20,12 +20,24 @@ const extensionZipName = "taskboard-tab-groups.zip"
 var extensionZip = sync.OnceValues(func() ([]byte, error) {
 	var buf bytes.Buffer
 	zw := zip.NewWriter(&buf)
-	sub, err := fs.Sub(extensionFS, "extension")
+	entries, err := extensionFS.ReadDir("extension")
 	if err != nil {
 		return nil, err
 	}
-	if err := zw.AddFS(sub); err != nil {
-		return nil, err
+	// Embedded files have no modification time, which zip.AddFS would record as 2049.
+	now := time.Now()
+	for _, e := range entries {
+		data, err := extensionFS.ReadFile("extension/" + e.Name())
+		if err != nil {
+			return nil, err
+		}
+		w, err := zw.CreateHeader(&zip.FileHeader{Name: e.Name(), Method: zip.Deflate, Modified: now})
+		if err != nil {
+			return nil, err
+		}
+		if _, err := w.Write(data); err != nil {
+			return nil, err
+		}
 	}
 	if err := zw.Close(); err != nil {
 		return nil, err
