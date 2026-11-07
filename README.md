@@ -184,12 +184,15 @@ The board opens each Jira ticket, PR, plan and browser terminal in a tab of its 
 - Only plain clicks are grouped. Middle-click and Ctrl/Cmd-click open a tab as usual. Without the extension, links open exactly as they always have.
 - Native terminals (`attach_command`) aren't browser tabs, so they can't be grouped.
 
-To install:
+To install, click the puzzle-piece button in the board's header. It works the same whether the browser runs on the taskboard machine or on another one over the [HTTPS listener](#remote-access). The extension isn't in any web store, so Chrome and Edge need Developer mode once:
 
-- **Chrome or Edge:** open `chrome://extensions` (`edge://extensions`), turn on Developer mode, choose Load unpacked and select the `extension` folder.
-- **Firefox:** release Firefox removes unsigned extensions when it restarts. For a quick try, use Load Temporary Add-on in `about:debugging#/runtime/this-firefox` and pick `extension/manifest.json`. To keep it installed, sign it as an unlisted add-on with your own [addons.mozilla.org API key](https://addons.mozilla.org/developers/addon/api/key/) and install the `.xpi` it produces: `npx web-ext sign -s extension --channel=unlisted --api-key=... --api-secret=...`.
+- **Chrome or Edge:** choose a folder on the install page and the page writes a `taskboard-tab-groups` folder there (this uses the browser's File System Access API, so the board must be on `http://127.0.0.1`, `http://localhost` or HTTPS). Then open `chrome://extensions` (`edge://extensions`), turn on Developer mode, choose Load unpacked and select that folder.
+- **Firefox:** release Firefox removes unsigned extensions when it restarts. For a quick try, download `taskboard-tab-groups.zip` from the install page and pick it under Load Temporary Add-on in `about:debugging#/runtime/this-firefox`. To keep it installed, sign it as an unlisted add-on with your own [addons.mozilla.org API key](https://addons.mozilla.org/developers/addon/api/key/) and install the `.xpi` it produces: `npx web-ext sign -s extension --channel=unlisted --api-key=... --api-secret=...`.
+- **Anything else:** the install page also offers the zip, which Chrome and Edge load unpacked once it's unzipped. The `extension` folder in the repo and the release archives works too.
 
-The extension works on taskboard pages at `http://127.0.0.1` and `http://localhost`, on any port. To use it with the [HTTPS listener](#remote-access) or any other address, add that address in the extension's options and allow access when the browser asks, then reload the board.
+The header button disappears once the extension is active on the board. When taskboard is upgraded with a newer extension, the board rewrites the folder it installed into and the extension reloads itself; the button turns orange if that couldn't happen (the browser wants permission to edit the folder again, or the extension was loaded from somewhere else) and leads to the install page's Update button. A zip install has to be downloaded and loaded again.
+
+The extension works on taskboard pages at `http://127.0.0.1` and `http://localhost` on any port, and on the address it was installed from (the board writes it into the extension's manifest). To use it at any other address, add that address in the extension's options and allow access when the browser asks, then reload the board.
 
 ## Notes
 

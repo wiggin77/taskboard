@@ -1,0 +1,109 @@
+{{define "extensioninstall"}}<meta name="taskboard-extension-version" content="{{extVersion}}">
+<script>
+// Writes the tab groups extension into a folder on the browser's machine and keeps it current;
+// the extension's content script marks the page with data-taskboard-extension and reloads on request.
+const taskboardExtension = (() => {
+  const NAME = "taskboard-tab-groups";
+  const root = document.documentElement;
+  const want = document.querySelector('meta[name="taskboard-extension-version"]').content;
+  const supported = "showDirectoryPicker" in window && isSecureContext;
+  const wroteKey = "taskboard-extension-wrote";
+
+  function newer(a, b) {
+    const x = a.split(".").map(Number), y = b.split(".").map(Number);
+    for (let i = 0; i < Math.max(x.length, y.length); i++) {
+      const d = (x[i] ?? 0) - (y[i] ?? 0);
+      if (d) return d > 0;
+    }
+    return false;
+  }
+
+  function store(mode, fn) {
+    return new Promise((resolve, reject) => {
+      const open = indexedDB.open("taskboard-extension", 1);
+      open.onupgradeneeded = () => open.result.createObjectStore("handles");
+      open.onerror = () => reject(open.error);
+      open.onsuccess = () => {
+        const req = fn(open.result.transaction("handles", mode).objectStore("handles"));
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+      };
+    });
+  }
+  const savedFolder = () => store("readonly", s => s.get("folder")).catch(() => undefined);
+
+  async function write(dir) {
+    const res = await fetch("/extension/files.json", { cache: "no-store" });
+    if (!res.ok) throw new Error(`Couldn't fetch the extension: ${res.status}`);
+    const files = await res.json();
+    // Keep the matches another board wrote into this folder, so two boards don't undo each other.
+    try {
+      const old = JSON.parse(await (await (await dir.getFileHandle("manifest.json")).getFile()).text());
+      const m = JSON.parse(files["manifest.json"]);
+      const cs = m.content_scripts[0];
+      cs.matches = [...new Set([...cs.matches, ...(old.content_scripts?.[0]?.matches ?? [])])];
+      files["manifest.json"] = JSON.stringify(m, null, 2);
+    } catch {}
+    for (const [name, text] of Object.entries(files)) {
+      const w = await (await dir.getFileHandle(name, { create: true })).createWritable();
+      await w.write(text);
+      await w.close();
+    }
+    const stale = [];
+    for await (const [name, entry] of dir.entries()) {
+      if (entry.kind === "file" && !(name in files)) stale.push(name);
+    }
+    for (const name of stale) await dir.removeEntry(name);
+    try { localStorage.setItem(wroteKey, want); } catch {}
+  }
+
+  async function install() {
+    const picked = await showDirectoryPicker({ id: NAME, mode: "readwrite" });
+    const dir = picked.name === NAME ? picked : await picked.getDirectoryHandle(NAME, { create: true });
+    await write(dir);
+    await store("readwrite", s => s.put(dir, "folder"));
+    return picked.name === NAME ? NAME : `${NAME} in ${picked.name}`;
+  }
+
+  // Resolves "reloading" (the page reloads itself), "stale" (the extension didn't reload, so it was
+  // loaded from another folder), "permission" or "nofolder".
+  async function update(interactive) {
+    const dir = await savedFolder();
+    if (!dir) return "nofolder";
+    let perm = await dir.queryPermission({ mode: "readwrite" });
+    if (perm !== "granted" && interactive) perm = await dir.requestPermission({ mode: "readwrite" });
+    if (perm !== "granted") return "permission";
+    await write(dir);
+    return new Promise(resolve => {
+      const timer = setTimeout(() => resolve("stale"), 3000);
+      document.addEventListener("taskboard-extension-reloading", () => {
+        clearTimeout(timer);
+        resolve("reloading");
+        setTimeout(() => location.reload(), 1000);
+      }, { once: true });
+      document.dispatchEvent(new CustomEvent("taskboard-extension-updated"));
+    });
+  }
+
+  // Calls fn with "current" or "outdated" once the content script marks the page; never without it.
+  function onInstalled(fn) {
+    const check = () => {
+      const have = root.dataset.taskboardExtension;
+      if (have === undefined) return false;
+      const state = newer(want, have) ? "outdated" : "current";
+      root.dataset.taskboardExtensionState = state;
+      fn(state, have);
+      return true;
+    };
+    if (check()) return;
+    const obs = new MutationObserver(() => { if (check()) obs.disconnect(); });
+    obs.observe(root, { attributes: true, attributeFilter: ["data-taskboard-extension"] });
+  }
+
+  function wrote() {
+    try { return localStorage.getItem(wroteKey); } catch { return null; }
+  }
+
+  return { want, supported, install, update, onInstalled, wrote, savedFolder };
+})();
+</script>{{end}}

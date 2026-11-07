@@ -6,6 +6,7 @@
 <meta name="application-name" content="taskboard">
 {{template "theme"}}
 {{template "tabs"}}
+{{template "extensioninstall"}}
 <noscript><meta http-equiv="refresh" content="{{.RefreshSeconds}}"></noscript>
 <title>taskboard</title>
 <style>
@@ -19,6 +20,8 @@ h1{font-size:1.25rem;font-weight:700;letter-spacing:-.02em;margin:0}
 .updated::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--ok);box-shadow:0 0 0 3px color-mix(in srgb,var(--ok) 22%,transparent)}
 .updated.refreshing::before{background:var(--needs);box-shadow:0 0 0 3px color-mix(in srgb,var(--needs) 22%,transparent)}
 .status{display:flex;align-items:center;gap:.5rem}
+:root[data-taskboard-extension-state=current] .get-extension{display:none}
+:root[data-taskboard-extension-state=outdated] .get-extension{border-color:color-mix(in srgb,var(--needs) 50%,var(--line));color:var(--needs)}
 .updated{margin-right:.25rem}
 .refresh:disabled svg{animation:spin 1s linear infinite}
 @keyframes spin{to{transform:rotate(360deg)}}
@@ -145,6 +148,9 @@ a:hover{text-decoration:underline}
       <button class="icon refresh" type="button"{{if .Refreshing}} disabled title="Refreshing" aria-label="Refreshing"{{else}} title="Refresh now" aria-label="Refresh now"{{end}}>
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></svg>
       </button>
+      <a class="icon get-extension" href="/extension" title="Get the tab groups extension" aria-label="Get the tab groups extension">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15.39 4.39a1 1 0 0 0 1.68-.474 2.5 2.5 0 1 1 3.014 3.015 1 1 0 0 0-.474 1.68l1.683 1.682a2.414 2.414 0 0 1 0 3.414L19.61 15.39a1 1 0 0 1-1.68-.474 2.5 2.5 0 1 0-3.014 3.015 1 1 0 0 1 .474 1.68l-1.683 1.682a2.414 2.414 0 0 1-3.414 0L8.61 19.61a1 1 0 0 0-1.68.474 2.5 2.5 0 1 1-3.014-3.015 1 1 0 0 0 .474-1.68l-1.683-1.682a2.414 2.414 0 0 1 0-3.414L4.39 8.61a1 1 0 0 1 1.68.474 2.5 2.5 0 1 0 3.014-3.015 1 1 0 0 1-.474-1.68l1.683-1.682a2.414 2.414 0 0 1 3.414 0z"/></svg>
+      </a>
       {{template "themebutton"}}
       {{if .CanAct}}<a class="icon" href="/settings" title="Settings" aria-label="Settings">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
@@ -466,6 +472,17 @@ function cleanUp(button) {
     return r;
   });
 }
+
+taskboardExtension.onInstalled(state => {
+  if (state !== "outdated") return;
+  const link = document.querySelector(".get-extension");
+  link.title = "Update the tab groups extension";
+  link.setAttribute("aria-label", link.title);
+  // Once per version; if the extension still doesn't update, the button leads to the install page.
+  if (taskboardExtension.supported && taskboardExtension.wrote() !== taskboardExtension.want) {
+    taskboardExtension.update(false).catch(err => console.warn("taskboard extension update:", err));
+  }
+});
 </script>
 </body>
 </html>
