@@ -3,6 +3,15 @@
   if (!document.querySelector('meta[name="application-name"][content="taskboard"]')) return;
   document.documentElement.dataset.taskboardExtension = api.runtime.getManifest().version;
 
+  // The page rewrote the extension's folder; ask to reload, and tell the page whether that will happen.
+  document.addEventListener("taskboard-extension-updated", () => {
+    const version = document.querySelector('meta[name="taskboard-extension-version"]')?.content;
+    if (!version || !api?.runtime?.id) return;
+    api.runtime.sendMessage({ type: "reload", version }).then(
+      res => { if (res?.ok) document.dispatchEvent(new CustomEvent("taskboard-extension-reloading")); },
+      () => {});
+  });
+
   // Capture on window runs before the page's own data-tab handler on document, which then stands down.
   addEventListener("click", e => {
     if (!e.isTrusted || e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;

@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="application-name" content="taskboard">
 {{template "theme"}}
+{{template "extensioninstall"}}
 <title>taskboard tab groups</title>
 <style>
 {{template "tokens"}}
@@ -19,13 +20,24 @@ h2{font-size:.9375rem;font-weight:650;margin:0 0 .5rem}
 .lead{color:var(--muted);margin:0 0 1.25rem}
 section{margin:0 0 1rem;padding:1rem 1.1rem;background:var(--surface);border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow)}
 ol{margin:0;padding-left:1.25rem}
-li+li{margin-top:.35rem}
+li+li{margin-top:.75rem}
+li p{margin:0 0 .4rem}
 code{font:.875em/1.5 ui-monospace,"JetBrains Mono","SF Mono",Menlo,monospace;background:var(--chip);border-radius:4px;padding:.1em .35em;overflow-wrap:anywhere}
-.download{display:inline-block;margin:0 0 1.25rem;padding:.45rem 1rem;border-radius:999px;background:var(--link);color:var(--surface);font-weight:600}
-.download:hover{text-decoration:none;filter:brightness(1.1)}
-.installed{display:none;margin:0 0 1.25rem;padding:.6rem .9rem;border-radius:8px;color:var(--ok);background:color-mix(in srgb,var(--ok) 12%,transparent);font-weight:600}
-:root[data-taskboard-extension] .installed{display:block}
-.note{color:var(--muted);font-size:.875rem;margin:.6rem 0 0}
+.primary,.secondary{display:inline-block;padding:.4rem .95rem;border-radius:999px;font:inherit;font-size:.875rem;font-weight:600;cursor:pointer}
+.primary{border:1px solid var(--link);background:var(--link);color:var(--surface)}
+.secondary{border:1px solid var(--line);background:var(--surface);color:var(--ink)}
+.primary:hover,.secondary:hover{text-decoration:none;filter:brightness(1.08)}
+.primary:disabled,.secondary:disabled{cursor:progress;opacity:.7}
+.result{margin-left:.6rem;color:var(--muted);font-size:.875rem}
+.result.ok{color:var(--ok)}
+.result.err{color:var(--fail)}
+#status{margin:0 0 1.25rem;padding:.6rem .9rem;border-radius:8px;font-weight:600}
+#status.ok{color:var(--ok);background:color-mix(in srgb,var(--ok) 12%,transparent)}
+#status.needs{color:var(--needs);background:color-mix(in srgb,var(--needs) 12%,transparent)}
+#status button{margin-left:.6rem}
+#status .detail{display:block;margin-top:.35rem;font-weight:400}
+.note{color:var(--muted);font-size:.875rem;margin:.75rem 0 0}
+.zip{margin:0 0 .75rem}
 </style>
 </head>
 <body>
@@ -37,30 +49,122 @@ code{font:.875em/1.5 ui-monospace,"JetBrains Mono","SF Mono",Menlo,monospace;bac
   </div>
 </header>
 <p class="lead">Opens each ticket's Jira issue, PR, plan and terminal in a browser tab group named after the ticket. Works in Chrome, Edge and Firefox 140 or later.</p>
-<p class="installed" role="status">The extension is installed and active on this page.</p>
-<a class="download" href="/{{.ZipName}}" download>Download {{.ZipName}}</a>
+<p id="status" role="status" hidden></p>
+
+<section id="folder" hidden>
+  <h2>Install in Chrome or Edge</h2>
+  <ol>
+    <li>
+      <p>Choose where to keep the extension. Taskboard writes a <code>taskboard-tab-groups</code> folder there, on this computer.</p>
+      <button class="primary" type="button" id="choose">Choose a folder</button><span class="result" id="chose" role="status"></span>
+    </li>
+    <li>
+      <p>Open <code class="ext-url">chrome://extensions</code> in a new tab and turn on Developer mode. Pages can't link there, so paste the address into the address bar.</p>
+      <button class="secondary" type="button" id="copy">Copy address</button><span class="result" id="copied" role="status"></span>
+    </li>
+    <li><p>Choose Load unpacked, select the <code>taskboard-tab-groups</code> folder, then reload this page.</p></li>
+  </ol>
+  <p class="note">When taskboard is upgraded, the board rewrites the folder and the extension reloads itself. If the browser asks to let this site edit the folder, choose Allow on every visit so updates need no click.</p>
+</section>
 
 <section>
-  <h2>Chrome or Edge</h2>
+  <h2 id="zip-title">Chrome or Edge</h2>
+  <p class="zip"><a class="primary" href="/{{.ZipName}}" download>Download {{.ZipName}}</a></p>
   <ol>
     <li>Unzip {{.ZipName}} into a folder you'll keep. The browser loads it from there.</li>
-    <li>Open <code>chrome://extensions</code> (or <code>edge://extensions</code>) and turn on Developer mode.</li>
+    <li>Open <code class="ext-url">chrome://extensions</code> and turn on Developer mode.</li>
     <li>Choose Load unpacked and select the unzipped folder.</li>
   </ol>
+  <p class="note">A zip doesn't update itself: download it again after upgrading taskboard and reload the extension.</p>
 </section>
 
 <section>
   <h2>Firefox</h2>
   <ol>
     <li>Open <code>about:debugging#/runtime/this-firefox</code>.</li>
-    <li>Choose Load Temporary Add-on and pick {{.ZipName}}.</li>
+    <li>Choose Load Temporary Add-on and pick {{.ZipName}} from above.</li>
   </ol>
   <p class="note">Firefox removes temporary add-ons when it restarts. To keep it installed, sign it as an unlisted add-on with your own <a href="https://addons.mozilla.org/developers/addon/api/key/" target="_blank" rel="noopener">addons.mozilla.org API key</a>: <code>npx web-ext sign -s &lt;unzipped folder&gt; --channel=unlisted --api-key=... --api-secret=...</code>, then install the <code>.xpi</code> it produces.</p>
 </section>
 
-{{if .NeedsAdd}}<section>
-  <h2>This address</h2>
-  <p>The extension only acts on <code>http://127.0.0.1</code> and <code>http://localhost</code> by default. Add <code>{{.Origin}}</code> in the extension's options, allow access when the browser asks, then reload the board.</p>
-</section>{{end}}
+<script>
+const ext = taskboardExtension;
+const extURL = navigator.userAgent.includes("Edg/") ? "edge://extensions" : "chrome://extensions";
+for (const el of document.querySelectorAll(".ext-url")) el.textContent = extURL;
+
+function say(el, text, tone) {
+  el.textContent = text;
+  el.className = "result" + (tone ? " " + tone : "");
+}
+
+if (ext.supported) {
+  document.getElementById("folder").hidden = false;
+  document.getElementById("zip-title").textContent = "Or install from a zip";
+  document.querySelector(".zip a").className = "secondary";
+  const choose = document.getElementById("choose"), chose = document.getElementById("chose");
+  choose.addEventListener("click", async () => {
+    choose.disabled = true;
+    try {
+      say(chose, "Wrote " + await ext.install() + ".", "ok");
+    } catch (err) {
+      if (err.name !== "AbortError") say(chose, err.message, "err");
+    } finally {
+      choose.disabled = false;
+    }
+  });
+  const copied = document.getElementById("copied");
+  document.getElementById("copy").addEventListener("click", () => {
+    navigator.clipboard.writeText(extURL).then(() => say(copied, "Copied " + extURL, "ok"), err => say(copied, err.message, "err"));
+  });
+}
+
+const status = document.getElementById("status");
+function showStatus(tone, text, detail, button) {
+  status.hidden = false;
+  status.className = tone;
+  status.replaceChildren(text);
+  if (button) status.append(button);
+  if (detail) {
+    const d = document.createElement("span");
+    d.className = "detail";
+    d.textContent = detail;
+    status.append(d);
+  }
+}
+
+const results = {
+  reloading: ["ok", "Updated. Reloading this page."],
+  stale: ["needs", "The folder was updated, but the extension didn't reload.",
+    `It was probably loaded from a different folder. In ${extURL}, remove it, then Load unpacked the taskboard-tab-groups folder.`],
+  permission: ["needs", "Taskboard needs permission to edit the extension's folder.", "Choose Update again and allow it."],
+  nofolder: ["needs", "This browser hasn't set up an extension folder yet.",
+    `Use Choose a folder below, then in ${extURL} remove the old extension and Load unpacked the new folder.`],
+};
+
+ext.onInstalled((state, have) => {
+  if (state === "current") {
+    showStatus("ok", `The extension is installed and up to date (version ${have}).`);
+    return;
+  }
+  const detail = ext.supported ? "" : "Download the zip below and load it again in place of the old one.";
+  let button;
+  if (ext.supported) {
+    button = document.createElement("button");
+    button.type = "button";
+    button.className = "secondary";
+    button.textContent = "Update extension";
+    button.addEventListener("click", async () => {
+      button.disabled = true;
+      try {
+        const [tone, text, more] = results[await ext.update(true)];
+        showStatus(tone, text, more);
+      } catch (err) {
+        showStatus("needs", "Update failed.", err.message);
+      }
+    });
+  }
+  showStatus("needs", `Installed version ${have} is older than this board's ${ext.want}.`, detail, button);
+});
+</script>
 </body>
 </html>

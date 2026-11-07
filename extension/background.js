@@ -2,7 +2,6 @@ const api = globalThis.browser ?? globalThis.chrome;
 
 const COLORS = ["blue", "red", "yellow", "green", "pink", "purple", "cyan", "orange", "grey"];
 const NO_GROUP = -1;
-const DEFAULT_HOSTS = ["127.0.0.1", "localhost"];
 const SCRIPT_ID = "taskboard-extra-origins";
 
 function colorFor(title) {
@@ -22,12 +21,34 @@ function patternFor(origin) {
   return `${u.protocol}//${u.hostname}/*`;
 }
 
+// The manifest's own matches include the address the extension was installed from.
+const manifestPatterns = api.runtime.getManifest().content_scripts.flatMap(c => c.matches);
+
 async function allowedSender(sender) {
   const u = sender.tab && URL.parse(sender.url ?? "");
   if (!u) return false;
-  if (u.protocol === "http:" && DEFAULT_HOSTS.includes(u.hostname)) return true;
   const pattern = patternFor(u);
+  if (manifestPatterns.includes(pattern)) return true;
   return (await extraOrigins()).some(o => patternFor(o) === pattern);
+}
+
+function newer(a, b) {
+  const x = a.split(".").map(Number), y = b.split(".").map(Number);
+  for (let i = 0; i < Math.max(x.length, y.length); i++) {
+    const d = (x[i] ?? 0) - (y[i] ?? 0);
+    if (d) return d > 0;
+  }
+  return false;
+}
+
+// The board rewrote this unpacked extension's folder; reloading reads the new files from disk.
+// Once per version, so an extension loaded from some other, stale folder can't reload forever.
+async function reloadFor(sender, version) {
+  if (!await allowedSender(sender) || !newer(version, api.runtime.getManifest().version)) return false;
+  const { reloadedFor } = await api.storage.local.get("reloadedFor");
+  if (reloadedFor === version) return false;
+  await api.storage.local.set({ reloadedFor: version });
+  return true;
 }
 
 const slotKey = slot => "slot:" + slot;
@@ -84,6 +105,13 @@ async function open({ url, group: title, slot }, board) {
 let opening = Promise.resolve();
 
 api.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (msg?.type === "reload" && typeof msg.version === "string") {
+    reloadFor(sender, msg.version).then(ok => {
+      sendResponse({ ok });
+      if (ok) setTimeout(() => api.runtime.reload(), 100);
+    }, err => sendResponse({ ok: false, error: String(err) }));
+    return true;
+  }
   if (msg?.type !== "open" || typeof msg.url !== "string" || typeof msg.group !== "string" || typeof msg.slot !== "string") {
     return false;
   }

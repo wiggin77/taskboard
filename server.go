@@ -39,6 +39,7 @@ var templates = template.Must(template.New("").Funcs(template.FuncMap{
 	"prControls":   prControls,
 	"row":          func(t Task, d indexData) taskRow { return taskRow{t, d} },
 	"prRow":        func(l PRLink, d indexData) prRow { return prRow{l, d} },
+	"extVersion":   extensionVersion,
 }).ParseFS(templateFS, "templates/*.html"))
 
 func slug(name string) string {
@@ -272,6 +273,7 @@ func newServer(board *Board, configPath string) http.Handler {
 	mux.HandleFunc("GET /term/{id}/ws", s.termSocket)
 	mux.HandleFunc("GET /static/{file}", s.static)
 	mux.HandleFunc("GET /extension", s.extensionPage)
+	mux.HandleFunc("GET /extension/files.json", s.extensionFilesJSON)
 	mux.HandleFunc("GET /"+extensionZipName, s.extensionDownload)
 	mux.HandleFunc("GET /settings", s.settings)
 	mux.HandleFunc("POST /settings", s.saveSettings)

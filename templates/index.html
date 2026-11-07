@@ -6,6 +6,7 @@
 <meta name="application-name" content="taskboard">
 {{template "theme"}}
 {{template "tabs"}}
+{{template "extensioninstall"}}
 <noscript><meta http-equiv="refresh" content="{{.RefreshSeconds}}"></noscript>
 <title>taskboard</title>
 <style>
@@ -19,7 +20,8 @@ h1{font-size:1.25rem;font-weight:700;letter-spacing:-.02em;margin:0}
 .updated::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--ok);box-shadow:0 0 0 3px color-mix(in srgb,var(--ok) 22%,transparent)}
 .updated.refreshing::before{background:var(--needs);box-shadow:0 0 0 3px color-mix(in srgb,var(--needs) 22%,transparent)}
 .status{display:flex;align-items:center;gap:.5rem}
-:root[data-taskboard-extension] .get-extension{display:none}
+:root[data-taskboard-extension-state=current] .get-extension{display:none}
+:root[data-taskboard-extension-state=outdated] .get-extension{border-color:color-mix(in srgb,var(--needs) 50%,var(--line));color:var(--needs)}
 .updated{margin-right:.25rem}
 .refresh:disabled svg{animation:spin 1s linear infinite}
 @keyframes spin{to{transform:rotate(360deg)}}
@@ -470,6 +472,17 @@ function cleanUp(button) {
     return r;
   });
 }
+
+taskboardExtension.onInstalled(state => {
+  if (state !== "outdated") return;
+  const link = document.querySelector(".get-extension");
+  link.title = "Update the tab groups extension";
+  link.setAttribute("aria-label", link.title);
+  // Once per version; if the extension still doesn't update, the button leads to the install page.
+  if (taskboardExtension.supported && taskboardExtension.wrote() !== taskboardExtension.want) {
+    taskboardExtension.update(false).catch(err => console.warn("taskboard extension update:", err));
+  }
+});
 </script>
 </body>
 </html>

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "taskboard tab groups",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "Opens taskboard's Jira, PR and terminal links in one tab group per ticket.",
   "permissions": ["tabs", "tabGroups", "storage", "scripting"],
   "optional_host_permissions": ["http://*/*", "https://*/*"],

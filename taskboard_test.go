@@ -1921,51 +1921,93 @@ func TestSplitFrontMatter(t *testing.T) {
 
 func TestExtensionDownload(t *testing.T) {
 	h := newServer(NewBoard(testConfig(t)), "")
-
-	req := httptest.NewRequest("GET", "/"+extensionZipName, nil)
-	req.Host = "localhost"
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK || rec.Header().Get("Content-Type") != "application/zip" {
-		t.Fatalf("download: %d %q", rec.Code, rec.Header().Get("Content-Type"))
-	}
-	zr, err := zip.NewReader(bytes.NewReader(rec.Body.Bytes()), int64(rec.Body.Len()))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var names []string
-	for _, f := range zr.File {
-		names = append(names, f.Name)
-	}
-	for _, want := range []string{"manifest.json", "background.js", "content.js"} {
-		if !slices.Contains(names, want) {
-			t.Errorf("zip lacks %s at its root: %v", want, names)
-		}
-	}
-
-	for _, c := range []struct {
-		host     string
-		tls      bool
-		needsAdd bool
-	}{
-		{"localhost:8080", false, false},
-		{"127.0.0.1:8080", false, false},
-		{"board.example:8443", true, true},
-		{"localhost:8443", true, true},
-	} {
-		req := httptest.NewRequest("GET", "/extension", nil)
-		req.Host = c.host
-		if c.tls {
+	get := func(path, host string, tlsReq bool) *httptest.ResponseRecorder {
+		t.Helper()
+		req := httptest.NewRequest("GET", path, nil)
+		req.Host = host
+		if tlsReq {
 			req.TLS = &tls.ConnectionState{}
 		}
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, req)
-		body := rec.Body.String()
-		if !strings.Contains(body, "/"+extensionZipName) {
-			t.Errorf("%s: page lacks the download link (status %d)", c.host, rec.Code)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET %s on %s: %d", path, host, rec.Code)
 		}
-		if got := strings.Contains(body, "in the extension's options"); got != c.needsAdd {
-			t.Errorf("%s: shows add-origin hint = %v, want %v", c.host, got, c.needsAdd)
+		return rec
+	}
+	matches := func(manifest string) []string {
+		t.Helper()
+		var m struct {
+			Version        string
+			ContentScripts []struct{ Matches []string } `json:"content_scripts"`
 		}
+		if err := json.Unmarshal([]byte(manifest), &m); err != nil {
+			t.Fatal(err)
+		}
+		if m.Version != extensionVersion() {
+			t.Errorf("manifest version %q, want %q", m.Version, extensionVersion())
+		}
+		return m.ContentScripts[0].Matches
+	}
+	defaults := []string{"http://127.0.0.1/*", "http://localhost/*"}
+
+	for _, c := range []struct {
+		host string
+		tls  bool
+		want []string
+	}{
+		{"localhost:8080", false, defaults},
+		{"127.0.0.1:8080", false, defaults},
+		{"board.example:8443", true, append(slices.Clone(defaults), "https://board.example/*")},
+		{"localhost:8443", true, append(slices.Clone(defaults), "https://localhost/*")},
+		{"[::1]:8443", true, defaults},
+	} {
+		rec := get("/"+extensionZipName, c.host, c.tls)
+		if ct := rec.Header().Get("Content-Type"); ct != "application/zip" {
+			t.Fatalf("%s: Content-Type %q", c.host, ct)
+		}
+		zr, err := zip.NewReader(bytes.NewReader(rec.Body.Bytes()), int64(rec.Body.Len()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		zipped := map[string]string{}
+		for _, f := range zr.File {
+			if f.Modified.Year() > time.Now().Year() {
+				t.Errorf("%s dated %v", f.Name, f.Modified)
+			}
+			rc, err := f.Open()
+			if err != nil {
+				t.Fatal(err)
+			}
+			data, _ := io.ReadAll(rc)
+			rc.Close()
+			zipped[f.Name] = string(data)
+		}
+		for _, want := range []string{"manifest.json", "background.js", "content.js"} {
+			if _, ok := zipped[want]; !ok {
+				t.Errorf("%s: zip lacks %s at its root", c.host, want)
+			}
+		}
+		if got := matches(zipped["manifest.json"]); !slices.Equal(got, c.want) {
+			t.Errorf("%s: zip matches %v, want %v", c.host, got, c.want)
+		}
+
+		var files map[string]string
+		if err := json.Unmarshal(get("/extension/files.json", c.host, c.tls).Body.Bytes(), &files); err != nil {
+			t.Fatal(err)
+		}
+		if !maps.Equal(files, zipped) {
+			t.Errorf("%s: files.json differs from the zip", c.host)
+		}
+	}
+
+	for _, path := range []string{"/", "/extension"} {
+		body := get(path, "localhost", false).Body.String()
+		if !strings.Contains(body, `<meta name="taskboard-extension-version" content="`+extensionVersion()+`">`) {
+			t.Errorf("%s lacks the extension version meta", path)
+		}
+	}
+	if !strings.Contains(get("/extension", "localhost", false).Body.String(), "/"+extensionZipName) {
+		t.Error("install page lacks the download link")
 	}
 }
