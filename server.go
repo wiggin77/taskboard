@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/sha256"
 	"embed"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"html/template"
@@ -200,6 +202,8 @@ type planData struct {
 	Task        Task
 	FrontMatter []planField
 	Content     template.HTML
+	Hash        string
+	CanAct      bool
 }
 
 type planField struct{ Key, Value string }
@@ -259,6 +263,7 @@ func newServer(board *Board, configPath string) http.Handler {
 	mux.HandleFunc("GET /{$}", s.index)
 	mux.HandleFunc("GET /version", s.version)
 	mux.HandleFunc("GET /plan/{key}", s.plan)
+	mux.HandleFunc("POST /approve/{key}", s.approve)
 	mux.HandleFunc("POST /attach/{key}", s.attach)
 	mux.HandleFunc("POST /start/{key}", s.start)
 	mux.HandleFunc("POST /stop/{key}", s.stop)
@@ -418,7 +423,44 @@ func (s *server) plan(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	render(w, r, "plan.html", planData{Task: t, FrontMatter: fields, Content: html})
+	render(w, r, "plan.html", planData{Task: t, FrontMatter: fields, Content: html, Hash: planHash(content), CanAct: s.accessOf(r) >= remote})
+}
+
+func planHash(content []byte) string {
+	sum := sha256.Sum256(content)
+	return hex.EncodeToString(sum[:])
+}
+
+// approve takes the hash of the plan the page showed, so a plan the agent rewrote since can't be approved unread.
+func (s *server) approve(w http.ResponseWriter, r *http.Request) {
+	_, t, release, ok := s.action(w, r)
+	if !ok {
+		return
+	}
+	defer release()
+	if t.Plan == nil {
+		http.Error(w, t.Key+" has no plan", http.StatusNotFound)
+		return
+	}
+	content, err := os.ReadFile(t.Plan.Path)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if planHash(content) != r.FormValue("hash") {
+		http.Error(w, "The plan has changed since this page loaded. Reload it and review it again.", http.StatusConflict)
+		return
+	}
+	if !planApproved(content) {
+		if err := os.WriteFile(t.Plan.Path, approvePlan(content), 0o644); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
+	ctx, cancel := actionContext()
+	defer cancel()
+	s.board.LocalChanged(ctx)
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // The custom header forces a CORS preflight, which this server never answers, so other sites cannot trigger it.

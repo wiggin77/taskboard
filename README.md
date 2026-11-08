@@ -76,7 +76,9 @@ status: approved
 
 The front matter must start on the file's first line. The value is case-insensitive and may be quoted. Any other plan, including one with no front matter, shows as **Plan needs review** until a PR is opened or the ticket is done. When a ticket has several plans, the most recently modified one counts.
 
-This is taskboard's own convention: coding agents don't write it, and taskboard only reads it. Tell the agent in each repo's instructions (`CLAUDE.md`, `AGENTS.md` or similar) where to put plans and how to mark them, for example:
+This is taskboard's own convention, and coding agents don't know it. The plan page has an **Approve** button that writes it for you: it sets `status: approved` in the file's front matter, adding the field or the whole front matter block if they're missing, and leaves the rest of the file as it is. If the agent has changed the plan since you opened the page, it refuses and asks you to reload and review it again. Like the session buttons, Approve is only offered to a browser on the taskboard machine or a [remote](#remote-access) one. The change is an ordinary edit in the worktree, so it lands in the branch if the plan is committed.
+
+To have the agent mark plans itself as well, tell it in each repo's instructions (`CLAUDE.md`, `AGENTS.md` or similar) where to put plans and how to mark them, for example:
 
 ```markdown
 Write plans to `plans/<ticket key>-<short-name>.md`, starting with front matter `status: draft`.

@@ -16,6 +16,7 @@ import (
 	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -199,6 +200,85 @@ func TestPlanApproved(t *testing.T) {
 		if got := planApproved([]byte(in)); got != want {
 			t.Errorf("planApproved(%q) = %v, want %v", in, got, want)
 		}
+	}
+}
+
+func TestApprovePlan(t *testing.T) {
+	cases := map[string]string{
+		"# Plan\n":                        "---\nstatus: approved\n---\n# Plan\n",
+		"":                                "---\nstatus: approved\n---\n",
+		"---\nstatus: draft\n---\n# Plan": "---\nstatus: approved\n---\n# Plan",
+		"---\ntitle: x\nstatus: \"Draft\"\n---\n": "---\ntitle: x\nstatus: approved\n---\n",
+		"---\ntitle: x\n---\nstatus: draft\n":     "---\nstatus: approved\ntitle: x\n---\nstatus: draft\n",
+		"---\r\nstatus: draft\r\n---\r\nbody":     "---\r\nstatus: approved\r\n---\r\nbody",
+		"---\nstatus: draft\n":                    "---\nstatus: approved\n---\n---\nstatus: draft\n",
+	}
+	for in, want := range cases {
+		got := approvePlan([]byte(in))
+		if string(got) != want {
+			t.Errorf("approvePlan(%q) = %q, want %q", in, got, want)
+		}
+		if !planApproved(got) {
+			t.Errorf("approvePlan(%q) is not approved", in)
+		}
+	}
+}
+
+func TestApproveEndpoint(t *testing.T) {
+	plan := filepath.Join(t.TempDir(), "MM-1.md")
+	draft := []byte("---\nstatus: draft\n---\n# Plan\n")
+	if err := os.WriteFile(plan, draft, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	board := NewBoard(testConfig(t))
+	board.snap = Snapshot{
+		Tasks:   []Task{{Key: "MM-1", Stage: StagePlanning, Plan: &Plan{Key: "MM-1", Path: plan}}, {Key: "MM-2", Stage: StageTicket}},
+		Updated: time.Now(),
+	}
+	h := newServer(board, "")
+	do := func(path, remote, hash string) int {
+		req := httptest.NewRequest("POST", path, strings.NewReader(url.Values{"hash": {hash}}.Encode()))
+		req.Host = "localhost"
+		req.RemoteAddr = remote
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.Header.Set("X-Taskboard", "1")
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec.Code
+	}
+	const local = "127.0.0.1:1234"
+	hash := planHash(draft)
+	page := func(remote string) string {
+		req := httptest.NewRequest("GET", "/plan/MM-1", nil)
+		req.Host = "localhost"
+		req.RemoteAddr = remote
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("plan page: %d %s", rec.Code, rec.Body.String())
+		}
+		return rec.Body.String()
+	}
+	if p := page(local); !strings.Contains(p, `id="approve"`) || !strings.Contains(p, hash) {
+		t.Error("local plan page should offer Approve with the plan's hash")
+	}
+	if strings.Contains(page("192.0.2.1:1234"), `id="approve"`) {
+		t.Error("a viewer should not get the Approve button")
+	}
+	if code := do("/approve/MM-1", "192.0.2.1:1234", hash); code != http.StatusForbidden {
+		t.Errorf("viewer: %d, want 403", code)
+	}
+	if code := do("/approve/MM-2", local, hash); code != http.StatusNotFound {
+		t.Errorf("no plan: %d, want 404", code)
+	}
+	if code := do("/approve/MM-1", local, planHash([]byte("older"))); code != http.StatusConflict {
+		t.Errorf("changed plan: %d, want 409", code)
+	}
+	if code := do("/approve/MM-1", local, hash); code != http.StatusNoContent {
+		t.Fatalf("approve: %d, want 204", code)
+	}
+	if got, _ := os.ReadFile(plan); !planApproved(got) {
+		t.Errorf("plan not approved: %q", got)
 	}
 }
 
