@@ -10,6 +10,7 @@
 <link rel="icon" href="/static/plan.svg" type="image/svg+xml">
 <style>
 {{template "tokens"}}
+{{template "actionstyle"}}
 body{padding-top:1.5rem}
 header{display:flex;align-items:center;justify-content:space-between;gap:1rem;margin-bottom:1rem}
 nav{display:flex;flex-wrap:wrap;gap:.25rem 1rem;font-size:.875rem}
@@ -22,6 +23,9 @@ a:hover{text-decoration:underline}
 .status{font-weight:600;border-radius:999px;padding:.1rem .6rem;background:color-mix(in srgb,currentColor 12%,transparent)}
 .status.ok{color:var(--ok)}
 .status.needs{color:var(--needs)}
+#approve{padding:.15rem .8rem;border:1px solid var(--link);border-radius:999px;background:var(--link);color:var(--surface);font:inherit;font-weight:600;cursor:pointer}
+#approve:hover{border-color:var(--ink)}
+#approve:disabled{opacity:.6;cursor:default}
 article{background:var(--surface);border:1px solid var(--line);border-radius:6px;padding:.5rem 1.75rem 1.25rem;overflow-wrap:anywhere}
 article h1,article h2,article h3,article h4{line-height:1.25;margin:1.5rem 0 .6rem;font-weight:650}
 article h1{font-size:1.5rem}
@@ -55,8 +59,21 @@ article img{max-width:100%}
 </header>
 <p class="title">{{.Task.Key}} {{.Task.Summary}}</p>
 <p class="path">{{.Task.Plan.Path}}</p>
-<p class="meta">{{if .Task.Plan.Approved}}<span class="status ok">{{.Status}}</span>{{else}}<span class="status needs" title="Shows as Plan needs review on the board">{{or .Status "no status"}}, needs review</span>{{end}}
+<p class="meta">{{if .Task.Plan.Approved}}<span class="status ok">{{.Status}}</span>{{else}}<span class="status needs" title="Shows as Plan needs review on the board">{{or .Status "no status"}}, needs review</span>{{if .CanAct}}<button id="approve" type="button" title="Sets status: approved in the plan's front matter">Approve</button>{{end}}{{end}}
   {{range .FrontMatter}}{{if ne .Key "status"}}<span>{{.Key}}: {{.Value}}</span>{{end}}{{end}}</p>
 <article>{{.Content}}</article>
+{{if and .CanAct (not .Task.Plan.Approved)}}
+{{template "actions"}}
+<script>
+const approveButton = document.getElementById("approve");
+approveButton.addEventListener("click", async () => {
+  approveButton.disabled = true;
+  const r = await post("/approve/" + encodeURIComponent({{.Task.Key}}), { hash: {{.Hash}} });
+  if (r.ok) return location.reload();
+  approveButton.disabled = false;
+  showError("Could not approve the plan", typeof r.body === "string" ? r.body : "");
+});
+</script>
+{{end}}
 </body>
 </html>

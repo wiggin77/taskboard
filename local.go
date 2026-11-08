@@ -160,6 +160,33 @@ func planApproved(content []byte) bool {
 	return false
 }
 
+// approvePlan sets status: approved in the plan's front matter, adding the field or the whole block when missing.
+func approvePlan(content []byte) []byte {
+	lines := strings.SplitAfter(string(content), "\n")
+	nl := "\n"
+	if strings.HasSuffix(lines[0], "\r\n") {
+		nl = "\r\n"
+	}
+	end := 0
+	if strings.TrimSpace(lines[0]) == "---" {
+		for i := 1; i < len(lines) && end == 0; i++ {
+			if strings.TrimSpace(lines[i]) == "---" {
+				end = i
+			}
+		}
+	}
+	if end == 0 {
+		return []byte("---" + nl + "status: approved" + nl + "---" + nl + string(content))
+	}
+	for i := 1; i < end; i++ {
+		if k, _, ok := strings.Cut(lines[i], ":"); ok && strings.TrimSpace(k) == "status" {
+			lines[i] = k + ": approved" + nl
+			return []byte(strings.Join(lines, ""))
+		}
+	}
+	return []byte(lines[0] + "status: approved" + nl + strings.Join(lines[1:], ""))
+}
+
 // listWindows returns every tmux window once, skipping the linked sessions taskboard attaches through;
 // Key is set only for windows named after a ticket.
 func listWindows(ctx context.Context, cfg *Config) []Session {
