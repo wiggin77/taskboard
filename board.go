@@ -292,7 +292,7 @@ func (b *Board) refresh(ctx context.Context) {
 			r.issues[key] = is
 			continue
 		}
-		if b.missingIssues[key] {
+		if b.missingIssues[key] || jiraErr != nil {
 			continue
 		}
 		is, ok, err := jiraGet(ctx, key)
@@ -313,7 +313,7 @@ func (b *Board) refresh(ctx context.Context) {
 
 	var epics []string
 	for key, is := range r.issues {
-		if is.Epic && !is.Done {
+		if is.Epic && !is.Done && jiraErr == nil {
 			epics = append(epics, key)
 		}
 	}
@@ -335,7 +335,9 @@ func (b *Board) refresh(ctx context.Context) {
 		r.views[url] = l
 	}
 
-	if err := b.fillJiraDetails(ctx, r.issues); err != nil {
+	if jiraErr != nil {
+		b.applyJiraDetails(r.issues)
+	} else if err := b.fillJiraDetails(ctx, r.issues); err != nil {
 		r.errs = append(r.errs, "Jira details: "+err.Error())
 	}
 	<-childrenDone
@@ -529,12 +531,19 @@ func (b *Board) fillJiraDetails(ctx context.Context, issues map[string]JiraIssue
 			delete(b.jiraDetails, key)
 		}
 	}
+	b.applyJiraDetails(issues)
+	return err
+}
+
+func (b *Board) applyJiraDetails(issues map[string]JiraIssue) {
 	for key, is := range issues {
-		d := b.jiraDetails[key]
+		d, ok := b.jiraDetails[key]
+		if !ok || !is.Updated.IsZero() {
+			continue
+		}
 		is.Updated, is.Parent, is.ParentSummary = d.Updated, d.Parent, d.ParentSummary
 		issues[key] = is
 	}
-	return err
 }
 
 func epicChildren(ctx context.Context, epics []string) (map[string][]JiraIssue, []string) {

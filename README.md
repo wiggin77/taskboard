@@ -205,7 +205,7 @@ The extension works on taskboard pages at `http://127.0.0.1` and `http://localho
 - Jira tickets in a done status category are cached for 24 hours, since merged PRs are rechecked every poll. So are tickets acli cannot find (deleted, or not visible to you); a merged PR whose ticket cannot be found counts as Done.
 - The Reviews section lists open PRs in the configured repos where your review is requested, then ones you have already reviewed (GitHub drops the request once you submit a review). Other repos lists the same for every repo not in `repos`, plus open PRs you authored there. `github.organizations` limits Other repos to the organizations (or user accounts) it lists, for example `"github": {"organizations": ["mattermost", "mattermost-community"]}`; PRs in any other organization are hidden, including direct review requests. An empty list shows every repo, and repos in `repos` are never filtered. Neither section is joined on Jira keys, but each row links to the ticket whose key appears in the PR title, or failing that the description.
 - `merged_pr_limit` controls how many recent merged PRs per repo are checked for the "merged, update Jira" stage. It is independent of `done_days`, so a merged PR older than the Done window still shows when its ticket needs updating.
-- Source failures show in a banner at the top of the page and in the log; the rest of the board still renders.
+- Source failures show in a banner at the top of the page and in the log; the rest of the board still renders. When the Jira search fails, the refresh skips its other Jira calls and reports only that failure, so a Jira outage cannot use up `refresh_timeout`.
 
 ## Releasing
 
