@@ -83,7 +83,7 @@ func (b *Board) SetConfig(cfg *Config) {
 func (b *Board) Viewed() {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if b.idleLocked() && !b.running {
+	if b.idleLocked() && !b.running && !b.Config().ManualRefresh {
 		b.requestLocked()
 	}
 	b.lastView = time.Now()
@@ -124,8 +124,8 @@ func (b *Board) idleLocked() bool { return time.Since(b.lastView) > idleAfter }
 func (b *Board) nextWait() time.Duration {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
-	if b.idleLocked() {
-		return b.Config().IdlePollInterval.Duration
+	if b.Config().ManualRefresh || b.idleLocked() {
+		return 0
 	}
 	return b.Config().PollInterval.Duration
 }

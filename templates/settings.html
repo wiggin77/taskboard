@@ -26,6 +26,7 @@ input,textarea{display:block;width:100%;margin-top:.3rem;padding:.4rem .55rem;bo
   font:13.5px/1.45 ui-monospace,"JetBrains Mono","SF Mono",Menlo,monospace}
 textarea{resize:vertical;min-height:4.5rem}
 input:focus,textarea:focus{outline:2px solid var(--link);outline-offset:-1px}
+label.check input{display:inline;width:auto;margin:0 .4rem 0 0;vertical-align:-2px}
 .row3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:0 .75rem;align-items:end}
 .row2{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 .75rem;align-items:end}
 input::placeholder,textarea::placeholder{color:var(--faint)}
@@ -111,12 +112,11 @@ button.primary{background:var(--link);border-color:var(--link);color:var(--surfa
 
 <fieldset>
   <legend>Polling</legend>
-  <span class="hint">The board is on screen while any browser tab is showing it, and for 15 minutes after. A closed tab, a background tab or a minimized window is off screen. Durations like 90s, 2m or 1h. The Refresh button on the board refreshes at any time.</span>
-  <div class="row3">
-    <label>Refresh while on screen<span class="hint">At least 10s.</span>
-      <input name="poll_interval" required placeholder="e.g. 2m" value="{{.PollInterval}}"></label>
-    <label>Refresh while off screen<span class="hint">0 turns it off, and showing the board again refreshes right away. Otherwise at least the on-screen interval.</span>
-      <input name="idle_poll_interval" placeholder="0" value="{{.IdlePollInterval}}"></label>
+  <span class="hint">The board is on screen while any browser tab is showing it, and for 15 minutes after. A closed tab, a background tab or a minimized window is off screen. Durations like 90s, 5m or 1h. The Refresh button on the board refreshes at any time.</span>
+  <label class="check"><input type="checkbox" name="auto_refresh"{{if not .ManualRefresh}} checked{{end}}>Refresh automatically<span class="hint">While the board is on screen, and as soon as it is shown again. Never while it is off screen. When off, the board refreshes only when you press Refresh, start, stop or clean up a session, or save settings.</span></label>
+  <div class="row2">
+    <label>Refresh interval<span class="hint">How often to refresh automatically. At least 1m.</span>
+      <input name="poll_interval" required placeholder="e.g. 5m" value="{{.PollInterval}}"></label>
     <label>Refresh time limit<span class="hint">A refresh still running after this is cut short and reports the sources it missed.</span>
       <input name="refresh_timeout" required placeholder="e.g. 5m" value="{{.RefreshTimeout}}"></label>
   </div>
@@ -212,7 +212,7 @@ form.addEventListener("submit", async e => {
     tls_dir: val("tls_dir"),
     revoked_certs: lines("revoked_certs"),
     poll_interval: val("poll_interval"),
-    idle_poll_interval: val("idle_poll_interval") || "0s",
+    manual_refresh: !form.elements.auto_refresh.checked,
     refresh_timeout: val("refresh_timeout"),
     project_keys: val("project_keys").split(/[\s,]+/).filter(Boolean),
     merged_pr_limit: Number(val("merged_pr_limit")),

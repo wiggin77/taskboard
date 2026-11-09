@@ -317,7 +317,7 @@ func (s *server) index(w http.ResponseWriter, r *http.Request) {
 	data := indexData{
 		Errors:         snap.Errors,
 		Updated:        snap.Updated,
-		RefreshSeconds: int(cfg.PollInterval.Seconds()),
+		RefreshSeconds: cfg.refreshSeconds(),
 		Refreshing:     s.board.Refreshing(),
 		Version:        snap.Version,
 		Native:         len(cfg.AttachCommand) > 0 && s.accessOf(r) == local,
