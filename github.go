@@ -142,10 +142,15 @@ func markAssigned(prs []PR, login string) {
 	}
 }
 
-func withoutTaskPRs(links []PRLink, tasks []Task) []PRLink {
+// withoutTaskPRs keeps every row while login is unknown, since ReviewRequested can't be trusted then, and keeps
+// the row for a draft that requests you by name, since a draft's stage never shows the request.
+func withoutTaskPRs(links []PRLink, tasks []Task, login string) []PRLink {
+	if login == "" {
+		return links
+	}
 	shown := map[prRef]bool{}
 	for _, t := range tasks {
-		if t.PR != nil {
+		if t.PR != nil && !(t.PR.Draft && t.PR.ReviewRequested) {
 			shown[refOf(t.PR.Repo, t.PR.Number)] = true
 		}
 	}

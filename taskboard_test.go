@@ -245,21 +245,31 @@ func TestReviewRowsForTaskPRs(t *testing.T) {
 		{Repo: "mattermost/logr", Number: 12, Role: RoleReviewed},
 		{Repo: "mattermost/mattermost", Number: 14, Role: RoleReviewed},
 		{Repo: "mattermost/mattermost", Number: 15, Role: RoleRequested, Review: &Review{Worktree: &Worktree{}}},
+		{Repo: "mattermost/mattermost", Number: 16, Role: RoleRequested},
+		{Repo: "mattermost/mattermost", Number: 17, Role: RoleRequested},
 	}
 	prs := []PR{
 		{Repo: "mattermost/mattermost", Number: 12},
 		{Repo: "mattermost/mattermost", Number: 13},
 		{Repo: "mattermost/mattermost", Number: 14},
 		{Repo: "mattermost/mattermost", Number: 15},
+		{Repo: "mattermost/mattermost", Number: 16, Draft: true, ReviewRequested: true},
+		{Repo: "mattermost/mattermost", Number: 17, Draft: true},
 	}
 
-	tasks := []Task{{PR: &prs[0]}, {PR: &prs[2]}, {PR: &prs[3]}}
-	var got []int
-	for _, l := range withoutTaskPRs(links, tasks) {
-		got = append(got, l.Number)
+	tasks := []Task{{PR: &prs[0]}, {PR: &prs[2]}, {PR: &prs[3]}, {PR: &prs[4]}, {PR: &prs[5]}}
+	numbers := func(links []PRLink) []int {
+		var got []int
+		for _, l := range links {
+			got = append(got, l.Number)
+		}
+		return got
 	}
-	if want := []int{13, 12, 15}; !slices.Equal(got, want) {
-		t.Errorf("rows kept %v, want %v: drop rows for PRs a task shows, keep other PRs' rows and rows with a review session", got, want)
+	if got, want := numbers(withoutTaskPRs(slices.Clone(links), tasks, "wiggin77")), []int{13, 12, 15, 16}; !slices.Equal(got, want) {
+		t.Errorf("rows kept %v, want %v: drop rows for PRs a task shows, keep other PRs' rows, rows with a review session and drafts requesting you", got, want)
+	}
+	if got, want := numbers(withoutTaskPRs(slices.Clone(links), tasks, "")), numbers(links); !slices.Equal(got, want) {
+		t.Errorf("rows kept %v, want all %v while the GitHub login is unknown", got, want)
 	}
 }
 

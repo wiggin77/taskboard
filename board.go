@@ -232,6 +232,7 @@ type fetched struct {
 	reviews  []PRLink
 	otherPRs []PRLink
 	views    map[string]PRLink
+	login    string
 	errs     []string
 	updated  time.Time
 }
@@ -301,6 +302,7 @@ func (b *Board) refresh(ctx context.Context) {
 		reviews:  reviews,
 		otherPRs: otherPRs,
 		views:    map[string]PRLink{},
+		login:    login,
 	}
 	if jiraErr != nil {
 		r.errs = append(r.errs, "Jira search: "+jiraErr.Error())
@@ -413,7 +415,7 @@ func (b *Board) compose(ctx context.Context, r *fetched, loc *localState, gen ui
 		worktrees: loc.worktrees, plans: loc.plans, sessions: ticketSessions(loc.windows)}
 	tasks := buildTasks(r.cfg, s, time.Now())
 	reviews, leftovers := attachReviews(r.cfg, r.reviews, loc.worktrees, loc.windows)
-	reviews = withoutTaskPRs(reviews, tasks)
+	reviews = withoutTaskPRs(reviews, tasks, r.login)
 	for i, l := range leftovers {
 		if v, ok := r.views[l.URL]; ok {
 			v.Role, v.ReviewName, v.Review = l.Role, l.ReviewName, l.Review
@@ -449,23 +451,26 @@ func repoPRs(ctx context.Context, cfg *Config, repo RepoConfig, login string) ([
 		assignedErrs []string
 	)
 	wg.Go(func() {
-		assigned, assignedErrs = listMyPRs(ctx, cfg, repo.Name, "assigned ", cfg.assignedSearch(), cutoff)
+		assigned, assignedErrs = listMyPRs(ctx, cfg, repo.Name, "assigned ", cfg.assignedSearch(), cutoff, 0)
 	})
-	authored, authoredErrs := listMyPRs(ctx, cfg, repo.Name, "", "author:@me", cutoff)
+	authored, authoredErrs := listMyPRs(ctx, cfg, repo.Name, "", "author:@me", cutoff, cfg.MergedPRLimit)
 	wg.Wait()
 	markAssigned(assigned, login)
 	return append(authored, assigned...), append(authoredErrs, assignedErrs...)
 }
 
-func listMyPRs(ctx context.Context, cfg *Config, repo, label, search, cutoff string) ([]PR, []string) {
+func listMyPRs(ctx context.Context, cfg *Config, repo, label, search, cutoff string, mergedLimit int) ([]PR, []string) {
 	var errs []string
 	open, err := listPRs(ctx, cfg, repo, "open", 100, search)
 	if err != nil {
 		errs = append(errs, fmt.Sprintf("%s open %sPRs: %v", repo, label, err))
 	}
-	merged, err := listPRs(ctx, cfg, repo, "merged", cfg.MergedPRLimit, search)
-	if err != nil {
-		errs = append(errs, fmt.Sprintf("%s merged %sPRs: %v", repo, label, err))
+	var merged []PR
+	if mergedLimit > 0 {
+		merged, err = listPRs(ctx, cfg, repo, "merged", mergedLimit, search)
+		if err != nil {
+			errs = append(errs, fmt.Sprintf("%s merged %sPRs: %v", repo, label, err))
+		}
 	}
 	recent, err := listPRs(ctx, cfg, repo, "merged", 100, search+" merged:>="+cutoff)
 	if err != nil {
