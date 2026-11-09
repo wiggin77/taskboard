@@ -27,11 +27,11 @@ Done tasks that still have a worktree or a tmux window go to "Needs clean-up" in
 Download the archive for your platform (Linux or macOS, amd64 or arm64) from the [latest release](https://github.com/wiggin77/taskboard/releases/latest) and unpack it, or build from source with `go build -o taskboard .`. Then:
 
 ```sh
-cp config.example.json taskboard.json   # edit jira, project_keys and repos
+cp config.example.json taskboard.json   # edit jira, project_keys, repos and github
 ./taskboard -config taskboard.json
 ```
 
-At Mattermost, start from `tb-mattermost.json` instead. Its `jira.jql` also lists open tickets that name you in the Matty code assigner field, a custom field that only exists on Mattermost's Jira site.
+`config.example.json` holds placeholder values and leaves `jira.jql` unset, so the built-in default applies. At Mattermost, start from `tb-mattermost.json` instead. It is filled in for Mattermost's Jira site and repos, and its `jira.jql` also lists open tickets that name you in the Matty code assigner field, a custom field that only exists on that site.
 
 The macOS builds aren't signed. If macOS refuses to open a binary downloaded with a browser, clear the quarantine flag with `xattr -d com.apple.quarantine taskboard`.
 
