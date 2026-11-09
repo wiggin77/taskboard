@@ -40,6 +40,8 @@ type Board struct {
 
 	highlights *highlights
 
+	login string
+
 	composeMu sync.Mutex
 	fetched   *fetched
 	localGen  atomic.Uint64
@@ -253,6 +255,7 @@ func (b *Board) refresh(ctx context.Context) {
 	}
 
 	gen := b.localGen.Load()
+	login, loginErr := b.githubLogin(ctx)
 	var (
 		wg        sync.WaitGroup
 		issues    []JiraIssue
@@ -286,7 +289,7 @@ func (b *Board) refresh(ctx context.Context) {
 	for i, repo := range cfg.Repos {
 		go func() {
 			defer wg.Done()
-			prs[i], prErrs[i] = repoPRs(ctx, cfg, repo)
+			prs[i], prErrs[i] = repoPRs(ctx, cfg, repo, login)
 		}()
 	}
 	wg.Wait()
@@ -305,6 +308,9 @@ func (b *Board) refresh(ctx context.Context) {
 	if prLinkErr != nil {
 		r.errs = append(r.errs, "GitHub search: "+prLinkErr.Error())
 	}
+	if loginErr != nil {
+		r.errs = append(r.errs, "GitHub login: "+loginErr.Error())
+	}
 	for _, is := range issues {
 		r.issues[is.Key] = is
 	}
@@ -316,7 +322,6 @@ func (b *Board) refresh(ctx context.Context) {
 		r.prs = append(r.prs, prs[i]...)
 		r.errs = append(r.errs, prErrs[i]...)
 	}
-	markReviewRequests(r.reviews, r.prs)
 
 	for _, key := range b.unknownKeys(sources{issues: r.issues, prs: r.prs, worktrees: loc.worktrees, sessions: ticketSessions(loc.windows)}) {
 		if is, ok := b.doneIssues[key]; ok {
@@ -424,7 +429,19 @@ func (b *Board) compose(ctx context.Context, r *fetched, loc *localState, gen ui
 	return errs
 }
 
-func repoPRs(ctx context.Context, cfg *Config, repo RepoConfig) ([]PR, []string) {
+// githubLogin is cached for the life of the process; only refresh calls it, and refreshes don't overlap.
+func (b *Board) githubLogin(ctx context.Context) (string, error) {
+	if b.login == "" {
+		out, err := runCmd(ctx, "", "gh", "api", "user", "--jq", ".login")
+		if err != nil {
+			return "", err
+		}
+		b.login = strings.TrimSpace(string(out))
+	}
+	return b.login, nil
+}
+
+func repoPRs(ctx context.Context, cfg *Config, repo RepoConfig, login string) ([]PR, []string) {
 	cutoff := time.Now().AddDate(0, 0, -cfg.DoneDays).Format("2006-01-02")
 	var (
 		wg           sync.WaitGroup
@@ -436,13 +453,10 @@ func repoPRs(ctx context.Context, cfg *Config, repo RepoConfig) ([]PR, []string)
 	})
 	authored, authoredErrs := listMyPRs(ctx, cfg, repo.Name, "", "author:@me", cutoff)
 	wg.Wait()
-	for i := range assigned {
-		assigned[i].Assigned = true
-	}
+	markAssigned(assigned, login)
 	return append(authored, assigned...), append(authoredErrs, assignedErrs...)
 }
 
-// listMyPRs lists open PRs, the last merged_pr_limit merged ones, and any merged since cutoff.
 func listMyPRs(ctx context.Context, cfg *Config, repo, label, search, cutoff string) ([]PR, []string) {
 	var errs []string
 	open, err := listPRs(ctx, cfg, repo, "open", 100, search)

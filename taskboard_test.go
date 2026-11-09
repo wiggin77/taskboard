@@ -215,6 +215,29 @@ func TestAssignedSearch(t *testing.T) {
 	}
 }
 
+func TestAssignedReviewRequests(t *testing.T) {
+	out := []byte(`[
+		{"number":1,"state":"OPEN","headRefName":"MM-1-x","reviewRequests":[{"__typename":"User","login":"Wiggin77"}]},
+		{"number":2,"state":"OPEN","headRefName":"MM-2-x","reviewRequests":[{"__typename":"Team","slug":"core-server"}]},
+		{"number":3,"state":"OPEN","headRefName":"MM-3-x","reviewRequests":[{"__typename":"User","login":"someone"}]},
+		{"number":4,"state":"OPEN","headRefName":"MM-4-x","reviewRequests":[]}
+	]`)
+	prs, err := parsePRs(testConfig(t), "mattermost/mattermost", out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	markAssigned(prs, "wiggin77")
+	for i, want := range []bool{true, false, false, false} {
+		if !prs[i].Assigned || prs[i].ReviewRequested != want {
+			t.Errorf("PR %d: Assigned %v ReviewRequested %v, want true %v (only a request naming you counts, not a team's)", prs[i].Number, prs[i].Assigned, prs[i].ReviewRequested, want)
+		}
+	}
+	markAssigned(prs, "")
+	if prs[0].ReviewRequested {
+		t.Error("ReviewRequested set without a known login")
+	}
+}
+
 func TestReviewRowsForTaskPRs(t *testing.T) {
 	links := []PRLink{
 		{Repo: "Mattermost/Mattermost", Number: 12, Role: RoleRequested},
@@ -226,14 +249,8 @@ func TestReviewRowsForTaskPRs(t *testing.T) {
 	prs := []PR{
 		{Repo: "mattermost/mattermost", Number: 12},
 		{Repo: "mattermost/mattermost", Number: 13},
-		{Repo: "mattermost/mattermost", Number: 14, ReviewRequested: true},
+		{Repo: "mattermost/mattermost", Number: 14},
 		{Repo: "mattermost/mattermost", Number: 15},
-	}
-	markReviewRequests(links, prs)
-	for i, want := range []bool{true, true, false, true} {
-		if prs[i].ReviewRequested != want {
-			t.Errorf("PR %d ReviewRequested = %v, want %v", prs[i].Number, prs[i].ReviewRequested, want)
-		}
 	}
 
 	tasks := []Task{{PR: &prs[0]}, {PR: &prs[2]}, {PR: &prs[3]}}

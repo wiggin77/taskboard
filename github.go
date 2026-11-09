@@ -48,6 +48,7 @@ type PR struct {
 	MergedAt        time.Time
 	Assigned        bool
 	ReviewRequested bool
+	requested       []string
 }
 
 type ghCheck struct {
@@ -69,6 +70,10 @@ type ghPR struct {
 	StatusCheckRollup []ghCheck `json:"statusCheckRollup"`
 	UpdatedAt         time.Time `json:"updatedAt"`
 	MergedAt          time.Time `json:"mergedAt"`
+	ReviewRequests    []struct {
+		TypeName string `json:"__typename"`
+		Login    string `json:"login"`
+	} `json:"reviewRequests"`
 }
 
 func listPRs(ctx context.Context, cfg *Config, repo, state string, limit int, search string) ([]PR, error) {
@@ -77,10 +82,14 @@ func listPRs(ctx context.Context, cfg *Config, repo, state string, limit int, se
 		"--state", state,
 		"--limit", strconv.Itoa(limit),
 		"--search", search,
-		"--json", "number,title,url,headRefName,headRefOid,state,isDraft,reviewDecision,statusCheckRollup,updatedAt,mergedAt")
+		"--json", "number,title,url,headRefName,headRefOid,state,isDraft,reviewDecision,statusCheckRollup,updatedAt,mergedAt,reviewRequests")
 	if err != nil {
 		return nil, err
 	}
+	return parsePRs(cfg, repo, out)
+}
+
+func parsePRs(cfg *Config, repo string, out []byte) ([]PR, error) {
 	var raw []ghPR
 	if err := json.Unmarshal(out, &raw); err != nil {
 		return nil, err
@@ -90,6 +99,12 @@ func listPRs(ctx context.Context, cfg *Config, repo, state string, limit int, se
 		key := cfg.findKey(r.HeadRefName)
 		if key == "" {
 			key = cfg.findKey(r.Title)
+		}
+		var requested []string
+		for _, rr := range r.ReviewRequests {
+			if rr.TypeName == "User" {
+				requested = append(requested, rr.Login)
+			}
 		}
 		prs = append(prs, PR{
 			Repo:      repo,
@@ -105,6 +120,7 @@ func listPRs(ctx context.Context, cfg *Config, repo, state string, limit int, se
 			CI:        rollupCI(r.StatusCheckRollup),
 			UpdatedAt: r.UpdatedAt,
 			MergedAt:  r.MergedAt,
+			requested: requested,
 		})
 	}
 	return prs, nil
@@ -117,19 +133,15 @@ type prRef struct {
 
 func refOf(repo string, number int) prRef { return prRef{strings.ToLower(repo), number} }
 
-func markReviewRequests(links []PRLink, prs []PR) {
-	requested := map[prRef]bool{}
-	for _, l := range links {
-		if l.Role == RoleRequested {
-			requested[refOf(l.Repo, l.Number)] = true
-		}
-	}
+// markAssigned leaves ReviewRequested unset for team requests, such as ones CODEOWNERS adds, so only a
+// request naming you hands an assigned PR back to you.
+func markAssigned(prs []PR, login string) {
 	for i := range prs {
-		prs[i].ReviewRequested = requested[refOf(prs[i].Repo, prs[i].Number)]
+		prs[i].Assigned = true
+		prs[i].ReviewRequested = login != "" && slices.ContainsFunc(prs[i].requested, func(r string) bool { return strings.EqualFold(r, login) })
 	}
 }
 
-// withoutTaskPRs drops review rows for PRs that a task shows, except rows with a review session.
 func withoutTaskPRs(links []PRLink, tasks []Task) []PRLink {
 	shown := map[prRef]bool{}
 	for _, t := range tasks {

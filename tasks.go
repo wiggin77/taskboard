@@ -40,7 +40,7 @@ var stageInfo = map[Stage]stageMeta{
 	StageReadyToMerge:      {"Ready to merge", "ok", groupNeedsYou, 4},
 	StagePlanning:          {"Plan needs review", "needs", groupNeedsYou, 1},
 	StageMergedJiraPending: {"Merged, update Jira", "needs", groupNeedsYou, 5},
-	StageAwaitingChanges:   {"Changes requested", "active", groupWaiting, 3},
+	StageAwaitingChanges:   {"Changes requested, waiting on author", "active", groupWaiting, 3},
 	StageInReview:          {"In review", "active", groupWaiting, 3},
 	StageCoding:            {"Coding", "active", groupInProgress, 2},
 	StageTicket:            {"Not started", "idle", groupNotStarted, 0},
