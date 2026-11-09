@@ -47,11 +47,17 @@ const (
 	defaultPlansDir    = "plans"
 )
 
-const defaultJQL = "assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC"
+const (
+	defaultJQL     = "assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC"
+	defaultDoneJQL = "assignee = currentUser()"
+)
+
+var orderByRE = regexp.MustCompile(`(?i)\border\s+by\b`)
 
 type JiraConfig struct {
 	BaseURL string `json:"base_url"`
 	JQL     string `json:"jql"`
+	DoneJQL string `json:"done_jql,omitempty"`
 }
 
 type GitHubConfig struct {
@@ -193,6 +199,9 @@ func (c *Config) validate() error {
 		return errors.New("jira.base_url is required")
 	}
 	c.Jira.BaseURL = strings.TrimRight(c.Jira.BaseURL, "/")
+	if orderByRE.MatchString(c.Jira.DoneJQL) {
+		return errors.New("jira.done_jql cannot have an ORDER BY clause")
+	}
 	if len(c.ProjectKeys) == 0 {
 		return errors.New("project_keys must list at least one Jira project key")
 	}
@@ -300,6 +309,15 @@ func (c *Config) jql() string {
 		return defaultJQL
 	}
 	return c.Jira.JQL
+}
+
+// doneJQL is wrapped in parentheses so an OR in the configured query can't escape the Done and date filters.
+func (c *Config) doneJQL() string {
+	mine := strings.TrimSpace(c.Jira.DoneJQL)
+	if mine == "" {
+		mine = defaultDoneJQL
+	}
+	return fmt.Sprintf("(%s) AND statusCategory = Done AND resolved >= -%dd", mine, c.DoneDays)
 }
 
 func (c *Config) tmuxSession() string {

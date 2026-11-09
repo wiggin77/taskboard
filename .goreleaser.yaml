@@ -27,6 +27,7 @@ archives:
       - README.md
       - LICENSE
       - config.example.json
+      - tb-mattermost.json
       - extension/*
 
 checksum:
