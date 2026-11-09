@@ -527,13 +527,9 @@ func parseReviewName(r RepoConfig, name string) (int, bool) {
 
 // Review worktrees or windows whose PR is no longer listed come back as leftovers, so they can still be cleaned up.
 func attachReviews(cfg *Config, links []PRLink, wts []Worktree, windows []Session) ([]PRLink, []PRLink) {
-	type ref struct {
-		repo   string
-		number int
-	}
-	found := map[ref]*Review{}
-	var order []ref
-	get := func(k ref) *Review {
+	found := map[prRef]*Review{}
+	var order []prRef
+	get := func(k prRef) *Review {
 		if found[k] == nil {
 			found[k] = &Review{}
 			order = append(order, k)
@@ -548,23 +544,23 @@ func attachReviews(cfg *Config, links []PRLink, wts []Worktree, windows []Sessio
 			continue
 		}
 		if n, ok := parseReviewName(r, filepath.Base(wt.Path)); ok {
-			get(ref{r.Name, n}).Worktree = wt
+			get(prRef{r.Name, n}).Worktree = wt
 		}
 	}
 	for i := range windows {
 		for _, r := range repos {
 			if n, ok := parseReviewName(r, windows[i].Name); ok {
-				get(ref{r.Name, n}).Session = &windows[i]
+				get(prRef{r.Name, n}).Session = &windows[i]
 				break
 			}
 		}
 	}
 
 	out := make([]PRLink, len(links))
-	used := map[ref]bool{}
+	used := map[prRef]bool{}
 	for i, l := range links {
 		if r, ok := cfg.repo(l.Repo); ok && r.Path != "" {
-			k := ref{r.Name, l.Number}
+			k := prRef{r.Name, l.Number}
 			l.ReviewName = reviewName(r, l.Number)
 			l.Review = found[k]
 			used[k] = true

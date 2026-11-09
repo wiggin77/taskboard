@@ -434,7 +434,7 @@ func repoPRs(ctx context.Context, cfg *Config, repo RepoConfig) ([]PR, []string)
 	wg.Go(func() {
 		assigned, assignedErrs = listMyPRs(ctx, cfg, repo.Name, "assigned ", cfg.assignedSearch(), cutoff)
 	})
-	authored, authoredErrs := listMyPRs(ctx, cfg, repo.Name, "", "", cutoff, "--author", "@me")
+	authored, authoredErrs := listMyPRs(ctx, cfg, repo.Name, "", "author:@me", cutoff)
 	wg.Wait()
 	for i := range assigned {
 		assigned[i].Assigned = true
@@ -443,17 +443,17 @@ func repoPRs(ctx context.Context, cfg *Config, repo RepoConfig) ([]PR, []string)
 }
 
 // listMyPRs lists open PRs, the last merged_pr_limit merged ones, and any merged since cutoff.
-func listMyPRs(ctx context.Context, cfg *Config, repo, label, search, cutoff string, flags ...string) ([]PR, []string) {
+func listMyPRs(ctx context.Context, cfg *Config, repo, label, search, cutoff string) ([]PR, []string) {
 	var errs []string
-	open, err := listPRs(ctx, cfg, repo, "open", 100, search, flags...)
+	open, err := listPRs(ctx, cfg, repo, "open", 100, search)
 	if err != nil {
 		errs = append(errs, fmt.Sprintf("%s open %sPRs: %v", repo, label, err))
 	}
-	merged, err := listPRs(ctx, cfg, repo, "merged", cfg.MergedPRLimit, search, flags...)
+	merged, err := listPRs(ctx, cfg, repo, "merged", cfg.MergedPRLimit, search)
 	if err != nil {
 		errs = append(errs, fmt.Sprintf("%s merged %sPRs: %v", repo, label, err))
 	}
-	recent, err := listPRs(ctx, cfg, repo, "merged", 100, strings.TrimSpace(search+" merged:>="+cutoff), flags...)
+	recent, err := listPRs(ctx, cfg, repo, "merged", 100, search+" merged:>="+cutoff)
 	if err != nil {
 		errs = append(errs, fmt.Sprintf("%s recently merged %sPRs: %v", repo, label, err))
 	}

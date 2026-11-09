@@ -107,6 +107,7 @@ func TestStageFor(t *testing.T) {
 		{"your review requested", Task{PR: &PR{State: "OPEN", Review: "APPROVED", CI: CIPassing, ReviewRequested: true}}, StageReviewRequested},
 		{"your review requested, ci failing", Task{PR: &PR{State: "OPEN", CI: CIFailing, ReviewRequested: true}}, StageCIFailing},
 		{"assigned, changes requested", Task{PR: &PR{State: "OPEN", Review: "CHANGES_REQUESTED", CI: CIPassing, Assigned: true}}, StageAwaitingChanges},
+		{"assigned, changes requested, review re-requested", Task{PR: &PR{State: "OPEN", Review: "CHANGES_REQUESTED", CI: CIPassing, Assigned: true, ReviewRequested: true}}, StageReviewRequested},
 		{"merged, jira open", Task{PR: &PR{State: "MERGED"}}, StageMergedJiraPending},
 		{"merged, jira done", Task{PR: &PR{State: "MERGED"}, JiraDone: true}, StageDone},
 		{"merged, jira not found", Task{PR: &PR{State: "MERGED"}, JiraMissing: true}, StageDone},
@@ -184,8 +185,8 @@ func TestAssignedPRs(t *testing.T) {
 			{Key: "MM-1", Number: 10, State: "MERGED", UpdatedAt: now},
 			{Key: "MM-1", Number: 11, State: "OPEN", CI: CIFailing, UpdatedAt: now.Add(-time.Hour), Assigned: true},
 			{Key: "MM-2", Number: 12, State: "OPEN", Review: "APPROVED", CI: CIPassing, Assigned: true},
-			{Key: "MM-3", Number: 13, State: "OPEN", UpdatedAt: now.Add(-time.Hour)},
-			{Key: "MM-3", Number: 14, State: "OPEN", UpdatedAt: now, Assigned: true},
+			{Key: "MM-3", Number: 13, State: "OPEN", Draft: true, UpdatedAt: now.Add(-time.Hour)},
+			{Key: "MM-3", Number: 14, State: "OPEN", CI: CIFailing, UpdatedAt: now, Assigned: true},
 		},
 	}, now)
 	byKey := map[string]Task{}
@@ -198,8 +199,8 @@ func TestAssignedPRs(t *testing.T) {
 	if task := byKey["MM-2"]; task.PR == nil || task.PR.Number != 12 || task.Stage != StageReadyToMerge {
 		t.Errorf("MM-2 = PR %+v stage %s, want assigned PR 12 ready to merge", task.PR, task.StageLabel())
 	}
-	if pr := byKey["MM-3"].PR; pr == nil || pr.Number != 13 {
-		t.Errorf("MM-3 PR = %+v, want authored PR 13 over a newer assigned one in the same state", pr)
+	if task := byKey["MM-3"]; task.PR == nil || task.PR.Number != 14 || task.Stage != StageCIFailing {
+		t.Errorf("MM-3 = PR %+v stage %s, want the newer assigned PR 14 with CI failing over a stale authored draft", task.PR, task.StageLabel())
 	}
 }
 

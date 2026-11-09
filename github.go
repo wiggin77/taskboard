@@ -71,15 +71,13 @@ type ghPR struct {
 	MergedAt          time.Time `json:"mergedAt"`
 }
 
-func listPRs(ctx context.Context, cfg *Config, repo, state string, limit int, search string, flags ...string) ([]PR, error) {
-	args := append([]string{"pr", "list",
+func listPRs(ctx context.Context, cfg *Config, repo, state string, limit int, search string) ([]PR, error) {
+	out, err := runCmd(ctx, "", "gh", "pr", "list",
 		"--repo", repo,
 		"--state", state,
 		"--limit", strconv.Itoa(limit),
 		"--search", search,
-		"--json", "number,title,url,headRefName,headRefOid,state,isDraft,reviewDecision,statusCheckRollup,updatedAt,mergedAt"},
-		flags...)
-	out, err := runCmd(ctx, "", "gh", args...)
+		"--json", "number,title,url,headRefName,headRefOid,state,isDraft,reviewDecision,statusCheckRollup,updatedAt,mergedAt")
 	if err != nil {
 		return nil, err
 	}
@@ -131,8 +129,7 @@ func markReviewRequests(links []PRLink, prs []PR) {
 	}
 }
 
-// withoutTaskPRs drops review rows for PRs that a task shows, such as a delegated PR assigned back to you.
-// Rows with a review session stay, since only the Reviews row has its controls.
+// withoutTaskPRs drops review rows for PRs that a task shows, except rows with a review session.
 func withoutTaskPRs(links []PRLink, tasks []Task) []PRLink {
 	shown := map[prRef]bool{}
 	for _, t := range tasks {

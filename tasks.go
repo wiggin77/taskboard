@@ -158,12 +158,12 @@ func progressStage(t *Task) Stage {
 				return StageCoding
 			case pr.CI == CIFailing:
 				return StageCIFailing
+			case pr.ReviewRequested:
+				return StageReviewRequested
 			case pr.Review == "CHANGES_REQUESTED" && pr.Assigned:
 				return StageAwaitingChanges
 			case pr.Review == "CHANGES_REQUESTED":
 				return StageChangesRequested
-			case pr.ReviewRequested:
-				return StageReviewRequested
 			case pr.Review == "APPROVED" && pr.CI != CIPending:
 				return StageReadyToMerge
 			default:
@@ -194,9 +194,6 @@ func preferPR(candidate, current *PR) bool {
 	}
 	if (candidate.State == "OPEN") != (current.State == "OPEN") {
 		return candidate.State == "OPEN"
-	}
-	if candidate.Assigned != current.Assigned {
-		return current.Assigned
 	}
 	return candidate.UpdatedAt.After(current.UpdatedAt)
 }
