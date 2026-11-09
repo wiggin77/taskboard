@@ -1726,9 +1726,33 @@ func TestDefaultsAreNotSaved(t *testing.T) {
 		t.Fatal(err)
 	}
 	raw, _ := os.ReadFile(path)
-	for _, def := range []string{"claude", `"taskboard"`, `"plans"`, "statusCategory"} {
+	for _, def := range []string{"claude", `"taskboard"`, `"plans"`, "statusCategory", "done_jql"} {
 		if strings.Contains(string(raw), def) {
 			t.Errorf("saved config contains the default %s; defaults belong in placeholders:\n%s", def, raw)
+		}
+	}
+}
+
+func TestDoneJQL(t *testing.T) {
+	base := `"project_keys":["MM"],"done_days":7,"repos":[{"name":"a/b"}]`
+	cfg, err := parseConfig([]byte(`{` + base + `,"jira":{"base_url":"https://x.atlassian.net"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := cfg.doneJQL(), "(assignee = currentUser()) AND statusCategory = Done AND resolved >= -7d"; got != want {
+		t.Errorf("default doneJQL = %q, want %q", got, want)
+	}
+	cfg, err = parseConfig([]byte(`{` + base + `,"jira":{"base_url":"https://x.atlassian.net","done_jql":" assignee = currentUser() OR reporter = currentUser() "}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := cfg.doneJQL(), "(assignee = currentUser() OR reporter = currentUser()) AND statusCategory = Done AND resolved >= -7d"; got != want {
+		t.Errorf("custom doneJQL = %q, want %q", got, want)
+	}
+	for _, order := range []string{"Order By updated", "order  BY updated", "ORDER\\nBY updated"} {
+		_, err = parseConfig([]byte(`{` + base + `,"jira":{"base_url":"https://x.atlassian.net","done_jql":"assignee = currentUser() ` + order + `"}}`))
+		if err == nil || !strings.Contains(err.Error(), "jira.done_jql") {
+			t.Errorf("done_jql with %q: error = %v, want one naming jira.done_jql", order, err)
 		}
 	}
 }

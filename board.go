@@ -272,7 +272,7 @@ func (b *Board) refresh(ctx context.Context) {
 		if jiraErr != nil {
 			return
 		}
-		resolved, jiraErr = jiraSearch(ctx, fmt.Sprintf("assignee = currentUser() AND statusCategory = Done AND resolved >= -%dd", cfg.DoneDays))
+		resolved, jiraErr = jiraSearch(ctx, cfg.doneJQL())
 	}()
 	go func() {
 		defer wg.Done()
