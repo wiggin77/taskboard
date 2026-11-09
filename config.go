@@ -14,26 +14,26 @@ import (
 )
 
 type Config struct {
-	Listen           string       `json:"listen"`
-	TLSListen        string       `json:"tls_listen,omitempty"`
-	TLSDir           string       `json:"tls_dir,omitempty"`
-	RevokedCerts     []string     `json:"revoked_certs,omitempty"`
-	AllowedHosts     []string     `json:"allowed_hosts,omitempty"`
-	PollInterval     Duration     `json:"poll_interval"`
-	IdlePollInterval Duration     `json:"idle_poll_interval"`
-	RefreshTimeout   Duration     `json:"refresh_timeout"`
-	ProjectKeys      []string     `json:"project_keys"`
-	MergedPRLimit    int          `json:"merged_pr_limit"`
-	DoneDays         int          `json:"done_days"`
-	AttachCommand    []string     `json:"attach_command,omitempty"`
-	TmuxSession      string       `json:"tmux_session,omitempty"`
-	AgentCommand     string       `json:"agent_command,omitempty"`
-	AgentResume      string       `json:"agent_resume_command,omitempty"`
-	WorktreeDir      string       `json:"worktree_dir,omitempty"`
-	WorktreeLinks    []string     `json:"worktree_links,omitempty"`
-	Jira             JiraConfig   `json:"jira"`
-	Repos            []RepoConfig `json:"repos"`
-	GitHub           GitHubConfig `json:"github,omitzero"`
+	Listen         string       `json:"listen"`
+	TLSListen      string       `json:"tls_listen,omitempty"`
+	TLSDir         string       `json:"tls_dir,omitempty"`
+	RevokedCerts   []string     `json:"revoked_certs,omitempty"`
+	AllowedHosts   []string     `json:"allowed_hosts,omitempty"`
+	PollInterval   Duration     `json:"poll_interval"`
+	ManualRefresh  bool         `json:"manual_refresh,omitempty"`
+	RefreshTimeout Duration     `json:"refresh_timeout"`
+	ProjectKeys    []string     `json:"project_keys"`
+	MergedPRLimit  int          `json:"merged_pr_limit"`
+	DoneDays       int          `json:"done_days"`
+	AttachCommand  []string     `json:"attach_command,omitempty"`
+	TmuxSession    string       `json:"tmux_session,omitempty"`
+	AgentCommand   string       `json:"agent_command,omitempty"`
+	AgentResume    string       `json:"agent_resume_command,omitempty"`
+	WorktreeDir    string       `json:"worktree_dir,omitempty"`
+	WorktreeLinks  []string     `json:"worktree_links,omitempty"`
+	Jira           JiraConfig   `json:"jira"`
+	Repos          []RepoConfig `json:"repos"`
+	GitHub         GitHubConfig `json:"github,omitzero"`
 
 	keyRE *regexp.Regexp
 }
@@ -138,7 +138,7 @@ func LoadConfig(path string) (*Config, error) {
 func parseConfig(b []byte) (*Config, error) {
 	cfg := &Config{
 		Listen:         "127.0.0.1:8484",
-		PollInterval:   Duration{2 * time.Minute},
+		PollInterval:   Duration{5 * time.Minute},
 		RefreshTimeout: Duration{5 * time.Minute},
 		MergedPRLimit:  20,
 		DoneDays:       30,
@@ -240,14 +240,11 @@ func (c *Config) validate() error {
 	if c.DoneDays < 1 {
 		return errors.New("done_days must be at least 1")
 	}
-	if c.PollInterval.Duration < 10*time.Second {
-		return errors.New("poll_interval must be at least 10s")
+	if c.PollInterval.Duration < time.Minute {
+		return errors.New("poll_interval must be at least 1m")
 	}
 	if c.RefreshTimeout.Duration < 10*time.Second {
 		return errors.New("refresh_timeout must be at least 10s")
-	}
-	if idle := c.IdlePollInterval.Duration; idle != 0 && idle < c.PollInterval.Duration {
-		return errors.New("idle_poll_interval must be 0 (no idle polling) or at least poll_interval")
 	}
 
 	quoted := make([]string, len(c.ProjectKeys))
@@ -288,6 +285,14 @@ func (c *Config) tlsDir(configPath string) string {
 		dir = filepath.Join(filepath.Dir(configPath), dir)
 	}
 	return dir
+}
+
+// refreshSeconds is the delay for the page's no-script reload, 0 for none.
+func (c *Config) refreshSeconds() int {
+	if c.ManualRefresh {
+		return 0
+	}
+	return int(c.PollInterval.Seconds())
 }
 
 func (c *Config) jql() string {

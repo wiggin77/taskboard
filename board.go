@@ -52,7 +52,7 @@ type Board struct {
 }
 
 const (
-	idleAfter     = 15 * time.Minute
+	idleAfter     = 90 * time.Second
 	issueCacheTTL = 24 * time.Hour
 )
 
@@ -80,13 +80,22 @@ func (b *Board) SetConfig(cfg *Config) {
 	b.requestLocked()
 }
 
+// Viewed wakes the poll loop when the board comes back on screen. It refreshes at once only when the last
+// refresh is older than poll_interval, so switching tabs can't refresh more often than polling would.
 func (b *Board) Viewed() {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if b.idleLocked() && !b.running {
-		b.requestLocked()
-	}
+	wasIdle := b.idleLocked()
 	b.lastView = time.Now()
+	cfg := b.Config()
+	if !wasIdle || cfg.ManualRefresh || b.running {
+		return
+	}
+	if time.Since(b.snap.Updated) >= cfg.PollInterval.Duration {
+		b.requestLocked()
+	} else {
+		b.wakeLocked()
+	}
 }
 
 func (b *Board) Refresh() {
@@ -106,6 +115,10 @@ func (b *Board) Invalidate() {
 
 func (b *Board) requestLocked() {
 	b.requested = true
+	b.wakeLocked()
+}
+
+func (b *Board) wakeLocked() {
 	select {
 	case b.wake <- struct{}{}:
 	default:
@@ -120,14 +133,16 @@ func (b *Board) Refreshing() bool {
 
 func (b *Board) idleLocked() bool { return time.Since(b.lastView) > idleAfter }
 
-// nextWait returns 0 when the loop should wait for a view or a refresh request instead of a timer.
-func (b *Board) nextWait() time.Duration {
+// nextWait returns the time left until the next timed refresh, or false when there is none because the
+// board is off screen or refreshes only on demand.
+func (b *Board) nextWait() (time.Duration, bool) {
 	b.mu.RLock()
 	defer b.mu.RUnlock()
-	if b.idleLocked() {
-		return b.Config().IdlePollInterval.Duration
+	cfg := b.Config()
+	if cfg.ManualRefresh || b.idleLocked() {
+		return 0, false
 	}
-	return b.Config().PollInterval.Duration
+	return max(cfg.PollInterval.Duration-time.Since(b.snap.Updated), 0), true
 }
 
 func (b *Board) Snapshot() Snapshot {
@@ -168,22 +183,37 @@ func (b *Board) Run(ctx context.Context) {
 		b.running = false
 		b.mu.Unlock()
 
+		if !b.waitForRefresh(ctx) {
+			return
+		}
+	}
+}
+
+// waitForRefresh returns when the poll timer fires or a refresh is requested. A wake without a request
+// (the board back on screen with recent data) only re-arms the timer.
+func (b *Board) waitForRefresh(ctx context.Context) bool {
+	for {
 		var timer *time.Timer
 		var fire <-chan time.Time
-		if wait := b.nextWait(); wait > 0 {
+		if wait, ok := b.nextWait(); ok {
 			timer = time.NewTimer(wait)
 			fire = timer.C
 		}
 		select {
 		case <-ctx.Done():
+			return false
 		case <-fire:
+			return true
 		case <-b.wake:
 		}
 		if timer != nil {
 			timer.Stop()
 		}
-		if ctx.Err() != nil {
-			return
+		b.mu.RLock()
+		requested := b.requested
+		b.mu.RUnlock()
+		if requested {
+			return true
 		}
 	}
 }

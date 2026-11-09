@@ -1,8 +1,7 @@
 {
   "listen": "127.0.0.1:8484",
   "tls_listen": "",
-  "poll_interval": "120s",
-  "idle_poll_interval": "0s",
+  "poll_interval": "5m",
   "refresh_timeout": "5m",
   "project_keys": ["MM"],
   "merged_pr_limit": 20,

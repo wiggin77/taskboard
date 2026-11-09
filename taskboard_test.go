@@ -32,14 +32,13 @@ import (
 func testConfig(t *testing.T) *Config {
 	t.Helper()
 	cfg := &Config{
-		PollInterval:     Duration{time.Minute},
-		IdlePollInterval: Duration{15 * time.Minute},
-		RefreshTimeout:   Duration{5 * time.Minute},
-		MergedPRLimit:    20,
-		DoneDays:         30,
-		ProjectKeys:      []string{"MM"},
-		Jira:             JiraConfig{BaseURL: "https://example.atlassian.net/"},
-		Repos:            []RepoConfig{{Name: "mattermost/mattermost"}},
+		PollInterval:   Duration{time.Minute},
+		RefreshTimeout: Duration{5 * time.Minute},
+		MergedPRLimit:  20,
+		DoneDays:       30,
+		ProjectKeys:    []string{"MM"},
+		Jira:           JiraConfig{BaseURL: "https://example.atlassian.net/"},
+		Repos:          []RepoConfig{{Name: "mattermost/mattermost"}},
 	}
 	if err := cfg.validate(); err != nil {
 		t.Fatal(err)
@@ -698,16 +697,18 @@ func TestIdlePolling(t *testing.T) {
 			return false
 		}
 	}
-	if got := b.nextWait(); got != 15*time.Minute {
-		t.Errorf("before any view: wait %v, want idle interval", got)
+	if _, ok := b.nextWait(); ok {
+		t.Error("before any view: want no timer")
 	}
 
 	b.Viewed()
-	if !woke() {
-		t.Error("first view should wake the poll loop")
+	if !woke() || !b.requested {
+		t.Error("first view with no snapshot should request a refresh")
 	}
-	if got := b.nextWait(); got != time.Minute {
-		t.Errorf("after a view: wait %v, want poll interval", got)
+	b.requested = false
+	b.snap.Updated = time.Now()
+	if got, ok := b.nextWait(); !ok || got > time.Minute || got < 50*time.Second {
+		t.Errorf("after a view: wait %v %v, want about the poll interval", got, ok)
 	}
 	b.Viewed()
 	if woke() {
@@ -715,18 +716,102 @@ func TestIdlePolling(t *testing.T) {
 	}
 
 	b.lastView = time.Now().Add(-idleAfter - time.Second)
-	if got := b.nextWait(); got != 15*time.Minute {
-		t.Errorf("after idling: wait %v, want idle interval", got)
+	if _, ok := b.nextWait(); ok {
+		t.Error("after idling: want no timer")
 	}
 	b.Viewed()
-	if !woke() {
-		t.Error("a view after idling should wake the poll loop")
+	if !woke() || b.requested {
+		t.Error("a view after idling with recent data should wake the loop without requesting a refresh")
+	}
+	if got, ok := b.nextWait(); !ok || got > time.Minute {
+		t.Errorf("back on screen: wait %v %v, want the rest of the poll interval", got, ok)
 	}
 
-	b.Config().IdlePollInterval.Duration = 0
-	b.lastView = time.Time{}
-	if got := b.nextWait(); got != 0 {
-		t.Errorf("idle with idle_poll_interval 0: wait %v, want 0 (no timer)", got)
+	b.lastView = time.Now().Add(-idleAfter - time.Second)
+	b.snap.Updated = time.Now().Add(-2 * time.Minute)
+	b.Viewed()
+	if !woke() || !b.requested {
+		t.Error("a view after idling with stale data should request a refresh")
+	}
+	b.requested = false
+	if got, ok := b.nextWait(); !ok || got != 0 {
+		t.Errorf("stale data on screen: wait %v %v, want 0", got, ok)
+	}
+}
+
+func TestWaitForRefresh(t *testing.T) {
+	b := NewBoard(testConfig(t))
+	b.snap.Updated = time.Now()
+	b.lastView = time.Now()
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan bool, 1)
+	go func() { done <- b.waitForRefresh(ctx) }()
+
+	b.mu.Lock()
+	b.wakeLocked()
+	b.mu.Unlock()
+	select {
+	case <-done:
+		t.Fatal("a wake without a request should only re-arm the timer")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	b.mu.Lock()
+	b.requestLocked()
+	b.mu.Unlock()
+	select {
+	case ok := <-done:
+		if !ok {
+			t.Error("a request should start a refresh")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("a request should end the wait")
+	}
+
+	go func() { done <- b.waitForRefresh(ctx) }()
+	cancel()
+	if <-done {
+		t.Error("a cancelled wait should stop the loop")
+	}
+}
+
+func TestManualRefresh(t *testing.T) {
+	b := NewBoard(testConfig(t))
+	b.Config().ManualRefresh = true
+	b.Viewed()
+	if len(b.wake) != 0 {
+		t.Error("with manual_refresh a view should not wake the poll loop")
+	}
+	if _, ok := b.nextWait(); ok {
+		t.Error("active with manual_refresh: want no timer")
+	}
+	if got := b.Config().refreshSeconds(); got != 0 {
+		t.Errorf("manual_refresh: page reload every %ds, want none", got)
+	}
+	b.Refresh()
+	if len(b.wake) != 1 {
+		t.Error("Refresh should still wake the loop with manual_refresh")
+	}
+}
+
+func TestPollConfig(t *testing.T) {
+	base := `"project_keys":["MM"],"jira":{"base_url":"https://x.atlassian.net"},"repos":[{"name":"a/b"}]`
+	cfg, err := parseConfig([]byte(`{` + base + `}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.PollInterval.Duration != 5*time.Minute || cfg.ManualRefresh {
+		t.Errorf("defaults: poll %v manual %v, want 5m and automatic", cfg.PollInterval, cfg.ManualRefresh)
+	}
+	for _, ok := range []string{`"poll_interval":"1m"`, `"poll_interval":"1h","manual_refresh":true`, `"idle_poll_interval":"30m"`} {
+		if _, err := parseConfig([]byte(`{` + base + `,` + ok + `}`)); err != nil {
+			t.Errorf("config %s: %v", ok, err)
+		}
+	}
+	for _, bad := range []string{`"poll_interval":"0s"`, `"poll_interval":"30s"`, `"poll_interval":"-1m"`} {
+		if _, err := parseConfig([]byte(`{` + base + `,` + bad + `}`)); err == nil {
+			t.Errorf("config %s should be rejected", bad)
+		}
 	}
 }
 
@@ -935,7 +1020,7 @@ func TestSettingsPage(t *testing.T) {
 		t.Fatalf("loopback: %d, want 200", rec.Code)
 	}
 	body := rec.Body.String()
-	for _, want := range []string{`value="1m"`, ">tmux\nattach\n-t\n{target}</textarea>", `value="mattermost/mattermost"`, `value="MM"`, `id="orgs"`, `id="add-org"`, `<input data-field="name" placeholder="e.g. mattermost" value="acme"`} {
+	for _, want := range []string{`value="1m"`, ">tmux\nattach\n-t\n{target}</textarea>", `value="mattermost/mattermost"`, `value="MM"`, `id="orgs"`, `id="add-org"`, `<input data-field="name" placeholder="e.g. mattermost" value="acme"`, `name="auto_refresh" checked`} {
 		if !strings.Contains(body, want) {
 			t.Errorf("settings page missing %q", want)
 		}

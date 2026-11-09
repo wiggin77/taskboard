@@ -7,7 +7,7 @@
 {{template "theme"}}
 {{template "tabs"}}
 {{template "extensioninstall"}}
-<noscript><meta http-equiv="refresh" content="{{.RefreshSeconds}}"></noscript>
+{{if .RefreshSeconds}}<noscript><meta http-equiv="refresh" content="{{.RefreshSeconds}}"></noscript>{{end}}
 <title>taskboard</title>
 <link rel="icon" href="/static/board.svg" type="image/svg+xml">
 <style>
