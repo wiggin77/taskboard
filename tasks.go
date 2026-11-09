@@ -184,6 +184,10 @@ func preferPR(candidate, current *PR) bool {
 	if current == nil {
 		return true
 	}
+	// An assigned PR may be an automated cherry-pick of the authored one, which still tracks the ticket's progress.
+	if candidate.Assigned != current.Assigned {
+		return current.Assigned
+	}
 	if (candidate.State == "OPEN") != (current.State == "OPEN") {
 		return candidate.State == "OPEN"
 	}

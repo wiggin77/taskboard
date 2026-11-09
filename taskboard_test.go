@@ -169,6 +169,43 @@ func TestBuildTasks(t *testing.T) {
 	}
 }
 
+func TestAssignedPRs(t *testing.T) {
+	now := time.Now()
+	tasks := buildTasks(testConfig(t), sources{
+		issues: map[string]JiraIssue{
+			"MM-1": {Key: "MM-1", Summary: "Mine", Status: "In Progress"},
+			"MM-2": {Key: "MM-2", Summary: "Delegated", Status: "In Progress"},
+		},
+		prs: []PR{
+			{Key: "MM-1", Number: 10, State: "MERGED", UpdatedAt: now.Add(-time.Hour)},
+			{Key: "MM-1", Number: 11, State: "OPEN", Title: "Automated cherry pick of #10", UpdatedAt: now, Assigned: true},
+			{Key: "MM-2", Number: 12, State: "OPEN", Review: "APPROVED", CI: CIPassing, Assigned: true},
+		},
+	}, now)
+	byKey := map[string]Task{}
+	for _, task := range tasks {
+		byKey[task.Key] = task
+	}
+	if pr := byKey["MM-1"].PR; pr == nil || pr.Number != 10 {
+		t.Errorf("MM-1 PR = %+v, want authored PR 10 over the open assigned cherry-pick", pr)
+	}
+	if task := byKey["MM-2"]; task.PR == nil || task.PR.Number != 12 || task.Stage != StageReadyToMerge {
+		t.Errorf("MM-2 = PR %+v stage %s, want assigned PR 12 ready to merge", task.PR, task.StageLabel())
+	}
+}
+
+func TestWithoutTaskPRs(t *testing.T) {
+	links := []PRLink{
+		{Repo: "Mattermost/Mattermost", Number: 12, Role: RoleRequested},
+		{Repo: "mattermost/mattermost", Number: 13, Role: RoleRequested},
+		{Repo: "mattermost/logr", Number: 12, Role: RoleReviewed},
+	}
+	got := withoutTaskPRs(links, []PR{{Repo: "mattermost/mattermost", Number: 12}})
+	if len(got) != 2 || got[0].Number != 13 || got[1].Repo != "mattermost/logr" {
+		t.Errorf("withoutTaskPRs = %+v, want PR 12 in mattermost/mattermost dropped regardless of case", got)
+	}
+}
+
 func TestParseWorktrees(t *testing.T) {
 	out := []byte("worktree /src/mm\nHEAD abc\nbranch refs/heads/master\n\nworktree /src/mm-wt/MM-5\nHEAD def\nbranch refs/heads/MM-5-fix\n\nworktree /src/detached\nHEAD 123\ndetached\n")
 	wts := parseWorktrees(out)

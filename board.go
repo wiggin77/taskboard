@@ -316,6 +316,7 @@ func (b *Board) refresh(ctx context.Context) {
 		r.prs = append(r.prs, prs[i]...)
 		r.errs = append(r.errs, prErrs[i]...)
 	}
+	r.reviews = withoutTaskPRs(r.reviews, r.prs)
 
 	for _, key := range b.unknownKeys(sources{issues: r.issues, prs: r.prs, worktrees: loc.worktrees, sessions: ticketSessions(loc.windows)}) {
 		if is, ok := b.doneIssues[key]; ok {
@@ -423,19 +424,29 @@ func (b *Board) compose(ctx context.Context, r *fetched, loc *localState, gen ui
 }
 
 func repoPRs(ctx context.Context, cfg *Config, repo RepoConfig) ([]PR, []string) {
-	var errs []string
-	open, err := listPRs(ctx, cfg, repo.Name, "open", 100, "")
-	if err != nil {
-		errs = append(errs, fmt.Sprintf("%s open PRs: %v", repo.Name, err))
-	}
-	merged, err := listPRs(ctx, cfg, repo.Name, "merged", cfg.MergedPRLimit, "")
-	if err != nil {
-		errs = append(errs, fmt.Sprintf("%s merged PRs: %v", repo.Name, err))
-	}
 	cutoff := time.Now().AddDate(0, 0, -cfg.DoneDays).Format("2006-01-02")
-	recent, err := listPRs(ctx, cfg, repo.Name, "merged", 100, "merged:>="+cutoff)
+	authored, errs := listMyPRs(ctx, cfg, repo.Name, "", "", cutoff, "--author", "@me")
+	assigned, assignedErrs := listMyPRs(ctx, cfg, repo.Name, "assigned ", "assignee:@me -author:@me", cutoff)
+	for i := range assigned {
+		assigned[i].Assigned = true
+	}
+	return append(authored, assigned...), append(errs, assignedErrs...)
+}
+
+// listMyPRs lists open PRs, the last merged_pr_limit merged ones, and any merged since cutoff.
+func listMyPRs(ctx context.Context, cfg *Config, repo, label, search, cutoff string, flags ...string) ([]PR, []string) {
+	var errs []string
+	open, err := listPRs(ctx, cfg, repo, "open", 100, search, flags...)
 	if err != nil {
-		errs = append(errs, fmt.Sprintf("%s recently merged PRs: %v", repo.Name, err))
+		errs = append(errs, fmt.Sprintf("%s open %sPRs: %v", repo, label, err))
+	}
+	merged, err := listPRs(ctx, cfg, repo, "merged", cfg.MergedPRLimit, search, flags...)
+	if err != nil {
+		errs = append(errs, fmt.Sprintf("%s merged %sPRs: %v", repo, label, err))
+	}
+	recent, err := listPRs(ctx, cfg, repo, "merged", 100, strings.TrimSpace(search+" merged:>="+cutoff), flags...)
+	if err != nil {
+		errs = append(errs, fmt.Sprintf("%s recently merged %sPRs: %v", repo, label, err))
 	}
 	seen := map[int]bool{}
 	for _, pr := range merged {

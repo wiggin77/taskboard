@@ -46,6 +46,7 @@ type PR struct {
 	CI        CIState
 	UpdatedAt time.Time
 	MergedAt  time.Time
+	Assigned  bool
 }
 
 type ghCheck struct {
@@ -69,14 +70,15 @@ type ghPR struct {
 	MergedAt          time.Time `json:"mergedAt"`
 }
 
-func listPRs(ctx context.Context, cfg *Config, repo, state string, limit int, search string) ([]PR, error) {
-	out, err := runCmd(ctx, "", "gh", "pr", "list",
+func listPRs(ctx context.Context, cfg *Config, repo, state string, limit int, search string, flags ...string) ([]PR, error) {
+	args := append([]string{"pr", "list",
 		"--repo", repo,
-		"--author", "@me",
 		"--state", state,
 		"--limit", strconv.Itoa(limit),
 		"--search", search,
-		"--json", "number,title,url,headRefName,headRefOid,state,isDraft,reviewDecision,statusCheckRollup,updatedAt,mergedAt")
+		"--json", "number,title,url,headRefName,headRefOid,state,isDraft,reviewDecision,statusCheckRollup,updatedAt,mergedAt"},
+		flags...)
+	out, err := runCmd(ctx, "", "gh", args...)
 	if err != nil {
 		return nil, err
 	}
@@ -107,6 +109,19 @@ func listPRs(ctx context.Context, cfg *Config, repo, state string, limit int, se
 		})
 	}
 	return prs, nil
+}
+
+// withoutTaskPRs drops review rows for task PRs, such as an assigned PR that also requests your review.
+func withoutTaskPRs(links []PRLink, prs []PR) []PRLink {
+	type ref struct {
+		repo   string
+		number int
+	}
+	tasks := map[ref]bool{}
+	for _, pr := range prs {
+		tasks[ref{strings.ToLower(pr.Repo), pr.Number}] = true
+	}
+	return slices.DeleteFunc(links, func(l PRLink) bool { return tasks[ref{strings.ToLower(l.Repo), l.Number}] })
 }
 
 func rollupCI(checks []ghCheck) CIState {
