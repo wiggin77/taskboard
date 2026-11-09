@@ -86,6 +86,8 @@ button.primary{background:var(--link);border-color:var(--link);color:var(--surfa
     <input name="jira.base_url" type="url" required placeholder="e.g. https://yourcompany.atlassian.net" value="{{.Jira.BaseURL}}"></label>
   <label>Tickets to show (JQL)<span class="hint">Tickets matching this query always appear. Tickets named by a PR, worktree or session appear even if it misses them.</span>
     <textarea name="jira.jql" rows="2" placeholder="assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC">{{.Jira.JQL}}</textarea></label>
+  <label>Finished tickets to show (JQL)<span class="hint">Which resolved tickets are yours. Taskboard adds the Done status and the days-to-keep window, so leave those and ORDER BY out.</span>
+    <textarea name="jira.done_jql" rows="2" placeholder="assignee = currentUser()">{{.Jira.DoneJQL}}</textarea></label>
   <label>Project keys<span class="hint">Comma separated. A key like MM-1234 in a branch name, PR title, plan file name or tmux window name ties it to that ticket.</span>
     <input name="project_keys" required placeholder="e.g. MM, PLUG" value="{{join .ProjectKeys ", "}}"></label>
   <div class="row2">
@@ -224,7 +226,7 @@ form.addEventListener("submit", async e => {
     worktree_dir: val("worktree_dir"),
     worktree_links: lines("worktree_links"),
     github: { organizations: [...orgs.querySelectorAll(".org:not(.removed) [data-field=name]")].map(i => i.value.trim()).filter(Boolean) },
-    jira: { base_url: val("jira.base_url"), jql: val("jira.jql") },
+    jira: { base_url: val("jira.base_url"), jql: val("jira.jql"), done_jql: val("jira.done_jql") },
     repos: [...repos.querySelectorAll(".repo:not(.removed)")].map(row => {
       const f = n => row.querySelector(`[data-field=${n}]`).value.trim();
       return { name: f("name"), path: f("path"), plans_dir: f("plans_dir"), base_branch: f("base_branch") };

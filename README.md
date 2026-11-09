@@ -12,7 +12,7 @@ taskboard can start a session for a ticket (creating its worktree and tmux windo
 
 Stages: Ticket, Plan, Code, Review, Ready, Merged, Done. Tasks are grouped so the ones waiting on you come first: CI failing, changes requested, ready to merge, plan needs review, and merged but Jira not yet updated.
 
-Done tasks that still have a worktree or a tmux window go to "Needs clean-up" instead of Done. Done shows tasks whose PR merged in the last `done_days` days (default 30) or whose ticket was resolved in that window (`assignee = currentUser() AND statusCategory = Done`).
+Done tasks that still have a worktree or a tmux window go to "Needs clean-up" instead of Done. Done shows tasks whose PR merged in the last `done_days` days (default 30) or whose ticket was resolved in that window and matches `jira.done_jql` (default `assignee = currentUser()`). Taskboard adds the Done status and the date window to that query itself, so `jira.done_jql` only says which tickets are yours and can't have an `ORDER BY`.
 
 ## Requirements
 
@@ -31,7 +31,7 @@ cp config.example.json taskboard.json   # edit jira, project_keys, repos and git
 ./taskboard -config taskboard.json
 ```
 
-`config.example.json` holds placeholder values and leaves `jira.jql` unset, so the built-in default applies. At Mattermost, start from `tb-mattermost.json` instead. It is filled in for Mattermost's Jira site and repos, and its `jira.jql` also lists open tickets that name you in the Matty code assigner field, a custom field that only exists on that site.
+`config.example.json` holds placeholder values and leaves `jira.jql` and `jira.done_jql` unset, so the built-in defaults apply. At Mattermost, start from `tb-mattermost.json` instead. It is filled in for Mattermost's Jira site and repos, and its `jira.jql` and `jira.done_jql` also match tickets that name you in the Matty code assigner field, a custom field that only exists on that site.
 
 The macOS builds aren't signed. If macOS refuses to open a binary downloaded with a browser, clear the quarantine flag with `xattr -d com.apple.quarantine taskboard`.
 

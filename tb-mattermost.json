@@ -12,7 +12,8 @@
   "allowed_hosts": [],
   "jira": {
     "base_url": "https://mattermost.atlassian.net",
-    "jql": "(assignee = currentUser() OR \"matty code assigner[user picker (single user)]\" = currentUser()) AND statusCategory != Done ORDER BY updated DESC"
+    "jql": "(assignee = currentUser() OR \"matty code assigner[user picker (single user)]\" = currentUser()) AND statusCategory != Done ORDER BY updated DESC",
+    "done_jql": "assignee = currentUser() OR \"matty code assigner[user picker (single user)]\" = currentUser()"
   },
   "repos": [
     {"name": "mattermost/mattermost", "path": "~/src/mattermost", "plans_dir": "plans"},
