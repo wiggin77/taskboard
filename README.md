@@ -33,7 +33,7 @@ cp config.example.json taskboard.json   # edit jira, project_keys and repos
 
 The macOS builds aren't signed. If macOS refuses to open a binary downloaded with a browser, clear the quarantine flag with `xattr -d com.apple.quarantine taskboard`.
 
-Open http://127.0.0.1:8484. While the page has been viewed in the last 15 minutes, the server refreshes every `poll_interval` (default 5m, at least 1m). It does not refresh while nobody is viewing the board, and the first view after that refreshes right away. While its tab is visible, the page checks every 15 seconds whether the board changed and reloads only if it did (and at least hourly, so ages stay current).
+Open http://127.0.0.1:8484. While its tab is visible, the page checks every 15 seconds whether the board changed and reloads only if it did (and at least hourly, so ages stay current). While any page is checking, the server refreshes every `poll_interval` (default 5m, at least 1m). It stops 90 seconds after the last check, so nothing refreshes while nobody is looking. When a page shows the board again, the server refreshes right away if its data is older than `poll_interval`, and otherwise when it reaches that age, so switching tabs never refreshes more often than polling would.
 
 The Refresh button refreshes on demand. Pressing it during a refresh waits for that one instead of starting another. Set `manual_refresh` to true (or untick Refresh automatically in Settings) to refresh only on demand: the server then refreshes at startup, after a session action or a settings change, and when you press Refresh, but never on a timer or because the board was viewed. A refresh that takes longer than `refresh_timeout` (default 5m) is cut short and reports the sources it could not read.
 

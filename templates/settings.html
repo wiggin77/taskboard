@@ -112,8 +112,8 @@ button.primary{background:var(--link);border-color:var(--link);color:var(--surfa
 
 <fieldset>
   <legend>Polling</legend>
-  <span class="hint">The board is on screen while any browser tab is showing it, and for 15 minutes after. A closed tab, a background tab or a minimized window is off screen. Durations like 90s, 5m or 1h. The Refresh button on the board refreshes at any time.</span>
-  <label class="check"><input type="checkbox" name="auto_refresh"{{if not .ManualRefresh}} checked{{end}}>Refresh automatically<span class="hint">While the board is on screen, and as soon as it is shown again. Never while it is off screen. When off, the board refreshes only when you press Refresh, start, stop or clean up a session, or save settings.</span></label>
+  <span class="hint">The board is on screen while any browser tab is showing it, and for 90 seconds after. A closed tab, a background tab or a minimized window is off screen. Durations like 90s, 5m or 1h. The Refresh button on the board refreshes at any time.</span>
+  <label class="check"><input type="checkbox" name="auto_refresh"{{if not .ManualRefresh}} checked{{end}}>Refresh automatically<span class="hint">While the board is on screen, and as soon as it is shown again if the data is older than the interval. Never while it is off screen. When off, the board refreshes only when you press Refresh, start, stop or clean up a session, or save settings.</span></label>
   <div class="row2">
     <label>Refresh interval<span class="hint">How often to refresh automatically. At least 1m.</span>
       <input name="poll_interval" required placeholder="e.g. 5m" value="{{.PollInterval}}"></label>

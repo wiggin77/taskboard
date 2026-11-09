@@ -697,16 +697,18 @@ func TestIdlePolling(t *testing.T) {
 			return false
 		}
 	}
-	if got := b.nextWait(); got != 0 {
-		t.Errorf("before any view: wait %v, want 0 (no timer)", got)
+	if _, ok := b.nextWait(); ok {
+		t.Error("before any view: want no timer")
 	}
 
 	b.Viewed()
-	if !woke() {
-		t.Error("first view should wake the poll loop")
+	if !woke() || !b.requested {
+		t.Error("first view with no snapshot should request a refresh")
 	}
-	if got := b.nextWait(); got != time.Minute {
-		t.Errorf("after a view: wait %v, want poll interval", got)
+	b.requested = false
+	b.snap.Updated = time.Now()
+	if got, ok := b.nextWait(); !ok || got > time.Minute || got < 50*time.Second {
+		t.Errorf("after a view: wait %v %v, want about the poll interval", got, ok)
 	}
 	b.Viewed()
 	if woke() {
@@ -714,12 +716,62 @@ func TestIdlePolling(t *testing.T) {
 	}
 
 	b.lastView = time.Now().Add(-idleAfter - time.Second)
-	if got := b.nextWait(); got != 0 {
-		t.Errorf("after idling: wait %v, want 0 (no timer)", got)
+	if _, ok := b.nextWait(); ok {
+		t.Error("after idling: want no timer")
 	}
 	b.Viewed()
-	if !woke() {
-		t.Error("a view after idling should wake the poll loop")
+	if !woke() || b.requested {
+		t.Error("a view after idling with recent data should wake the loop without requesting a refresh")
+	}
+	if got, ok := b.nextWait(); !ok || got > time.Minute {
+		t.Errorf("back on screen: wait %v %v, want the rest of the poll interval", got, ok)
+	}
+
+	b.lastView = time.Now().Add(-idleAfter - time.Second)
+	b.snap.Updated = time.Now().Add(-2 * time.Minute)
+	b.Viewed()
+	if !woke() || !b.requested {
+		t.Error("a view after idling with stale data should request a refresh")
+	}
+	b.requested = false
+	if got, ok := b.nextWait(); !ok || got != 0 {
+		t.Errorf("stale data on screen: wait %v %v, want 0", got, ok)
+	}
+}
+
+func TestWaitForRefresh(t *testing.T) {
+	b := NewBoard(testConfig(t))
+	b.snap.Updated = time.Now()
+	b.lastView = time.Now()
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan bool, 1)
+	go func() { done <- b.waitForRefresh(ctx) }()
+
+	b.mu.Lock()
+	b.wakeLocked()
+	b.mu.Unlock()
+	select {
+	case <-done:
+		t.Fatal("a wake without a request should only re-arm the timer")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	b.mu.Lock()
+	b.requestLocked()
+	b.mu.Unlock()
+	select {
+	case ok := <-done:
+		if !ok {
+			t.Error("a request should start a refresh")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("a request should end the wait")
+	}
+
+	go func() { done <- b.waitForRefresh(ctx) }()
+	cancel()
+	if <-done {
+		t.Error("a cancelled wait should stop the loop")
 	}
 }
 
@@ -730,8 +782,8 @@ func TestManualRefresh(t *testing.T) {
 	if len(b.wake) != 0 {
 		t.Error("with manual_refresh a view should not wake the poll loop")
 	}
-	if got := b.nextWait(); got != 0 {
-		t.Errorf("active with manual_refresh: wait %v, want 0 (no timer)", got)
+	if _, ok := b.nextWait(); ok {
+		t.Error("active with manual_refresh: want no timer")
 	}
 	if got := b.Config().refreshSeconds(); got != 0 {
 		t.Errorf("manual_refresh: page reload every %ds, want none", got)
