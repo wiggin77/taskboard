@@ -112,24 +112,35 @@ func listPRs(ctx context.Context, cfg *Config, repo, state string, limit int, se
 	return prs, nil
 }
 
-// foldTaskReviews drops review rows for task PRs, such as a delegated PR assigned back to you, and marks the
-// task PRs whose row was a review request.
-func foldTaskReviews(links []PRLink, prs []PR) []PRLink {
-	type ref struct {
-		repo   string
-		number int
-	}
-	tasks := map[ref]int{}
-	for i, pr := range prs {
-		tasks[ref{strings.ToLower(pr.Repo), pr.Number}] = i
-	}
-	return slices.DeleteFunc(links, func(l PRLink) bool {
-		i, ok := tasks[ref{strings.ToLower(l.Repo), l.Number}]
-		if ok && l.Role == RoleRequested {
-			prs[i].ReviewRequested = true
+type prRef struct {
+	repo   string
+	number int
+}
+
+func refOf(repo string, number int) prRef { return prRef{strings.ToLower(repo), number} }
+
+func markReviewRequests(links []PRLink, prs []PR) {
+	requested := map[prRef]bool{}
+	for _, l := range links {
+		if l.Role == RoleRequested {
+			requested[refOf(l.Repo, l.Number)] = true
 		}
-		return ok
-	})
+	}
+	for i := range prs {
+		prs[i].ReviewRequested = requested[refOf(prs[i].Repo, prs[i].Number)]
+	}
+}
+
+// withoutTaskPRs drops review rows for PRs that a task shows, such as a delegated PR assigned back to you.
+// Rows with a review session stay, since only the Reviews row has its controls.
+func withoutTaskPRs(links []PRLink, tasks []Task) []PRLink {
+	shown := map[prRef]bool{}
+	for _, t := range tasks {
+		if t.PR != nil {
+			shown[refOf(t.PR.Repo, t.PR.Number)] = true
+		}
+	}
+	return slices.DeleteFunc(links, func(l PRLink) bool { return l.Review == nil && shown[refOf(l.Repo, l.Number)] })
 }
 
 func rollupCI(checks []ghCheck) CIState {

@@ -316,7 +316,7 @@ func (b *Board) refresh(ctx context.Context) {
 		r.prs = append(r.prs, prs[i]...)
 		r.errs = append(r.errs, prErrs[i]...)
 	}
-	r.reviews = foldTaskReviews(r.reviews, r.prs)
+	markReviewRequests(r.reviews, r.prs)
 
 	for _, key := range b.unknownKeys(sources{issues: r.issues, prs: r.prs, worktrees: loc.worktrees, sessions: ticketSessions(loc.windows)}) {
 		if is, ok := b.doneIssues[key]; ok {
@@ -406,7 +406,9 @@ func (b *Board) compose(ctx context.Context, r *fetched, loc *localState, gen ui
 
 	s := sources{issues: r.issues, resolved: r.resolved, missing: r.missing, prs: r.prs,
 		worktrees: loc.worktrees, plans: loc.plans, sessions: ticketSessions(loc.windows)}
+	tasks := buildTasks(r.cfg, s, time.Now())
 	reviews, leftovers := attachReviews(r.cfg, r.reviews, loc.worktrees, loc.windows)
+	reviews = withoutTaskPRs(reviews, tasks)
 	for i, l := range leftovers {
 		if v, ok := r.views[l.URL]; ok {
 			v.Role, v.ReviewName, v.Review = l.Role, l.ReviewName, l.Review
@@ -414,7 +416,6 @@ func (b *Board) compose(ctx context.Context, r *fetched, loc *localState, gen ui
 		}
 	}
 	errs := append(slices.Clone(r.errs), loc.errs...)
-	tasks := buildTasks(r.cfg, s, time.Now())
 	snap := Snapshot{Tasks: tasks, Epics: buildEpics(r.cfg, tasks, r.children), Reviews: append(reviews, leftovers...), OtherPRs: r.otherPRs, Errors: errs, Updated: r.updated}
 	snap.Version = snapshotVersion(snap)
 	b.mu.Lock()
@@ -425,12 +426,20 @@ func (b *Board) compose(ctx context.Context, r *fetched, loc *localState, gen ui
 
 func repoPRs(ctx context.Context, cfg *Config, repo RepoConfig) ([]PR, []string) {
 	cutoff := time.Now().AddDate(0, 0, -cfg.DoneDays).Format("2006-01-02")
-	authored, errs := listMyPRs(ctx, cfg, repo.Name, "", "", cutoff, "--author", "@me")
-	assigned, assignedErrs := listMyPRs(ctx, cfg, repo.Name, "assigned ", "assignee:@me -author:@me", cutoff)
+	var (
+		wg           sync.WaitGroup
+		assigned     []PR
+		assignedErrs []string
+	)
+	wg.Go(func() {
+		assigned, assignedErrs = listMyPRs(ctx, cfg, repo.Name, "assigned ", cfg.assignedSearch(), cutoff)
+	})
+	authored, authoredErrs := listMyPRs(ctx, cfg, repo.Name, "", "", cutoff, "--author", "@me")
+	wg.Wait()
 	for i := range assigned {
 		assigned[i].Assigned = true
 	}
-	return append(authored, assigned...), append(errs, assignedErrs...)
+	return append(authored, assigned...), append(authoredErrs, assignedErrs...)
 }
 
 // listMyPRs lists open PRs, the last merged_pr_limit merged ones, and any merged since cutoff.

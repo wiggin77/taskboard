@@ -18,6 +18,7 @@ const (
 	StageReadyToMerge
 	StagePlanning
 	StageMergedJiraPending
+	StageAwaitingChanges
 	StageInReview
 	StageCoding
 	StageTicket
@@ -39,6 +40,7 @@ var stageInfo = map[Stage]stageMeta{
 	StageReadyToMerge:      {"Ready to merge", "ok", groupNeedsYou, 4},
 	StagePlanning:          {"Plan needs review", "needs", groupNeedsYou, 1},
 	StageMergedJiraPending: {"Merged, update Jira", "needs", groupNeedsYou, 5},
+	StageAwaitingChanges:   {"Changes requested", "active", groupWaiting, 3},
 	StageInReview:          {"In review", "active", groupWaiting, 3},
 	StageCoding:            {"Coding", "active", groupInProgress, 2},
 	StageTicket:            {"Not started", "idle", groupNotStarted, 0},
@@ -156,6 +158,8 @@ func progressStage(t *Task) Stage {
 				return StageCoding
 			case pr.CI == CIFailing:
 				return StageCIFailing
+			case pr.Review == "CHANGES_REQUESTED" && pr.Assigned:
+				return StageAwaitingChanges
 			case pr.Review == "CHANGES_REQUESTED":
 				return StageChangesRequested
 			case pr.ReviewRequested:
@@ -188,12 +192,11 @@ func preferPR(candidate, current *PR) bool {
 	if current == nil {
 		return true
 	}
-	// An assigned PR may be an automated cherry-pick of the authored one, which still tracks the ticket's progress.
-	if candidate.Assigned != current.Assigned {
-		return current.Assigned
-	}
 	if (candidate.State == "OPEN") != (current.State == "OPEN") {
 		return candidate.State == "OPEN"
+	}
+	if candidate.Assigned != current.Assigned {
+		return current.Assigned
 	}
 	return candidate.UpdatedAt.After(current.UpdatedAt)
 }

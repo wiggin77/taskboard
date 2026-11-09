@@ -61,11 +61,14 @@ type JiraConfig struct {
 }
 
 type GitHubConfig struct {
-	Organizations []string `json:"organizations,omitempty"`
+	Organizations         []string `json:"organizations,omitempty"`
+	IgnoreAssignedAuthors []string `json:"ignore_assigned_authors,omitempty"`
 }
 
 // IsZero lets omitzero drop an empty github block, including one loaded with an empty organizations list.
-func (g GitHubConfig) IsZero() bool { return len(g.Organizations) == 0 }
+func (g GitHubConfig) IsZero() bool {
+	return len(g.Organizations) == 0 && len(g.IgnoreAssignedAuthors) == 0
+}
 
 type RepoConfig struct {
 	Name       string `json:"name"`
@@ -229,6 +232,13 @@ func (c *Config) validate() error {
 		}
 		c.GitHub.Organizations[i] = org
 	}
+	for i, login := range c.GitHub.IgnoreAssignedAuthors {
+		login = strings.TrimSpace(login)
+		if !authorRE.MatchString(login) {
+			return fmt.Errorf("github.ignore_assigned_authors[%d]: %q is not a GitHub login or app/name", i, login)
+		}
+		c.GitHub.IgnoreAssignedAuthors[i] = login
+	}
 	for i, serial := range c.RevokedCerts {
 		c.RevokedCerts[i] = normalizeSerial(serial)
 	}
@@ -320,6 +330,14 @@ func (c *Config) doneJQL() string {
 	return fmt.Sprintf("(%s) AND statusCategory = Done AND resolved >= -%dd", mine, c.DoneDays)
 }
 
+func (c *Config) assignedSearch() string {
+	q := "assignee:@me -author:@me"
+	for _, login := range c.GitHub.IgnoreAssignedAuthors {
+		q += " -author:" + login
+	}
+	return q
+}
+
 func (c *Config) tmuxSession() string {
 	if c.TmuxSession == "" {
 		return defaultTmuxSession
@@ -358,6 +376,9 @@ func (c *Config) repo(name string) (RepoConfig, bool) {
 }
 
 var ownerRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9-]*$`)
+
+// authorRE accepts app/name too, which is how GitHub search names an app's PRs, such as app/cursor.
+var authorRE = regexp.MustCompile(`^(app/)?[A-Za-z0-9][A-Za-z0-9-]*$`)
 
 // showsOther reports whether a repo outside repos may appear under Other repos. An empty github.organizations shows every repo.
 func (c *Config) showsOther(repo string) bool {

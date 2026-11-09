@@ -20,6 +20,7 @@
     {"name": "mattermost/mattermost-plugin-jira", "path": "~/src/mattermost-plugin-jira"}
   ],
   "github": {
-    "organizations": ["mattermost", "mattermost-community"]
+    "organizations": ["mattermost", "mattermost-community"],
+    "ignore_assigned_authors": ["mattermost-build"]
   }
 }

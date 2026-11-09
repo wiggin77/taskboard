@@ -106,6 +106,7 @@ func TestStageFor(t *testing.T) {
 		{"ready", Task{PR: &PR{State: "OPEN", Review: "APPROVED", CI: CIPassing}}, StageReadyToMerge},
 		{"your review requested", Task{PR: &PR{State: "OPEN", Review: "APPROVED", CI: CIPassing, ReviewRequested: true}}, StageReviewRequested},
 		{"your review requested, ci failing", Task{PR: &PR{State: "OPEN", CI: CIFailing, ReviewRequested: true}}, StageCIFailing},
+		{"assigned, changes requested", Task{PR: &PR{State: "OPEN", Review: "CHANGES_REQUESTED", CI: CIPassing, Assigned: true}}, StageAwaitingChanges},
 		{"merged, jira open", Task{PR: &PR{State: "MERGED"}}, StageMergedJiraPending},
 		{"merged, jira done", Task{PR: &PR{State: "MERGED"}, JiraDone: true}, StageDone},
 		{"merged, jira not found", Task{PR: &PR{State: "MERGED"}, JiraMissing: true}, StageDone},
@@ -175,41 +176,72 @@ func TestAssignedPRs(t *testing.T) {
 	now := time.Now()
 	tasks := buildTasks(testConfig(t), sources{
 		issues: map[string]JiraIssue{
-			"MM-1": {Key: "MM-1", Summary: "Mine", Status: "In Progress"},
+			"MM-1": {Key: "MM-1", Summary: "Part 2 delegated", Status: "In Progress"},
 			"MM-2": {Key: "MM-2", Summary: "Delegated", Status: "In Progress"},
+			"MM-3": {Key: "MM-3", Summary: "Both open", Status: "In Progress"},
 		},
 		prs: []PR{
-			{Key: "MM-1", Number: 10, State: "MERGED", UpdatedAt: now.Add(-time.Hour)},
-			{Key: "MM-1", Number: 11, State: "OPEN", Title: "Automated cherry pick of #10", UpdatedAt: now, Assigned: true},
+			{Key: "MM-1", Number: 10, State: "MERGED", UpdatedAt: now},
+			{Key: "MM-1", Number: 11, State: "OPEN", CI: CIFailing, UpdatedAt: now.Add(-time.Hour), Assigned: true},
 			{Key: "MM-2", Number: 12, State: "OPEN", Review: "APPROVED", CI: CIPassing, Assigned: true},
+			{Key: "MM-3", Number: 13, State: "OPEN", UpdatedAt: now.Add(-time.Hour)},
+			{Key: "MM-3", Number: 14, State: "OPEN", UpdatedAt: now, Assigned: true},
 		},
 	}, now)
 	byKey := map[string]Task{}
 	for _, task := range tasks {
 		byKey[task.Key] = task
 	}
-	if pr := byKey["MM-1"].PR; pr == nil || pr.Number != 10 {
-		t.Errorf("MM-1 PR = %+v, want authored PR 10 over the open assigned cherry-pick", pr)
+	if task := byKey["MM-1"]; task.PR == nil || task.PR.Number != 11 || task.Stage != StageCIFailing {
+		t.Errorf("MM-1 = PR %+v stage %s, want open assigned PR 11 with CI failing over merged authored PR 10", task.PR, task.StageLabel())
 	}
 	if task := byKey["MM-2"]; task.PR == nil || task.PR.Number != 12 || task.Stage != StageReadyToMerge {
 		t.Errorf("MM-2 = PR %+v stage %s, want assigned PR 12 ready to merge", task.PR, task.StageLabel())
 	}
+	if pr := byKey["MM-3"].PR; pr == nil || pr.Number != 13 {
+		t.Errorf("MM-3 PR = %+v, want authored PR 13 over a newer assigned one in the same state", pr)
+	}
 }
 
-func TestFoldTaskReviews(t *testing.T) {
+func TestAssignedSearch(t *testing.T) {
+	cfg := testConfig(t)
+	if got, want := cfg.assignedSearch(), "assignee:@me -author:@me"; got != want {
+		t.Errorf("assignedSearch = %q, want %q", got, want)
+	}
+	cfg.GitHub.IgnoreAssignedAuthors = []string{"mattermost-build", "app/cursor"}
+	if got, want := cfg.assignedSearch(), "assignee:@me -author:@me -author:mattermost-build -author:app/cursor"; got != want {
+		t.Errorf("assignedSearch = %q, want %q", got, want)
+	}
+}
+
+func TestReviewRowsForTaskPRs(t *testing.T) {
 	links := []PRLink{
 		{Repo: "Mattermost/Mattermost", Number: 12, Role: RoleRequested},
 		{Repo: "mattermost/mattermost", Number: 13, Role: RoleRequested},
 		{Repo: "mattermost/logr", Number: 12, Role: RoleReviewed},
 		{Repo: "mattermost/mattermost", Number: 14, Role: RoleReviewed},
+		{Repo: "mattermost/mattermost", Number: 15, Role: RoleRequested, Review: &Review{Worktree: &Worktree{}}},
 	}
-	prs := []PR{{Repo: "mattermost/mattermost", Number: 12}, {Repo: "mattermost/mattermost", Number: 14}}
-	got := foldTaskReviews(links, prs)
-	if len(got) != 2 || got[0].Number != 13 || got[1].Repo != "mattermost/logr" {
-		t.Errorf("foldTaskReviews = %+v, want task PRs 12 and 14 dropped regardless of case", got)
+	prs := []PR{
+		{Repo: "mattermost/mattermost", Number: 12},
+		{Repo: "mattermost/mattermost", Number: 13},
+		{Repo: "mattermost/mattermost", Number: 14, ReviewRequested: true},
+		{Repo: "mattermost/mattermost", Number: 15},
 	}
-	if !prs[0].ReviewRequested || prs[1].ReviewRequested {
-		t.Errorf("ReviewRequested = %v, %v; want only PR 12, whose row was a request", prs[0].ReviewRequested, prs[1].ReviewRequested)
+	markReviewRequests(links, prs)
+	for i, want := range []bool{true, true, false, true} {
+		if prs[i].ReviewRequested != want {
+			t.Errorf("PR %d ReviewRequested = %v, want %v", prs[i].Number, prs[i].ReviewRequested, want)
+		}
+	}
+
+	tasks := []Task{{PR: &prs[0]}, {PR: &prs[2]}, {PR: &prs[3]}}
+	var got []int
+	for _, l := range withoutTaskPRs(links, tasks) {
+		got = append(got, l.Number)
+	}
+	if want := []int{13, 12, 15}; !slices.Equal(got, want) {
+		t.Errorf("rows kept %v, want %v: drop rows for PRs a task shows, keep other PRs' rows and rows with a review session", got, want)
 	}
 }
 
@@ -502,6 +534,30 @@ func TestShowsOther(t *testing.T) {
 		if got := cfg.showsOther(c.repo); got != c.want {
 			t.Errorf("showsOther(%v, %q) = %v, want %v", c.orgs, c.repo, got, c.want)
 		}
+	}
+}
+
+func TestIgnoreAssignedAuthorsConfig(t *testing.T) {
+	base := `"project_keys":["MM"],"jira":{"base_url":"https://x.atlassian.net"},"repos":[{"name":"a/b"}]`
+	cfg, err := parseConfig([]byte(`{` + base + `,"github":{"ignore_assigned_authors":[" mattermost-build ","app/cursor"]}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"mattermost-build", "app/cursor"}; !slices.Equal(cfg.GitHub.IgnoreAssignedAuthors, want) {
+		t.Errorf("github.ignore_assigned_authors = %q, want %q", cfg.GitHub.IgnoreAssignedAuthors, want)
+	}
+	for _, bad := range []string{`[""]`, `["a b"]`, `["@me"]`, `["a/b"]`, `["app/"]`, `["x -author:y"]`} {
+		_, err := parseConfig([]byte(`{` + base + `,"github":{"ignore_assigned_authors":` + bad + `}}`))
+		if err == nil || !strings.Contains(err.Error(), "github.ignore_assigned_authors") {
+			t.Errorf("github.ignore_assigned_authors %s: error = %v, want one naming github.ignore_assigned_authors", bad, err)
+		}
+	}
+	path := filepath.Join(t.TempDir(), "taskboard.json")
+	if err := SaveConfig(path, cfg); err != nil {
+		t.Fatal(err)
+	}
+	if raw, _ := os.ReadFile(path); !strings.Contains(string(raw), "ignore_assigned_authors") {
+		t.Errorf("a github block with only ignore_assigned_authors was not saved:\n%s", raw)
 	}
 }
 
