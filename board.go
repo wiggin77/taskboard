@@ -316,7 +316,7 @@ func (b *Board) refresh(ctx context.Context) {
 		r.prs = append(r.prs, prs[i]...)
 		r.errs = append(r.errs, prErrs[i]...)
 	}
-	r.reviews = withoutTaskPRs(r.reviews, r.prs)
+	r.reviews = foldTaskReviews(r.reviews, r.prs)
 
 	for _, key := range b.unknownKeys(sources{issues: r.issues, prs: r.prs, worktrees: loc.worktrees, sessions: ticketSessions(loc.windows)}) {
 		if is, ok := b.doneIssues[key]; ok {

@@ -104,6 +104,8 @@ func TestStageFor(t *testing.T) {
 		{"changes requested", Task{PR: &PR{State: "OPEN", Review: "CHANGES_REQUESTED", CI: CIPassing}}, StageChangesRequested},
 		{"approved, checks running", Task{PR: &PR{State: "OPEN", Review: "APPROVED", CI: CIPending}}, StageInReview},
 		{"ready", Task{PR: &PR{State: "OPEN", Review: "APPROVED", CI: CIPassing}}, StageReadyToMerge},
+		{"your review requested", Task{PR: &PR{State: "OPEN", Review: "APPROVED", CI: CIPassing, ReviewRequested: true}}, StageReviewRequested},
+		{"your review requested, ci failing", Task{PR: &PR{State: "OPEN", CI: CIFailing, ReviewRequested: true}}, StageCIFailing},
 		{"merged, jira open", Task{PR: &PR{State: "MERGED"}}, StageMergedJiraPending},
 		{"merged, jira done", Task{PR: &PR{State: "MERGED"}, JiraDone: true}, StageDone},
 		{"merged, jira not found", Task{PR: &PR{State: "MERGED"}, JiraMissing: true}, StageDone},
@@ -194,15 +196,20 @@ func TestAssignedPRs(t *testing.T) {
 	}
 }
 
-func TestWithoutTaskPRs(t *testing.T) {
+func TestFoldTaskReviews(t *testing.T) {
 	links := []PRLink{
 		{Repo: "Mattermost/Mattermost", Number: 12, Role: RoleRequested},
 		{Repo: "mattermost/mattermost", Number: 13, Role: RoleRequested},
 		{Repo: "mattermost/logr", Number: 12, Role: RoleReviewed},
+		{Repo: "mattermost/mattermost", Number: 14, Role: RoleReviewed},
 	}
-	got := withoutTaskPRs(links, []PR{{Repo: "mattermost/mattermost", Number: 12}})
+	prs := []PR{{Repo: "mattermost/mattermost", Number: 12}, {Repo: "mattermost/mattermost", Number: 14}}
+	got := foldTaskReviews(links, prs)
 	if len(got) != 2 || got[0].Number != 13 || got[1].Repo != "mattermost/logr" {
-		t.Errorf("withoutTaskPRs = %+v, want PR 12 in mattermost/mattermost dropped regardless of case", got)
+		t.Errorf("foldTaskReviews = %+v, want task PRs 12 and 14 dropped regardless of case", got)
+	}
+	if !prs[0].ReviewRequested || prs[1].ReviewRequested {
+		t.Errorf("ReviewRequested = %v, %v; want only PR 12, whose row was a request", prs[0].ReviewRequested, prs[1].ReviewRequested)
 	}
 }
 

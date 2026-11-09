@@ -14,6 +14,7 @@ type Stage int
 const (
 	StageCIFailing Stage = iota
 	StageChangesRequested
+	StageReviewRequested
 	StageReadyToMerge
 	StagePlanning
 	StageMergedJiraPending
@@ -34,6 +35,7 @@ type stageMeta struct {
 var stageInfo = map[Stage]stageMeta{
 	StageCIFailing:         {"CI failing", "fail", groupNeedsYou, 3},
 	StageChangesRequested:  {"Changes requested", "fail", groupNeedsYou, 3},
+	StageReviewRequested:   {"Review requested", "needs", groupNeedsYou, 3},
 	StageReadyToMerge:      {"Ready to merge", "ok", groupNeedsYou, 4},
 	StagePlanning:          {"Plan needs review", "needs", groupNeedsYou, 1},
 	StageMergedJiraPending: {"Merged, update Jira", "needs", groupNeedsYou, 5},
@@ -156,6 +158,8 @@ func progressStage(t *Task) Stage {
 				return StageCIFailing
 			case pr.Review == "CHANGES_REQUESTED":
 				return StageChangesRequested
+			case pr.ReviewRequested:
+				return StageReviewRequested
 			case pr.Review == "APPROVED" && pr.CI != CIPending:
 				return StageReadyToMerge
 			default:

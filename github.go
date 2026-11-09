@@ -33,20 +33,21 @@ func (s CIState) String() string {
 }
 
 type PR struct {
-	Repo      string
-	Key       string
-	Number    int
-	Title     string
-	URL       string
-	Branch    string
-	HeadSHA   string
-	State     string
-	Draft     bool
-	Review    string
-	CI        CIState
-	UpdatedAt time.Time
-	MergedAt  time.Time
-	Assigned  bool
+	Repo            string
+	Key             string
+	Number          int
+	Title           string
+	URL             string
+	Branch          string
+	HeadSHA         string
+	State           string
+	Draft           bool
+	Review          string
+	CI              CIState
+	UpdatedAt       time.Time
+	MergedAt        time.Time
+	Assigned        bool
+	ReviewRequested bool
 }
 
 type ghCheck struct {
@@ -111,17 +112,24 @@ func listPRs(ctx context.Context, cfg *Config, repo, state string, limit int, se
 	return prs, nil
 }
 
-// withoutTaskPRs drops review rows for task PRs, such as an assigned PR that also requests your review.
-func withoutTaskPRs(links []PRLink, prs []PR) []PRLink {
+// foldTaskReviews drops review rows for task PRs, such as a delegated PR assigned back to you, and marks the
+// task PRs whose row was a review request.
+func foldTaskReviews(links []PRLink, prs []PR) []PRLink {
 	type ref struct {
 		repo   string
 		number int
 	}
-	tasks := map[ref]bool{}
-	for _, pr := range prs {
-		tasks[ref{strings.ToLower(pr.Repo), pr.Number}] = true
+	tasks := map[ref]int{}
+	for i, pr := range prs {
+		tasks[ref{strings.ToLower(pr.Repo), pr.Number}] = i
 	}
-	return slices.DeleteFunc(links, func(l PRLink) bool { return tasks[ref{strings.ToLower(l.Repo), l.Number}] })
+	return slices.DeleteFunc(links, func(l PRLink) bool {
+		i, ok := tasks[ref{strings.ToLower(l.Repo), l.Number}]
+		if ok && l.Role == RoleRequested {
+			prs[i].ReviewRequested = true
+		}
+		return ok
+	})
 }
 
 func rollupCI(checks []ghCheck) CIState {
