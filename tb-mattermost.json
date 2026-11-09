@@ -1,0 +1,24 @@
+{
+  "listen": "127.0.0.1:8484",
+  "tls_listen": "",
+  "poll_interval": "5m",
+  "refresh_timeout": "5m",
+  "project_keys": ["MM"],
+  "merged_pr_limit": 20,
+  "done_days": 30,
+  "attach_command": ["gnome-terminal", "--", "tmux", "attach", "-t", "{target}"],
+  "worktree_dir": "~/worktrees",
+  "worktree_links": ["~/src/enterprise"],
+  "allowed_hosts": [],
+  "jira": {
+    "base_url": "https://mattermost.atlassian.net",
+    "jql": "(assignee = currentUser() OR \"matty code assigner[user picker (single user)]\" = currentUser()) AND statusCategory != Done ORDER BY updated DESC"
+  },
+  "repos": [
+    {"name": "mattermost/mattermost", "path": "~/src/mattermost", "plans_dir": "plans"},
+    {"name": "mattermost/mattermost-plugin-jira", "path": "~/src/mattermost-plugin-jira"}
+  ],
+  "github": {
+    "organizations": ["mattermost", "mattermost-community"]
+  }
+}

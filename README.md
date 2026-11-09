@@ -31,6 +31,8 @@ cp config.example.json taskboard.json   # edit jira, project_keys and repos
 ./taskboard -config taskboard.json
 ```
 
+At Mattermost, start from `tb-mattermost.json` instead. Its `jira.jql` also lists open tickets that name you in the Matty code assigner field, a custom field that only exists on Mattermost's Jira site.
+
 The macOS builds aren't signed. If macOS refuses to open a binary downloaded with a browser, clear the quarantine flag with `xattr -d com.apple.quarantine taskboard`.
 
 Open http://127.0.0.1:8484. While its tab is visible, the page checks every 15 seconds whether the board changed and reloads only if it did (and at least hourly, so ages stay current). While any page is checking, the server refreshes every `poll_interval` (default 5m, at least 1m). It stops 90 seconds after the last check, so nothing refreshes while nobody is looking. When a page shows the board again, the server refreshes right away if its data is older than `poll_interval`, and otherwise when it reaches that age, so switching tabs never refreshes more often than polling would.
