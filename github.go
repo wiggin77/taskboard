@@ -615,6 +615,11 @@ type ghPause struct {
 
 // reset is needed only when err says the hourly budget ran out.
 func (p ghPause) next(err error, rate ghRate, reset, now time.Time) ghPause {
+	// The backoff resets only once GitHub answers, so a failed request between secondary limits doesn't undo it.
+	var kept time.Duration
+	if err != nil && rate.Limit == 0 {
+		kept = p.backoff
+	}
 	switch {
 	case isSecondaryLimit(err):
 		backoff := min(max(2*p.backoff, minBackoff), maxBackoff)
@@ -623,11 +628,11 @@ func (p ghPause) next(err error, rate ghRate, reset, now time.Time) ghPause {
 		if !reset.After(now) {
 			reset = now.Add(15 * time.Minute)
 		}
-		return ghPause{until: reset, reason: "this hour's GitHub API points are used up"}
+		return ghPause{until: reset, backoff: kept, reason: "this hour's GitHub API points are used up"}
 	case rate.Limit > 0 && rate.Remaining < rate.Limit/10 && rate.ResetAt.After(now):
 		return ghPause{until: rate.ResetAt, reason: fmt.Sprintf("%s of %s points left this hour", thousands(rate.Remaining), thousands(rate.Limit))}
 	}
-	return ghPause{}
+	return ghPause{backoff: kept}
 }
 
 func ghRateReset(ctx context.Context) time.Time {
@@ -657,19 +662,15 @@ func thousands(n int) string {
 	return s
 }
 
-func (p ghPause) notice(data ghData, now time.Time) string {
-	msg := fmt.Sprintf("GitHub paused until %s (%s)", p.until.Local().Format("15:04"), p.reason)
-	if at := data.staleSince(now); !at.IsZero() {
-		msg += "; PRs as of " + asOf(at, now)
-	}
-	return msg
+func (p ghPause) notice() string {
+	return fmt.Sprintf("GitHub paused until %s (%s)", p.until.Local().Format("15:04"), p.reason)
 }
 
 // Only refresh calls fetchGitHub, and refreshes don't overlap.
 func (b *Board) fetchGitHub(ctx context.Context, cfg *Config, prev ghData) (data ghData, errs []string, notice string) {
 	now := time.Now()
 	if now.Before(b.ghPause.until) {
-		return prev, nil, b.ghPause.notice(prev, now)
+		return prev, nil, b.ghPause.notice()
 	}
 	res, err := runSearches(ctx, ghGraphQL, prSearches(cfg, now))
 	data = res.withFallback(prev, now)
@@ -681,7 +682,7 @@ func (b *Board) fetchGitHub(ctx context.Context, cfg *Config, prev ghData) (data
 	}
 	b.pauseAfter(ctx, err, res.rate, now)
 	if !b.ghPause.until.IsZero() {
-		notice = b.ghPause.notice(data, now)
+		notice = b.ghPause.notice()
 	}
 	return data, errs, notice
 }
@@ -743,7 +744,7 @@ func githubResult(cfg *Config, login string, found [][]ghPRNode) ghResult {
 	return res
 }
 
-func viewPRs(ctx context.Context, post graphQLFunc, cfg *Config, links []PRLink) (map[string]PRLink, error) {
+func viewPRs(ctx context.Context, post graphQLFunc, cfg *Config, links []PRLink) (views map[string]PRLink, gone map[string]bool, err error) {
 	var params, fields []string
 	vars := map[string]string{}
 	for i, l := range links {
@@ -755,16 +756,17 @@ func viewPRs(ctx context.Context, post graphQLFunc, cfg *Config, links []PRLink)
 	}
 	query := "query(" + strings.Join(params, ", ") + ") {\n" + strings.Join(fields, "\n") + " }\n" + prFragments[prLink].text()
 	resp, err := postGraphQL(ctx, post, query, vars)
-	views := map[string]PRLink{}
+	views, gone = map[string]PRLink{}, map[string]bool{}
 	for i, l := range links {
-		raw, ok := resp.field(fmt.Sprintf("v%d", i))
-		if !ok {
-			continue
-		}
+		raw, answered := resp.Data[fmt.Sprintf("v%d", i)]
 		var repo struct {
 			PullRequest *ghPRNode `json:"pullRequest"`
 		}
-		if json.Unmarshal(raw, &repo) != nil || repo.PullRequest == nil {
+		if !answered || json.Unmarshal(raw, &repo) != nil {
+			continue
+		}
+		if repo.PullRequest == nil {
+			gone[l.URL] = true
 			continue
 		}
 		v := repo.PullRequest
@@ -772,5 +774,5 @@ func viewPRs(ctx context.Context, post graphQLFunc, cfg *Config, links []PRLink)
 		l.setKey(cfg, v.Body)
 		views[links[i].URL] = l
 	}
-	return views, err
+	return views, gone, err
 }

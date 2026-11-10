@@ -388,19 +388,19 @@ func (b *Board) refresh(ctx context.Context) {
 
 	_, leftovers := attachReviews(cfg, reviews, loc.worktrees, loc.windows)
 	if len(leftovers) > 0 {
+		var gone map[string]bool
 		if !time.Now().Before(b.ghPause.until) {
 			var err error
-			if r.views, err = viewPRs(ctx, ghGraphQL, cfg, leftovers); err != nil {
+			if r.views, gone, err = viewPRs(ctx, ghGraphQL, cfg, leftovers); err != nil {
 				r.errs = append(r.errs, "GitHub review checkouts: "+err.Error())
 				if isRateLimited(err) {
-					now := time.Now()
-					b.pauseAfter(ctx, err, ghRate{}, now)
-					r.notices = []string{b.ghPause.notice(r.github, r.started)}
+					b.pauseAfter(ctx, err, ghRate{}, time.Now())
+					r.notices = []string{b.ghPause.notice()}
 				}
 			}
 		}
 		for _, l := range leftovers {
-			if _, ok := r.views[l.URL]; !ok {
+			if _, ok := r.views[l.URL]; !ok && !gone[l.URL] {
 				if v, ok := prev.views[l.URL]; ok {
 					r.views[l.URL] = v
 				}

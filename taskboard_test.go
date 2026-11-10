@@ -468,12 +468,7 @@ func TestSearchFallback(t *testing.T) {
 func TestPauseNotice(t *testing.T) {
 	now := time.Date(2026, 11, 10, 14, 31, 0, 0, time.Local)
 	p := ghPause{}.next(nil, ghRate{5000, 412, now.Add(33 * time.Minute).UTC()}, time.Time{}, now)
-	fresh := ghData{at: []time.Time{now}}
-	if got, want := p.notice(fresh, now), "GitHub paused until 15:04 (412 of 5,000 points left this hour)"; got != want {
-		t.Errorf("notice = %q, want %q", got, want)
-	}
-	stale := ghData{at: []time.Time{now.Add(-26 * time.Minute)}}
-	if got, want := p.notice(stale, now), "GitHub paused until 15:04 (412 of 5,000 points left this hour); PRs as of 14:05"; got != want {
+	if got, want := p.notice(), "GitHub paused until 15:04 (412 of 5,000 points left this hour)"; got != want {
 		t.Errorf("notice = %q, want %q", got, want)
 	}
 	if got := asOf(now.Add(-30*time.Hour), now); got != now.Add(-30*time.Hour).Format("Jan 2 15:04") {
@@ -511,6 +506,13 @@ func TestGitHubPause(t *testing.T) {
 			t.Errorf("%s: paused until %v, want %v", c.name, got.until, c.wantUntil)
 		}
 	}
+	backedOff := ghPause{backoff: 2 * time.Minute}
+	if got := backedOff.next(fmt.Errorf("HTTP 502"), ghRate{}, time.Time{}, now); got.backoff != 2*time.Minute {
+		t.Errorf("failed request: backoff %v, want it kept", got.backoff)
+	}
+	if got := backedOff.next(nil, ghRate{5000, 4000, reset}, time.Time{}, now); got.backoff != 0 {
+		t.Errorf("answered request: backoff %v, want it reset", got.backoff)
+	}
 }
 
 func TestViewPRs(t *testing.T) {
@@ -525,9 +527,12 @@ func TestViewPRs(t *testing.T) {
 		return []byte(`{"data": {"v0": {"pullRequest": {"title": "MM-9 Fix", "url": "https://github.com/mattermost/mattermost/pull/5",
 			"state": "MERGED", "author": {"login": "someone"}}}, "v1": null}, "errors": [{"message": "Could not resolve to a Repository"}]}`), fmt.Errorf("gh: exit status 1")
 	}
-	views, err := viewPRs(context.Background(), post, testConfig(t), links)
+	views, gone, err := viewPRs(context.Background(), post, testConfig(t), links)
 	if err == nil {
 		t.Error("want the failed lookup reported")
+	}
+	if len(gone) != 1 || !gone["u6"] {
+		t.Errorf("gone = %v, want the PR GitHub couldn't resolve", gone)
 	}
 	if !strings.Contains(gotQuery, "pullRequest(number: 5)") || gotVars["o1"] != "mattermost" || gotVars["n1"] != "gone" {
 		t.Errorf("query %s vars %v", gotQuery, gotVars)
