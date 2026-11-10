@@ -104,6 +104,10 @@ func TestStageFor(t *testing.T) {
 		{"changes requested", Task{PR: &PR{State: "OPEN", Review: "CHANGES_REQUESTED", CI: CIPassing}}, StageChangesRequested},
 		{"approved, checks running", Task{PR: &PR{State: "OPEN", Review: "APPROVED", CI: CIPending}}, StageInReview},
 		{"ready", Task{PR: &PR{State: "OPEN", Review: "APPROVED", CI: CIPassing}}, StageReadyToMerge},
+		{"your review requested", Task{PR: &PR{State: "OPEN", Review: "APPROVED", CI: CIPassing, ReviewRequested: true}}, StageReviewRequested},
+		{"your review requested, ci failing", Task{PR: &PR{State: "OPEN", CI: CIFailing, ReviewRequested: true}}, StageCIFailing},
+		{"assigned, changes requested", Task{PR: &PR{State: "OPEN", Review: "CHANGES_REQUESTED", CI: CIPassing, Assigned: true}}, StageAwaitingChanges},
+		{"assigned, changes requested, review re-requested", Task{PR: &PR{State: "OPEN", Review: "CHANGES_REQUESTED", CI: CIPassing, Assigned: true, ReviewRequested: true}}, StageReviewRequested},
 		{"merged, jira open", Task{PR: &PR{State: "MERGED"}}, StageMergedJiraPending},
 		{"merged, jira done", Task{PR: &PR{State: "MERGED"}, JiraDone: true}, StageDone},
 		{"merged, jira not found", Task{PR: &PR{State: "MERGED"}, JiraMissing: true}, StageDone},
@@ -166,6 +170,106 @@ func TestBuildTasks(t *testing.T) {
 	}
 	if k := tasks[3]; !k.NoTicket || k.DisplayKey() != "logr#13" || k.Summary != "No ticket" {
 		t.Errorf("keyless task = %+v", k)
+	}
+}
+
+func TestAssignedPRs(t *testing.T) {
+	now := time.Now()
+	tasks := buildTasks(testConfig(t), sources{
+		issues: map[string]JiraIssue{
+			"MM-1": {Key: "MM-1", Summary: "Part 2 delegated", Status: "In Progress"},
+			"MM-2": {Key: "MM-2", Summary: "Delegated", Status: "In Progress"},
+			"MM-3": {Key: "MM-3", Summary: "Both open", Status: "In Progress"},
+		},
+		prs: []PR{
+			{Key: "MM-1", Number: 10, State: "MERGED", UpdatedAt: now},
+			{Key: "MM-1", Number: 11, State: "OPEN", CI: CIFailing, UpdatedAt: now.Add(-time.Hour), Assigned: true},
+			{Key: "MM-2", Number: 12, State: "OPEN", Review: "APPROVED", CI: CIPassing, Assigned: true},
+			{Key: "MM-3", Number: 13, State: "OPEN", Draft: true, UpdatedAt: now.Add(-time.Hour)},
+			{Key: "MM-3", Number: 14, State: "OPEN", CI: CIFailing, UpdatedAt: now, Assigned: true},
+		},
+	}, now)
+	byKey := map[string]Task{}
+	for _, task := range tasks {
+		byKey[task.Key] = task
+	}
+	if task := byKey["MM-1"]; task.PR == nil || task.PR.Number != 11 || task.Stage != StageCIFailing {
+		t.Errorf("MM-1 = PR %+v stage %s, want open assigned PR 11 with CI failing over merged authored PR 10", task.PR, task.StageLabel())
+	}
+	if task := byKey["MM-2"]; task.PR == nil || task.PR.Number != 12 || task.Stage != StageReadyToMerge {
+		t.Errorf("MM-2 = PR %+v stage %s, want assigned PR 12 ready to merge", task.PR, task.StageLabel())
+	}
+	if task := byKey["MM-3"]; task.PR == nil || task.PR.Number != 14 || task.Stage != StageCIFailing {
+		t.Errorf("MM-3 = PR %+v stage %s, want the newer assigned PR 14 with CI failing over a stale authored draft", task.PR, task.StageLabel())
+	}
+}
+
+func TestAssignedSearch(t *testing.T) {
+	cfg := testConfig(t)
+	if got, want := cfg.assignedSearch(), "assignee:@me -author:@me"; got != want {
+		t.Errorf("assignedSearch = %q, want %q", got, want)
+	}
+	cfg.GitHub.IgnoreAssignedAuthors = []string{"mattermost-build", "app/cursor"}
+	if got, want := cfg.assignedSearch(), "assignee:@me -author:@me -author:mattermost-build -author:app/cursor"; got != want {
+		t.Errorf("assignedSearch = %q, want %q", got, want)
+	}
+}
+
+func TestAssignedReviewRequests(t *testing.T) {
+	out := []byte(`[
+		{"number":1,"state":"OPEN","headRefName":"MM-1-x","reviewRequests":[{"__typename":"User","login":"Wiggin77"}]},
+		{"number":2,"state":"OPEN","headRefName":"MM-2-x","reviewRequests":[{"__typename":"Team","slug":"core-server"}]},
+		{"number":3,"state":"OPEN","headRefName":"MM-3-x","reviewRequests":[{"__typename":"User","login":"someone"}]},
+		{"number":4,"state":"OPEN","headRefName":"MM-4-x","reviewRequests":[]}
+	]`)
+	prs, err := parsePRs(testConfig(t), "mattermost/mattermost", out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	markAssigned(prs, "wiggin77")
+	for i, want := range []bool{true, false, false, false} {
+		if !prs[i].Assigned || prs[i].ReviewRequested != want {
+			t.Errorf("PR %d: Assigned %v ReviewRequested %v, want true %v (only a request naming you counts, not a team's)", prs[i].Number, prs[i].Assigned, prs[i].ReviewRequested, want)
+		}
+	}
+	markAssigned(prs, "")
+	if prs[0].ReviewRequested {
+		t.Error("ReviewRequested set without a known login")
+	}
+}
+
+func TestReviewRowsForTaskPRs(t *testing.T) {
+	links := []PRLink{
+		{Repo: "Mattermost/Mattermost", Number: 12, Role: RoleRequested},
+		{Repo: "mattermost/mattermost", Number: 13, Role: RoleRequested},
+		{Repo: "mattermost/logr", Number: 12, Role: RoleReviewed},
+		{Repo: "mattermost/mattermost", Number: 14, Role: RoleReviewed},
+		{Repo: "mattermost/mattermost", Number: 15, Role: RoleRequested, Review: &Review{Worktree: &Worktree{}}},
+		{Repo: "mattermost/mattermost", Number: 16, Role: RoleRequested},
+		{Repo: "mattermost/mattermost", Number: 17, Role: RoleRequested},
+	}
+	prs := []PR{
+		{Repo: "mattermost/mattermost", Number: 12},
+		{Repo: "mattermost/mattermost", Number: 13},
+		{Repo: "mattermost/mattermost", Number: 14},
+		{Repo: "mattermost/mattermost", Number: 15},
+		{Repo: "mattermost/mattermost", Number: 16, Draft: true, ReviewRequested: true},
+		{Repo: "mattermost/mattermost", Number: 17, Draft: true},
+	}
+
+	tasks := []Task{{PR: &prs[0]}, {PR: &prs[2]}, {PR: &prs[3]}, {PR: &prs[4]}, {PR: &prs[5]}}
+	numbers := func(links []PRLink) []int {
+		var got []int
+		for _, l := range links {
+			got = append(got, l.Number)
+		}
+		return got
+	}
+	if got, want := numbers(withoutTaskPRs(slices.Clone(links), tasks, "wiggin77")), []int{13, 12, 15, 16}; !slices.Equal(got, want) {
+		t.Errorf("rows kept %v, want %v: drop rows for PRs a task shows, keep other PRs' rows, rows with a review session and drafts requesting you", got, want)
+	}
+	if got, want := numbers(withoutTaskPRs(slices.Clone(links), tasks, "")), numbers(links); !slices.Equal(got, want) {
+		t.Errorf("rows kept %v, want all %v while the GitHub login is unknown", got, want)
 	}
 }
 
@@ -458,6 +562,30 @@ func TestShowsOther(t *testing.T) {
 		if got := cfg.showsOther(c.repo); got != c.want {
 			t.Errorf("showsOther(%v, %q) = %v, want %v", c.orgs, c.repo, got, c.want)
 		}
+	}
+}
+
+func TestIgnoreAssignedAuthorsConfig(t *testing.T) {
+	base := `"project_keys":["MM"],"jira":{"base_url":"https://x.atlassian.net"},"repos":[{"name":"a/b"}]`
+	cfg, err := parseConfig([]byte(`{` + base + `,"github":{"ignore_assigned_authors":[" mattermost-build ","app/cursor"]}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"mattermost-build", "app/cursor"}; !slices.Equal(cfg.GitHub.IgnoreAssignedAuthors, want) {
+		t.Errorf("github.ignore_assigned_authors = %q, want %q", cfg.GitHub.IgnoreAssignedAuthors, want)
+	}
+	for _, bad := range []string{`[""]`, `["a b"]`, `["@me"]`, `["a/b"]`, `["app/"]`, `["x -author:y"]`} {
+		_, err := parseConfig([]byte(`{` + base + `,"github":{"ignore_assigned_authors":` + bad + `}}`))
+		if err == nil || !strings.Contains(err.Error(), "github.ignore_assigned_authors") {
+			t.Errorf("github.ignore_assigned_authors %s: error = %v, want one naming github.ignore_assigned_authors", bad, err)
+		}
+	}
+	path := filepath.Join(t.TempDir(), "taskboard.json")
+	if err := SaveConfig(path, cfg); err != nil {
+		t.Fatal(err)
+	}
+	if raw, _ := os.ReadFile(path); !strings.Contains(string(raw), "ignore_assigned_authors") {
+		t.Errorf("a github block with only ignore_assigned_authors was not saved:\n%s", raw)
 	}
 }
 

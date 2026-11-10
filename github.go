@@ -33,19 +33,22 @@ func (s CIState) String() string {
 }
 
 type PR struct {
-	Repo      string
-	Key       string
-	Number    int
-	Title     string
-	URL       string
-	Branch    string
-	HeadSHA   string
-	State     string
-	Draft     bool
-	Review    string
-	CI        CIState
-	UpdatedAt time.Time
-	MergedAt  time.Time
+	Repo            string
+	Key             string
+	Number          int
+	Title           string
+	URL             string
+	Branch          string
+	HeadSHA         string
+	State           string
+	Draft           bool
+	Review          string
+	CI              CIState
+	UpdatedAt       time.Time
+	MergedAt        time.Time
+	Assigned        bool
+	ReviewRequested bool
+	requested       []string
 }
 
 type ghCheck struct {
@@ -67,19 +70,26 @@ type ghPR struct {
 	StatusCheckRollup []ghCheck `json:"statusCheckRollup"`
 	UpdatedAt         time.Time `json:"updatedAt"`
 	MergedAt          time.Time `json:"mergedAt"`
+	ReviewRequests    []struct {
+		TypeName string `json:"__typename"`
+		Login    string `json:"login"`
+	} `json:"reviewRequests"`
 }
 
 func listPRs(ctx context.Context, cfg *Config, repo, state string, limit int, search string) ([]PR, error) {
 	out, err := runCmd(ctx, "", "gh", "pr", "list",
 		"--repo", repo,
-		"--author", "@me",
 		"--state", state,
 		"--limit", strconv.Itoa(limit),
 		"--search", search,
-		"--json", "number,title,url,headRefName,headRefOid,state,isDraft,reviewDecision,statusCheckRollup,updatedAt,mergedAt")
+		"--json", "number,title,url,headRefName,headRefOid,state,isDraft,reviewDecision,statusCheckRollup,updatedAt,mergedAt,reviewRequests")
 	if err != nil {
 		return nil, err
 	}
+	return parsePRs(cfg, repo, out)
+}
+
+func parsePRs(cfg *Config, repo string, out []byte) ([]PR, error) {
 	var raw []ghPR
 	if err := json.Unmarshal(out, &raw); err != nil {
 		return nil, err
@@ -89,6 +99,12 @@ func listPRs(ctx context.Context, cfg *Config, repo, state string, limit int, se
 		key := cfg.findKey(r.HeadRefName)
 		if key == "" {
 			key = cfg.findKey(r.Title)
+		}
+		var requested []string
+		for _, rr := range r.ReviewRequests {
+			if rr.TypeName == "User" {
+				requested = append(requested, rr.Login)
+			}
 		}
 		prs = append(prs, PR{
 			Repo:      repo,
@@ -104,9 +120,41 @@ func listPRs(ctx context.Context, cfg *Config, repo, state string, limit int, se
 			CI:        rollupCI(r.StatusCheckRollup),
 			UpdatedAt: r.UpdatedAt,
 			MergedAt:  r.MergedAt,
+			requested: requested,
 		})
 	}
 	return prs, nil
+}
+
+type prRef struct {
+	repo   string
+	number int
+}
+
+func refOf(repo string, number int) prRef { return prRef{strings.ToLower(repo), number} }
+
+// markAssigned leaves ReviewRequested unset for team requests, such as ones CODEOWNERS adds, so only a
+// request naming you hands an assigned PR back to you.
+func markAssigned(prs []PR, login string) {
+	for i := range prs {
+		prs[i].Assigned = true
+		prs[i].ReviewRequested = login != "" && slices.ContainsFunc(prs[i].requested, func(r string) bool { return strings.EqualFold(r, login) })
+	}
+}
+
+// withoutTaskPRs keeps every row while login is unknown, since ReviewRequested can't be trusted then, and keeps
+// the row for a draft that requests you by name, since a draft's stage never shows the request.
+func withoutTaskPRs(links []PRLink, tasks []Task, login string) []PRLink {
+	if login == "" {
+		return links
+	}
+	shown := map[prRef]bool{}
+	for _, t := range tasks {
+		if t.PR != nil && !(t.PR.Draft && t.PR.ReviewRequested) {
+			shown[refOf(t.PR.Repo, t.PR.Number)] = true
+		}
+	}
+	return slices.DeleteFunc(links, func(l PRLink) bool { return l.Review == nil && shown[refOf(l.Repo, l.Number)] })
 }
 
 func rollupCI(checks []ghCheck) CIState {

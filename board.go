@@ -31,6 +31,7 @@ type Board struct {
 
 	doneIssues    map[string]JiraIssue
 	missingIssues map[string]bool
+	unlistedOpen  map[string]bool
 	cachesReset   time.Time
 
 	jiraDetails  map[string]jiraDetail
@@ -39,6 +40,8 @@ type Board struct {
 	wake chan struct{}
 
 	highlights *highlights
+
+	login string
 
 	composeMu sync.Mutex
 	fetched   *fetched
@@ -60,6 +63,7 @@ func NewBoard(cfg *Config) *Board {
 	b := &Board{
 		doneIssues:    map[string]JiraIssue{},
 		missingIssues: map[string]bool{},
+		unlistedOpen:  map[string]bool{},
 		jiraDetails:   map[string]jiraDetail{},
 		cachesReset:   time.Now(),
 		wake:          make(chan struct{}, 1),
@@ -230,6 +234,7 @@ type fetched struct {
 	reviews  []PRLink
 	otherPRs []PRLink
 	views    map[string]PRLink
+	login    string
 	errs     []string
 	updated  time.Time
 }
@@ -249,10 +254,12 @@ func (b *Board) refresh(ctx context.Context) {
 	if time.Since(b.cachesReset) > issueCacheTTL {
 		clear(b.doneIssues)
 		clear(b.missingIssues)
+		clear(b.unlistedOpen)
 		b.cachesReset = time.Now()
 	}
 
 	gen := b.localGen.Load()
+	login, loginErr := b.githubLogin(ctx)
 	var (
 		wg        sync.WaitGroup
 		issues    []JiraIssue
@@ -286,7 +293,7 @@ func (b *Board) refresh(ctx context.Context) {
 	for i, repo := range cfg.Repos {
 		go func() {
 			defer wg.Done()
-			prs[i], prErrs[i] = repoPRs(ctx, cfg, repo)
+			prs[i], prErrs[i] = repoPRs(ctx, cfg, repo, login)
 		}()
 	}
 	wg.Wait()
@@ -298,12 +305,16 @@ func (b *Board) refresh(ctx context.Context) {
 		reviews:  reviews,
 		otherPRs: otherPRs,
 		views:    map[string]PRLink{},
+		login:    login,
 	}
 	if jiraErr != nil {
 		r.errs = append(r.errs, "Jira search: "+jiraErr.Error())
 	}
 	if prLinkErr != nil {
 		r.errs = append(r.errs, "GitHub search: "+prLinkErr.Error())
+	}
+	if loginErr != nil {
+		r.errs = append(r.errs, "GitHub login: "+loginErr.Error())
 	}
 	for _, is := range issues {
 		r.issues[is.Key] = is
@@ -317,14 +328,20 @@ func (b *Board) refresh(ctx context.Context) {
 		r.errs = append(r.errs, prErrs[i]...)
 	}
 
+	var recheck, view []string
 	for _, key := range b.unknownKeys(sources{issues: r.issues, prs: r.prs, worktrees: loc.worktrees, sessions: ticketSessions(loc.windows)}) {
-		if is, ok := b.doneIssues[key]; ok {
+		switch is, done := b.doneIssues[key]; {
+		case done:
 			r.issues[key] = is
-			continue
+		case b.missingIssues[key] || jiraErr != nil:
+		case b.unlistedOpen[key]:
+			recheck = append(recheck, key)
+		default:
+			view = append(view, key)
 		}
-		if b.missingIssues[key] || jiraErr != nil {
-			continue
-		}
+	}
+	view = append(view, b.searchUnlisted(ctx, r.issues, recheck)...)
+	for _, key := range view {
 		is, ok, err := jiraGet(ctx, key)
 		if err != nil {
 			r.errs = append(r.errs, fmt.Sprintf("Jira %s: %v", key, err))
@@ -332,12 +349,10 @@ func (b *Board) refresh(ctx context.Context) {
 		}
 		if !ok {
 			b.missingIssues[key] = true
+			delete(b.unlistedOpen, key)
 			continue
 		}
-		r.issues[key] = is
-		if is.Done {
-			b.doneIssues[key] = is
-		}
+		b.keepUnlisted(r.issues, key, is)
 	}
 	r.missing = maps.Clone(b.missingIssues)
 
@@ -405,7 +420,9 @@ func (b *Board) compose(ctx context.Context, r *fetched, loc *localState, gen ui
 
 	s := sources{issues: r.issues, resolved: r.resolved, missing: r.missing, prs: r.prs,
 		worktrees: loc.worktrees, plans: loc.plans, sessions: ticketSessions(loc.windows)}
+	tasks := buildTasks(r.cfg, s, time.Now())
 	reviews, leftovers := attachReviews(r.cfg, r.reviews, loc.worktrees, loc.windows)
+	reviews = withoutTaskPRs(reviews, tasks, r.login)
 	for i, l := range leftovers {
 		if v, ok := r.views[l.URL]; ok {
 			v.Role, v.ReviewName, v.Review = l.Role, l.ReviewName, l.Review
@@ -413,7 +430,6 @@ func (b *Board) compose(ctx context.Context, r *fetched, loc *localState, gen ui
 		}
 	}
 	errs := append(slices.Clone(r.errs), loc.errs...)
-	tasks := buildTasks(r.cfg, s, time.Now())
 	snap := Snapshot{Tasks: tasks, Epics: buildEpics(r.cfg, tasks, r.children), Reviews: append(reviews, leftovers...), OtherPRs: r.otherPRs, Errors: errs, Updated: r.updated}
 	snap.Version = snapshotVersion(snap)
 	b.mu.Lock()
@@ -422,20 +438,82 @@ func (b *Board) compose(ctx context.Context, r *fetched, loc *localState, gen ui
 	return errs
 }
 
-func repoPRs(ctx context.Context, cfg *Config, repo RepoConfig) ([]PR, []string) {
-	var errs []string
-	open, err := listPRs(ctx, cfg, repo.Name, "open", 100, "")
-	if err != nil {
-		errs = append(errs, fmt.Sprintf("%s open PRs: %v", repo.Name, err))
+// searchUnlisted returns the keys it didn't get back, such as moved or deleted issues, so they can be viewed one by one.
+func (b *Board) searchUnlisted(ctx context.Context, issues map[string]JiraIssue, keys []string) []string {
+	if len(keys) == 0 {
+		return nil
 	}
-	merged, err := listPRs(ctx, cfg, repo.Name, "merged", cfg.MergedPRLimit, "")
+	found, err := jiraSearch(ctx, "key in ("+strings.Join(keys, ",")+")")
 	if err != nil {
-		errs = append(errs, fmt.Sprintf("%s merged PRs: %v", repo.Name, err))
+		return keys
 	}
+	got := map[string]JiraIssue{}
+	for _, is := range found {
+		got[is.Key] = is
+	}
+	return slices.DeleteFunc(keys, func(key string) bool {
+		is, ok := got[key]
+		if ok {
+			b.keepUnlisted(issues, key, is)
+		}
+		return ok
+	})
+}
+
+func (b *Board) keepUnlisted(issues map[string]JiraIssue, key string, is JiraIssue) {
+	issues[key] = is
+	if is.Done {
+		b.doneIssues[key] = is
+		delete(b.unlistedOpen, key)
+	} else {
+		b.unlistedOpen[key] = true
+	}
+}
+
+// githubLogin is cached for the life of the process; only refresh calls it, and refreshes don't overlap.
+func (b *Board) githubLogin(ctx context.Context) (string, error) {
+	if b.login == "" {
+		out, err := runCmd(ctx, "", "gh", "api", "user", "--jq", ".login")
+		if err != nil {
+			return "", err
+		}
+		b.login = strings.TrimSpace(string(out))
+	}
+	return b.login, nil
+}
+
+func repoPRs(ctx context.Context, cfg *Config, repo RepoConfig, login string) ([]PR, []string) {
 	cutoff := time.Now().AddDate(0, 0, -cfg.DoneDays).Format("2006-01-02")
-	recent, err := listPRs(ctx, cfg, repo.Name, "merged", 100, "merged:>="+cutoff)
+	var (
+		wg           sync.WaitGroup
+		assigned     []PR
+		assignedErrs []string
+	)
+	wg.Go(func() {
+		assigned, assignedErrs = listMyPRs(ctx, cfg, repo.Name, "assigned ", cfg.assignedSearch(), cutoff, 0)
+	})
+	authored, authoredErrs := listMyPRs(ctx, cfg, repo.Name, "", "author:@me", cutoff, cfg.MergedPRLimit)
+	wg.Wait()
+	markAssigned(assigned, login)
+	return append(authored, assigned...), append(authoredErrs, assignedErrs...)
+}
+
+func listMyPRs(ctx context.Context, cfg *Config, repo, label, search, cutoff string, mergedLimit int) ([]PR, []string) {
+	var errs []string
+	open, err := listPRs(ctx, cfg, repo, "open", 100, search)
 	if err != nil {
-		errs = append(errs, fmt.Sprintf("%s recently merged PRs: %v", repo.Name, err))
+		errs = append(errs, fmt.Sprintf("%s open %sPRs: %v", repo, label, err))
+	}
+	var merged []PR
+	if mergedLimit > 0 {
+		merged, err = listPRs(ctx, cfg, repo, "merged", mergedLimit, search)
+		if err != nil {
+			errs = append(errs, fmt.Sprintf("%s merged %sPRs: %v", repo, label, err))
+		}
+	}
+	recent, err := listPRs(ctx, cfg, repo, "merged", 100, search+" merged:>="+cutoff)
+	if err != nil {
+		errs = append(errs, fmt.Sprintf("%s recently merged %sPRs: %v", repo, label, err))
 	}
 	seen := map[int]bool{}
 	for _, pr := range merged {
