@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path"
 	"slices"
@@ -282,31 +283,6 @@ func (p PRLink) Tone() string {
 	return "active"
 }
 
-type ghViewPR struct {
-	Title  string `json:"title"`
-	URL    string `json:"url"`
-	State  string `json:"state"`
-	Body   string `json:"body"`
-	Author struct {
-		Login string `json:"login"`
-	} `json:"author"`
-	UpdatedAt time.Time `json:"updatedAt"`
-}
-
-func viewPR(ctx context.Context, cfg *Config, link *PRLink) error {
-	out, err := runCmd(ctx, "", "gh", "pr", "view", strconv.Itoa(link.Number), "--repo", link.Repo, "--json", "title,url,state,body,author,updatedAt")
-	if err != nil {
-		return err
-	}
-	var v ghViewPR
-	if err := json.Unmarshal(out, &v); err != nil {
-		return err
-	}
-	link.Title, link.URL, link.State, link.Author, link.UpdatedAt = v.Title, v.URL, v.State, v.Author.Login, v.UpdatedAt
-	link.setKey(cfg, v.Body)
-	return nil
-}
-
 func mergePRLinks(cfg *Config, found [3][]ghPRNode) []PRLink {
 	seen := map[string]bool{}
 	var links []PRLink
@@ -432,7 +408,7 @@ func searchQuery(searches []prSearch, pages []pageRequest) (string, map[string]s
 			p.search, q, p.first, after, prFragments[s.kind].name))
 		used[s.kind] = true
 	}
-	query := "query(" + strings.Join(params, ", ") + ") { viewer { login }\n" + strings.Join(fields, "\n") + " }"
+	query := "query(" + strings.Join(params, ", ") + ") { viewer { login } rateLimit { limit remaining resetAt }\n" + strings.Join(fields, "\n") + " }"
 	for kind, ok := range used {
 		if ok {
 			f := prFragments[kind]
@@ -449,54 +425,99 @@ func ghGraphQL(ctx context.Context, query string, vars map[string]string) ([]byt
 	for k, v := range vars {
 		args = append(args, "-f", k+"="+v)
 	}
-	return runCmd(ctx, "", "gh", args...)
+	return runCmdOutput(ctx, "", "gh", args...)
+}
+
+type graphQLResponse struct {
+	Data   map[string]json.RawMessage `json:"data"`
+	Errors []struct {
+		Message string `json:"message"`
+	} `json:"errors"`
+}
+
+// field reports whether name came back, since a part of the query that failed comes back as null.
+func (r graphQLResponse) field(name string) (json.RawMessage, bool) {
+	raw, ok := r.Data[name]
+	return raw, ok && string(raw) != "null"
+}
+
+func (r graphQLResponse) errs() error {
+	var msgs []string
+	for _, e := range r.Errors {
+		if !slices.Contains(msgs, e.Message) {
+			msgs = append(msgs, e.Message)
+		}
+	}
+	if len(msgs) == 0 {
+		return nil
+	}
+	return errors.New(strings.Join(msgs, "; "))
 }
 
 var graphQLRetryDelay = 2 * time.Second
 
-// postGraphQL retries once, since GitHub sometimes answers a large search with an HTML error page.
-func postGraphQL(ctx context.Context, post graphQLFunc, query string, vars map[string]string) (map[string]json.RawMessage, error) {
+// postGraphQL keeps the data gh prints even when it exits non-zero because part of the query failed, and
+// retries once when nothing usable came back, since GitHub sometimes answers a large search with an HTML page.
+func postGraphQL(ctx context.Context, post graphQLFunc, query string, vars map[string]string) (graphQLResponse, error) {
 	for attempt := 0; ; attempt++ {
 		out, err := post(ctx, query, vars)
-		if err == nil {
-			var resp struct {
-				Data map[string]json.RawMessage `json:"data"`
-			}
-			if err = json.Unmarshal(out, &resp); err == nil {
-				return resp.Data, nil
-			}
+		var resp graphQLResponse
+		jsonErr := json.Unmarshal(out, &resp)
+		if jsonErr == nil && resp.Data != nil {
+			return resp, resp.errs()
 		}
-		if attempt > 0 {
-			return nil, err
+		if err == nil {
+			err = cmp.Or(resp.errs(), jsonErr)
+		}
+		if attempt > 0 || isRateLimited(err) {
+			return resp, err
 		}
 		select {
 		case <-ctx.Done():
-			return nil, err
+			return resp, err
 		case <-time.After(graphQLRetryDelay):
 		}
 	}
 }
 
-func runSearches(ctx context.Context, post graphQLFunc, searches []prSearch) (string, [][]ghPRNode, error) {
-	found := make([][]ghPRNode, len(searches))
+type ghRate struct {
+	Limit     int       `json:"limit"`
+	Remaining int       `json:"remaining"`
+	ResetAt   time.Time `json:"resetAt"`
+}
+
+type searchResult struct {
+	login  string
+	rate   ghRate
+	found  [][]ghPRNode
+	failed []bool
+}
+
+// A search that failed or didn't finish paging is marked failed, so its last good results can stand in.
+func runSearches(ctx context.Context, post graphQLFunc, searches []prSearch) (searchResult, error) {
+	res := searchResult{found: make([][]ghPRNode, len(searches)), failed: make([]bool, len(searches))}
 	var pending []pageRequest
 	for i, s := range searches {
 		pending = append(pending, pageRequest{search: i, first: min(100, s.limit)})
 	}
-	var login string
+	var errs []error
 	for len(pending) > 0 {
 		query, vars := searchQuery(searches, pending)
-		data, err := postGraphQL(ctx, post, query, vars)
+		resp, err := postGraphQL(ctx, post, query, vars)
 		if err != nil {
-			return "", nil, err
+			errs = append(errs, err)
 		}
-		var viewer struct {
-			Login string `json:"login"`
+		if raw, ok := resp.field("viewer"); ok {
+			var viewer struct {
+				Login string `json:"login"`
+			}
+			if json.Unmarshal(raw, &viewer) == nil {
+				res.login = viewer.Login
+			}
 		}
-		if err := json.Unmarshal(data["viewer"], &viewer); err != nil {
-			return "", nil, fmt.Errorf("viewer: %w", err)
+		if raw, ok := resp.field("rateLimit"); ok {
+			json.Unmarshal(raw, &res.rate)
 		}
-		login = viewer.Login
 		var next []pageRequest
 		for _, p := range pending {
 			i := p.search
@@ -507,11 +528,18 @@ func runSearches(ctx context.Context, post graphQLFunc, searches []prSearch) (st
 				} `json:"pageInfo"`
 				Nodes []ghPRNode `json:"nodes"`
 			}
-			if err := json.Unmarshal(data[fmt.Sprintf("s%d", i)], &page); err != nil {
-				return "", nil, fmt.Errorf("search %q: %w", searches[i].query, err)
+			raw, ok := resp.field(fmt.Sprintf("s%d", i))
+			if !ok {
+				res.failed[i] = true
+				continue
 			}
-			found[i] = append(found[i], page.Nodes...)
-			left := searches[i].limit - len(found[i])
+			if err := json.Unmarshal(raw, &page); err != nil {
+				res.failed[i] = true
+				errs = append(errs, fmt.Errorf("search %q: %w", searches[i].query, err))
+				continue
+			}
+			res.found[i] = append(res.found[i], page.Nodes...)
+			left := searches[i].limit - len(res.found[i])
 			// A page that adds nothing or doesn't move the cursor would otherwise repeat forever.
 			moved := len(page.Nodes) > 0 && page.PageInfo.EndCursor != "" && page.PageInfo.EndCursor != p.after
 			if page.PageInfo.HasNextPage && moved && left > 0 {
@@ -520,27 +548,147 @@ func runSearches(ctx context.Context, post graphQLFunc, searches []prSearch) (st
 		}
 		pending = next
 	}
-	return login, found, nil
+	return res, errors.Join(errs...)
+}
+
+type ghData struct {
+	login string
+	found [][]ghPRNode
+	at    []time.Time
+}
+
+func (res searchResult) withFallback(prev ghData, now time.Time) ghData {
+	d := ghData{login: cmp.Or(res.login, prev.login), found: res.found, at: make([]time.Time, len(res.found))}
+	for i := range d.found {
+		if !res.failed[i] {
+			d.at[i] = now
+			continue
+		}
+		d.found[i] = nil
+		if i < len(prev.found) && !prev.at[i].IsZero() {
+			d.found[i], d.at[i] = prev.found[i], prev.at[i]
+		}
+	}
+	return d
+}
+
+// staleSince returns when the oldest results still shown were fetched, if that was before t.
+func (d ghData) staleSince(t time.Time) time.Time {
+	var oldest time.Time
+	for _, at := range d.at {
+		if !at.IsZero() && at.Before(t) && (oldest.IsZero() || at.Before(oldest)) {
+			oldest = at
+		}
+	}
+	return oldest
+}
+
+func isRateLimited(err error) bool {
+	return err != nil && strings.Contains(strings.ToLower(err.Error()), "rate limit")
+}
+
+const (
+	minBackoff = time.Minute
+	maxBackoff = 30 * time.Minute
+)
+
+// ghPause decides when GitHub may next be asked. It leaves a tenth of the hourly budget for everything
+// else using the same gh login, such as agents in taskboard's sessions.
+type ghPause struct {
+	until   time.Time
+	backoff time.Duration
+	reason  string
+}
+
+// reset is needed only when err says the hourly budget ran out.
+func (p ghPause) next(err error, rate ghRate, reset, now time.Time) ghPause {
+	switch {
+	case err != nil && strings.Contains(strings.ToLower(err.Error()), "secondary rate limit"):
+		backoff := min(max(2*p.backoff, minBackoff), maxBackoff)
+		return ghPause{until: now.Add(backoff), backoff: backoff, reason: "GitHub asked taskboard to slow down"}
+	case isRateLimited(err):
+		if !reset.After(now) {
+			reset = now.Add(15 * time.Minute)
+		}
+		return ghPause{until: reset, reason: "this hour's GitHub API points are used up"}
+	case rate.Limit > 0 && rate.Remaining < rate.Limit/10:
+		return ghPause{until: rate.ResetAt, reason: fmt.Sprintf("%s of %s points left this hour", thousands(rate.Remaining), thousands(rate.Limit))}
+	}
+	return ghPause{}
+}
+
+func ghRateReset(ctx context.Context) time.Time {
+	out, err := runCmd(ctx, "", "gh", "api", "rate_limit", "--jq", ".resources.graphql.reset")
+	if err != nil {
+		return time.Time{}
+	}
+	secs, err := strconv.ParseInt(strings.TrimSpace(string(out)), 10, 64)
+	if err != nil {
+		return time.Time{}
+	}
+	return time.Unix(secs, 0)
+}
+
+func asOf(at, now time.Time) string {
+	if now.Sub(at) > 20*time.Hour {
+		return at.Format("Jan 2 15:04")
+	}
+	return at.Format("15:04")
+}
+
+func thousands(n int) string {
+	s := strconv.Itoa(n)
+	for i := len(s) - 3; i > 0; i -= 3 {
+		s = s[:i] + "," + s[i:]
+	}
+	return s
+}
+
+func (p ghPause) notice(data ghData, now time.Time) string {
+	msg := fmt.Sprintf("GitHub paused until %s (%s)", p.until.Format("15:04"), p.reason)
+	if at := data.staleSince(now); !at.IsZero() {
+		msg += "; PRs as of " + asOf(at, now)
+	}
+	return msg
+}
+
+// Only refresh calls fetchGitHub, and refreshes don't overlap.
+func (b *Board) fetchGitHub(ctx context.Context, cfg *Config, prev ghData) (data ghData, errs []string, notice string) {
+	now := time.Now()
+	if now.Before(b.ghPause.until) {
+		return prev, nil, b.ghPause.notice(prev, now)
+	}
+	res, err := runSearches(ctx, ghGraphQL, prSearches(cfg, now))
+	data = res.withFallback(prev, now)
+	if err != nil {
+		errs = append(errs, "GitHub: "+err.Error())
+	}
+	if res.rate.Limit > 0 {
+		b.ghRate = res.rate
+	}
+	var reset time.Time
+	if isRateLimited(err) {
+		// gh api rate_limit can report a later reset than the GraphQL budget itself, so it is only a fallback.
+		if reset = b.ghRate.ResetAt; !reset.After(now) {
+			reset = ghRateReset(ctx)
+		}
+	}
+	b.ghPause = b.ghPause.next(err, res.rate, reset, now)
+	if !b.ghPause.until.IsZero() {
+		notice = b.ghPause.notice(data, now)
+	}
+	return data, errs, notice
 }
 
 type ghResult struct {
-	login           string
 	prs             []PR
 	reviews, others []PRLink
-}
-
-func fetchGitHub(ctx context.Context, cfg *Config) (ghResult, error) {
-	login, found, err := runSearches(ctx, ghGraphQL, prSearches(cfg, time.Now()))
-	if err != nil {
-		return ghResult{}, err
-	}
-	return githubResult(cfg, login, found), nil
 }
 
 // githubResult keeps task PRs to the configured repos, named as the config names them, since sessions and
 // worktrees are matched on that name.
 func githubResult(cfg *Config, login string, found [][]ghPRNode) ghResult {
-	res := ghResult{login: login}
+	var res ghResult
 	seen := map[prRef]bool{}
 	for _, i := range []int{searchMineOpen, searchMineMerged, searchAssignedOpen, searchAssignedMerged} {
 		assigned := i == searchAssignedOpen || i == searchAssignedMerged
@@ -564,4 +712,37 @@ func githubResult(cfg *Config, login string, found [][]ghPRNode) ghResult {
 		RoleReviewed:  found[searchReviewed],
 	}))
 	return res
+}
+
+func viewPRs(ctx context.Context, post graphQLFunc, cfg *Config, links []PRLink) (map[string]PRLink, error) {
+	var params, fields []string
+	vars := map[string]string{}
+	for i, l := range links {
+		owner, name, _ := strings.Cut(l.Repo, "/")
+		o, n := fmt.Sprintf("o%d", i), fmt.Sprintf("n%d", i)
+		vars[o], vars[n] = owner, name
+		params = append(params, "$"+o+": String!", "$"+n+": String!")
+		fields = append(fields, fmt.Sprintf("v%d: repository(owner: $%s, name: $%s) { pullRequest(number: %d) { ...%s } }", i, o, n, l.Number, prFragments[prLink].name))
+	}
+	f := prFragments[prLink]
+	query := "query(" + strings.Join(params, ", ") + ") {\n" + strings.Join(fields, "\n") + " }\nfragment " + f.name + " on PullRequest { " + f.fields + " }"
+	resp, err := postGraphQL(ctx, post, query, vars)
+	views := map[string]PRLink{}
+	for i, l := range links {
+		raw, ok := resp.field(fmt.Sprintf("v%d", i))
+		if !ok {
+			continue
+		}
+		var repo struct {
+			PullRequest *ghPRNode `json:"pullRequest"`
+		}
+		if json.Unmarshal(raw, &repo) != nil || repo.PullRequest == nil {
+			continue
+		}
+		v := repo.PullRequest
+		l.Title, l.URL, l.State, l.Author, l.UpdatedAt = v.Title, v.URL, v.State, v.Author.Login, v.UpdatedAt
+		l.setKey(cfg, v.Body)
+		views[links[i].URL] = l
+	}
+	return views, err
 }

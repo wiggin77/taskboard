@@ -53,6 +53,16 @@ type Session struct {
 const commandWaitDelay = 5 * time.Second
 
 func runCmd(ctx context.Context, dir, name string, args ...string) ([]byte, error) {
+	out, err := runCmdOutput(ctx, dir, name, args...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// runCmdOutput also returns what a failing command printed, for commands such as gh api graphql that
+// print partial results and still exit non-zero.
+func runCmdOutput(ctx context.Context, dir, name string, args ...string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Dir = dir
 	cmd.WaitDelay = commandWaitDelay
@@ -66,9 +76,9 @@ func runCmd(ctx context.Context, dir, name string, args ...string) ([]byte, erro
 	}
 	if err != nil {
 		if msg := strings.TrimSpace(stderr.String()); msg != "" {
-			return nil, fmt.Errorf("%s: %w: %s", name, err, msg)
+			return out, fmt.Errorf("%s: %w: %s", name, err, msg)
 		}
-		return nil, fmt.Errorf("%s: %w", name, err)
+		return out, fmt.Errorf("%s: %w", name, err)
 	}
 	return out, nil
 }

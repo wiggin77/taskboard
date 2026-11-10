@@ -39,6 +39,10 @@ h1{font-size:1.25rem;font-weight:700;letter-spacing:-.02em;margin:0}
   padding:.75rem 1rem;margin:0 0 1.75rem;font-size:.8125rem}
 .errors p{margin:0 0 .25rem;font-weight:600}
 .errors ul{margin:0;padding-left:1.1rem;color:var(--muted)}
+.notices{border:1px solid var(--line);border-radius:10px;background:var(--surface);padding:.75rem 1rem;margin:0 0 1.75rem;font-size:.8125rem;color:var(--muted)}
+.notices p{margin:0}
+.notices p+p{margin-top:.25rem}
+.asof{color:var(--needs);font-size:.8125rem;font-variant-numeric:tabular-nums;margin-right:.25rem}
 section{margin-bottom:2.25rem;scroll-margin-top:7.5rem}
 h2,summary{display:flex;align-items:center;gap:.55rem;font-size:.9375rem;font-weight:650;letter-spacing:-.005em;margin:0 0 .65rem}
 .count{display:inline-block;min-width:1.5rem;padding:0 .45rem;border-radius:999px;background:var(--chip);color:var(--muted);
@@ -145,7 +149,8 @@ a:hover{text-decoration:underline}
   <div class="bar">
     <h1>taskboard</h1>
     <div class="status">
-      <span class="updated{{if .Refreshing}} refreshing{{end}}">{{if .Updated.IsZero}}Loading. This page refreshes on its own.{{else}}Updated <time datetime="{{iso .Updated}}">{{.Updated.Format "15:04"}}</time>{{if .Refreshing}}, refreshing{{end}}{{end}}</span>
+      <span class="updated{{if .Refreshing}} refreshing{{end}}">{{if .Updated.IsZero}}Loading. This page refreshes on its own.{{else}}Updated <time datetime="{{iso .Updated}}">{{.Updated.Format "15:04"}}</time>{{if .Refreshing}}, refreshing{{end}}{{end}}</span>{{with .AsOf}}
+      <span class="asof" title="These sources failed or are paused, so the board shows their last good data">· {{range $i, $a := .}}{{if $i}}, {{end}}{{$a}}{{end}}</span>{{end}}
       <button class="icon refresh" type="button"{{if .Refreshing}} disabled title="Refreshing" aria-label="Refreshing"{{else}} title="Refresh now" aria-label="Refresh now"{{end}}>
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></svg>
       </button>
@@ -161,9 +166,13 @@ a:hover{text-decoration:underline}
   {{with .Nav}}<nav class="jump" aria-label="Sections"><a href="#" class="to-highlight" title="Jump to the next highlighted item" hidden>Highlighted <span class="count"></span></a>{{range .}}<a href="#{{slug .Name}}"{{with .Tone}} class="tone-{{.}}"{{end}}>{{.Name}} <span class="count">{{.Count}}</span></a>{{end}}</nav>{{end}}
 </header>
 
+{{with .Notices}}
+<div class="notices" role="status">{{range .}}<p>{{.}}</p>{{end}}</div>
+{{end}}
+
 {{with .Errors}}
 <div class="errors" role="status">
-  <p>Some sources failed, so the board may be incomplete.</p>
+  <p>Some sources failed. The board shows their last good data where it has it.</p>
   <ul>{{range .}}<li>{{.}}</li>{{end}}</ul>
 </div>
 {{end}}

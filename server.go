@@ -123,6 +123,8 @@ type indexData struct {
 	Sections       []section
 	Nav            []navItem
 	Errors         []string
+	Notices        []string
+	AsOf           []string
 	Updated        time.Time
 	Refreshing     bool
 	Version        string
@@ -316,6 +318,8 @@ func (s *server) index(w http.ResponseWriter, r *http.Request) {
 	}
 	data := indexData{
 		Errors:         snap.Errors,
+		Notices:        snap.Notices,
+		AsOf:           snap.AsOf,
 		Updated:        snap.Updated,
 		RefreshSeconds: cfg.refreshSeconds(),
 		Refreshing:     s.board.Refreshing(),
@@ -395,7 +399,7 @@ func (s *server) highlight(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, id+" is not on the board", http.StatusNotFound)
 		return
 	}
-	if snap.Updated.IsZero() || len(snap.Errors) > 0 {
+	if snap.Updated.IsZero() || len(snap.Errors) > 0 || len(snap.AsOf) > 0 {
 		present = nil
 	}
 	list, err := s.board.highlights.set(id, on, present)
