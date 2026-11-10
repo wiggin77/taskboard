@@ -31,6 +31,7 @@ type Board struct {
 
 	doneIssues    map[string]JiraIssue
 	missingIssues map[string]bool
+	unlistedOpen  map[string]bool
 	cachesReset   time.Time
 
 	jiraDetails  map[string]jiraDetail
@@ -62,6 +63,7 @@ func NewBoard(cfg *Config) *Board {
 	b := &Board{
 		doneIssues:    map[string]JiraIssue{},
 		missingIssues: map[string]bool{},
+		unlistedOpen:  map[string]bool{},
 		jiraDetails:   map[string]jiraDetail{},
 		cachesReset:   time.Now(),
 		wake:          make(chan struct{}, 1),
@@ -252,6 +254,7 @@ func (b *Board) refresh(ctx context.Context) {
 	if time.Since(b.cachesReset) > issueCacheTTL {
 		clear(b.doneIssues)
 		clear(b.missingIssues)
+		clear(b.unlistedOpen)
 		b.cachesReset = time.Now()
 	}
 
@@ -325,14 +328,20 @@ func (b *Board) refresh(ctx context.Context) {
 		r.errs = append(r.errs, prErrs[i]...)
 	}
 
+	var recheck, view []string
 	for _, key := range b.unknownKeys(sources{issues: r.issues, prs: r.prs, worktrees: loc.worktrees, sessions: ticketSessions(loc.windows)}) {
-		if is, ok := b.doneIssues[key]; ok {
+		switch is, done := b.doneIssues[key]; {
+		case done:
 			r.issues[key] = is
-			continue
+		case b.missingIssues[key] || jiraErr != nil:
+		case b.unlistedOpen[key]:
+			recheck = append(recheck, key)
+		default:
+			view = append(view, key)
 		}
-		if b.missingIssues[key] || jiraErr != nil {
-			continue
-		}
+	}
+	view = append(view, b.searchUnlisted(ctx, r.issues, recheck)...)
+	for _, key := range view {
 		is, ok, err := jiraGet(ctx, key)
 		if err != nil {
 			r.errs = append(r.errs, fmt.Sprintf("Jira %s: %v", key, err))
@@ -340,12 +349,10 @@ func (b *Board) refresh(ctx context.Context) {
 		}
 		if !ok {
 			b.missingIssues[key] = true
+			delete(b.unlistedOpen, key)
 			continue
 		}
-		r.issues[key] = is
-		if is.Done {
-			b.doneIssues[key] = is
-		}
+		b.keepUnlisted(r.issues, key, is)
 	}
 	r.missing = maps.Clone(b.missingIssues)
 
@@ -429,6 +436,38 @@ func (b *Board) compose(ctx context.Context, r *fetched, loc *localState, gen ui
 	b.snap = snap
 	b.mu.Unlock()
 	return errs
+}
+
+// searchUnlisted returns the keys it didn't get back, such as moved or deleted issues, so they can be viewed one by one.
+func (b *Board) searchUnlisted(ctx context.Context, issues map[string]JiraIssue, keys []string) []string {
+	if len(keys) == 0 {
+		return nil
+	}
+	found, err := jiraSearch(ctx, "key in ("+strings.Join(keys, ",")+")")
+	if err != nil {
+		return keys
+	}
+	got := map[string]JiraIssue{}
+	for _, is := range found {
+		got[is.Key] = is
+	}
+	return slices.DeleteFunc(keys, func(key string) bool {
+		is, ok := got[key]
+		if ok {
+			b.keepUnlisted(issues, key, is)
+		}
+		return ok
+	})
+}
+
+func (b *Board) keepUnlisted(issues map[string]JiraIssue, key string, is JiraIssue) {
+	issues[key] = is
+	if is.Done {
+		b.doneIssues[key] = is
+		delete(b.unlistedOpen, key)
+	} else {
+		b.unlistedOpen[key] = true
+	}
 }
 
 // githubLogin is cached for the life of the process; only refresh calls it, and refreshes don't overlap.
