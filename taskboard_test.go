@@ -114,6 +114,8 @@ func TestStageFor(t *testing.T) {
 		{"merged, no ticket", Task{PR: &PR{State: "MERGED"}, NoTicket: true}, StageDone},
 		{"merged, leftover worktree", Task{PR: &PR{State: "MERGED"}, JiraDone: true, Worktree: &Worktree{}}, StageCleanup},
 		{"done ticket, open session", Task{JiraDone: true, Session: &Session{}}, StageCleanup},
+		{"done ticket, main checkout on its branch", Task{JiraDone: true, Worktree: &Worktree{Main: true}}, StageDone},
+		{"done ticket, main checkout and open session", Task{JiraDone: true, Worktree: &Worktree{Main: true}, Session: &Session{}}, StageCleanup},
 		{"merged, jira open, leftover worktree", Task{PR: &PR{State: "MERGED"}, Worktree: &Worktree{}}, StageMergedJiraPending},
 		{"open PR, jira not found", Task{PR: &PR{State: "OPEN"}, JiraMissing: true}, StageInReview},
 		{"open PR beats done ticket", Task{PR: &PR{State: "OPEN"}, JiraDone: true}, StageInReview},
@@ -1661,8 +1663,11 @@ func TestRemovalCheck(t *testing.T) {
 func TestCleanupNeverRemovesMainCheckout(t *testing.T) {
 	cfg := sessionConfig(t)
 	task := Task{Key: "MM-1", Worktree: &Worktree{Repo: "mattermost/mattermost", Path: "/src/mattermost", Branch: "MM-1-x", Main: true}}
-	if _, err := cleanup(t.Context(), cfg, task, true); err == nil || !strings.Contains(err.Error(), "main checkout") {
-		t.Errorf("cleanup of the main checkout: %v", err)
+	if _, _, err := removeWorktree(t.Context(), cfg, task.Worktree, nil, nil, true); err == nil || !strings.Contains(err.Error(), "main checkout") {
+		t.Errorf("removing the main checkout: %v", err)
+	}
+	if rm, err := cleanup(t.Context(), cfg, task, true); err != nil || rm.Kept != "" {
+		t.Errorf("cleanup with the main checkout = %+v, %v, want it left alone", rm, err)
 	}
 }
 

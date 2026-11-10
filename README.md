@@ -33,7 +33,7 @@ The macOS builds aren't signed. If macOS refuses to run one, clear the quarantin
 
 ## Using the board
 
-Tasks move through Ticket, Plan, Code, Review, Ready, Merged and Done. The sections at the top are the ones waiting on you: CI failing, changes requested, review requested, ready to merge, plan needs review, and merged but Jira not yet updated. Done tasks that still have a worktree or tmux window go to Needs clean-up. Done shows tasks whose PR merged, or whose ticket was resolved, in the last `done_days` days (default 30).
+Tasks move through Ticket, Plan, Code, Review, Ready, Merged and Done. The sections at the top are the ones waiting on you: CI failing, changes requested, review requested, ready to merge, plan needs review, and merged but Jira not yet updated. Done tasks that still have a worktree or tmux window go to Needs clean-up (a repo's main checkout on the ticket's branch doesn't count). Done shows tasks whose PR merged, or whose ticket was resolved, in the last `done_days` days (default 30).
 
 - **Refreshing.** While a board tab is open, taskboard refreshes every `poll_interval` (default 5m) and the page reloads only when something changed. With no tab open it stops asking Jira and GitHub. The Refresh button refreshes now. Set `manual_refresh` to refresh only when you ask.
 - **Highlights.** Hover over a row and click the bookmark at its left edge to highlight it; the Highlighted chip jumps between them. Highlights are saved next to the config file, so every device sees them.
@@ -106,7 +106,7 @@ Some builds expect sibling checkouts at a relative path, such as mattermost/matt
 
 Once a session is running, its row gets **Open in the browser** and **Open in a terminal** buttons, plus **Stop**, which closes the tmux window and keeps the worktree. Each terminal attaches through its own linked tmux session, so several can be open on different tasks without switching each other's window. In the browser terminal, closing the tab or detaching (Ctrl-b d) leaves the session running.
 
-**Clean up** (trash icon, on Needs clean-up rows) closes the session, removes the worktree and deletes its branch. If there are uncommitted changes or unpushed commits it lists them and asks first, and it always keeps a branch with unpushed commits. A repo's main checkout is never removed.
+**Clean up** (trash icon, on Needs clean-up rows) closes the session, removes the worktree and deletes its branch. If there are uncommitted changes or unpushed commits it lists them and asks first, and it always keeps a branch with unpushed commits. A repo's main checkout is never removed or switched to another branch; clean-up only closes its session.
 
 To start a session by hand, name the tmux window after the ticket and run your agent in the task's worktree:
 
