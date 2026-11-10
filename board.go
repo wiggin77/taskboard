@@ -391,6 +391,11 @@ func (b *Board) refresh(ctx context.Context) {
 			var err error
 			if r.views, err = viewPRs(ctx, ghGraphQL, cfg, leftovers); err != nil {
 				r.errs = append(r.errs, "GitHub review checkouts: "+err.Error())
+				if isRateLimited(err) {
+					now := time.Now()
+					b.pauseAfter(ctx, err, ghRate{}, now)
+					r.notices = []string{b.ghPause.notice(r.github, now)}
+				}
 			}
 		}
 		for _, l := range leftovers {

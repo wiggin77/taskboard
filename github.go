@@ -340,7 +340,13 @@ const (
 )
 
 // One fragment per kind keeps CI and review requests off searches that never show them.
-var prFragments = [...]struct{ name, fields string }{
+type prFragment struct{ name, fields string }
+
+func (f prFragment) text() string {
+	return "fragment " + f.name + " on PullRequest { " + f.fields + " }"
+}
+
+var prFragments = [...]prFragment{
 	prOpen: {"openPR", `number title url body headRefName headRefOid state isDraft reviewDecision updatedAt mergedAt
   repository { nameWithOwner } author { login }
   reviewRequests(first: 50) { nodes { requestedReviewer { __typename ... on User { login } } } }
@@ -411,8 +417,7 @@ func searchQuery(searches []prSearch, pages []pageRequest) (string, map[string]s
 	query := "query(" + strings.Join(params, ", ") + ") { viewer { login } rateLimit { limit remaining resetAt }\n" + strings.Join(fields, "\n") + " }"
 	for kind, ok := range used {
 		if ok {
-			f := prFragments[kind]
-			query += "\nfragment " + f.name + " on PullRequest { " + f.fields + " }"
+			query += "\n" + prFragments[kind].text()
 		}
 	}
 	return query, vars
@@ -464,10 +469,10 @@ func postGraphQL(ctx context.Context, post graphQLFunc, query string, vars map[s
 		var resp graphQLResponse
 		jsonErr := json.Unmarshal(out, &resp)
 		if jsonErr == nil && resp.Data != nil {
-			return resp, resp.errs()
+			return resp, cmp.Or(resp.errs(), err)
 		}
 		if err == nil {
-			err = cmp.Or(resp.errs(), jsonErr)
+			err = cmp.Or(resp.errs(), jsonErr, errors.New("GitHub returned no data"))
 		}
 		if attempt > 0 || isRateLimited(err) {
 			return resp, err
@@ -526,7 +531,7 @@ func runSearches(ctx context.Context, post graphQLFunc, searches []prSearch) (se
 					HasNextPage bool   `json:"hasNextPage"`
 					EndCursor   string `json:"endCursor"`
 				} `json:"pageInfo"`
-				Nodes []ghPRNode `json:"nodes"`
+				Nodes []*ghPRNode `json:"nodes"`
 			}
 			raw, ok := resp.field(fmt.Sprintf("s%d", i))
 			if !ok {
@@ -538,7 +543,12 @@ func runSearches(ctx context.Context, post graphQLFunc, searches []prSearch) (se
 				errs = append(errs, fmt.Errorf("search %q: %w", searches[i].query, err))
 				continue
 			}
-			res.found[i] = append(res.found[i], page.Nodes...)
+			// A PR the token may not see, such as one in an org enforcing SAML, comes back as null.
+			for _, n := range page.Nodes {
+				if n != nil {
+					res.found[i] = append(res.found[i], *n)
+				}
+			}
 			left := searches[i].limit - len(res.found[i])
 			// A page that adds nothing or doesn't move the cursor would otherwise repeat forever.
 			moved := len(page.Nodes) > 0 && page.PageInfo.EndCursor != "" && page.PageInfo.EndCursor != p.after
@@ -587,6 +597,10 @@ func isRateLimited(err error) bool {
 	return err != nil && strings.Contains(strings.ToLower(err.Error()), "rate limit")
 }
 
+func isSecondaryLimit(err error) bool {
+	return err != nil && strings.Contains(strings.ToLower(err.Error()), "secondary rate limit")
+}
+
 const (
 	minBackoff = time.Minute
 	maxBackoff = 30 * time.Minute
@@ -603,7 +617,7 @@ type ghPause struct {
 // reset is needed only when err says the hourly budget ran out.
 func (p ghPause) next(err error, rate ghRate, reset, now time.Time) ghPause {
 	switch {
-	case err != nil && strings.Contains(strings.ToLower(err.Error()), "secondary rate limit"):
+	case isSecondaryLimit(err):
 		backoff := min(max(2*p.backoff, minBackoff), maxBackoff)
 		return ghPause{until: now.Add(backoff), backoff: backoff, reason: "GitHub asked taskboard to slow down"}
 	case isRateLimited(err):
@@ -611,7 +625,7 @@ func (p ghPause) next(err error, rate ghRate, reset, now time.Time) ghPause {
 			reset = now.Add(15 * time.Minute)
 		}
 		return ghPause{until: reset, reason: "this hour's GitHub API points are used up"}
-	case rate.Limit > 0 && rate.Remaining < rate.Limit/10:
+	case rate.Limit > 0 && rate.Remaining < rate.Limit/10 && rate.ResetAt.After(now):
 		return ghPause{until: rate.ResetAt, reason: fmt.Sprintf("%s of %s points left this hour", thousands(rate.Remaining), thousands(rate.Limit))}
 	}
 	return ghPause{}
@@ -666,18 +680,22 @@ func (b *Board) fetchGitHub(ctx context.Context, cfg *Config, prev ghData) (data
 	if res.rate.Limit > 0 {
 		b.ghRate = res.rate
 	}
+	b.pauseAfter(ctx, err, res.rate, now)
+	if !b.ghPause.until.IsZero() {
+		notice = b.ghPause.notice(data, now)
+	}
+	return data, errs, notice
+}
+
+func (b *Board) pauseAfter(ctx context.Context, err error, rate ghRate, now time.Time) {
 	var reset time.Time
-	if isRateLimited(err) {
+	if isRateLimited(err) && !isSecondaryLimit(err) {
 		// gh api rate_limit can report a later reset than the GraphQL budget itself, so it is only a fallback.
 		if reset = b.ghRate.ResetAt; !reset.After(now) {
 			reset = ghRateReset(ctx)
 		}
 	}
-	b.ghPause = b.ghPause.next(err, res.rate, reset, now)
-	if !b.ghPause.until.IsZero() {
-		notice = b.ghPause.notice(data, now)
-	}
-	return data, errs, notice
+	b.ghPause = b.ghPause.next(err, rate, reset, now)
 }
 
 type ghResult struct {
@@ -689,20 +707,28 @@ type ghResult struct {
 // worktrees are matched on that name.
 func githubResult(cfg *Config, login string, found [][]ghPRNode) ghResult {
 	var res ghResult
-	seen := map[prRef]bool{}
+	index := map[prRef]int{}
 	for _, i := range []int{searchMineOpen, searchMineMerged, searchAssignedOpen, searchAssignedMerged} {
 		assigned := i == searchAssignedOpen || i == searchAssignedMerged
 		for _, n := range found[i] {
 			repo, ok := cfg.repo(n.Repository.NameWithOwner)
-			if !ok || seen[refOf(repo.Name, n.Number)] {
+			if !ok {
 				continue
 			}
-			seen[refOf(repo.Name, n.Number)] = true
 			pr := n.pr(cfg, repo.Name)
 			if assigned {
 				pr.Assigned = true
 				pr.ReviewRequested = n.requests(login)
 			}
+			// A search that fell back to old results can hold an older copy of a PR another search just returned.
+			ref := refOf(repo.Name, n.Number)
+			if j, ok := index[ref]; ok {
+				if pr.UpdatedAt.After(res.prs[j].UpdatedAt) {
+					res.prs[j] = pr
+				}
+				continue
+			}
+			index[ref] = len(res.prs)
 			res.prs = append(res.prs, pr)
 		}
 	}
@@ -724,8 +750,7 @@ func viewPRs(ctx context.Context, post graphQLFunc, cfg *Config, links []PRLink)
 		params = append(params, "$"+o+": String!", "$"+n+": String!")
 		fields = append(fields, fmt.Sprintf("v%d: repository(owner: $%s, name: $%s) { pullRequest(number: %d) { ...%s } }", i, o, n, l.Number, prFragments[prLink].name))
 	}
-	f := prFragments[prLink]
-	query := "query(" + strings.Join(params, ", ") + ") {\n" + strings.Join(fields, "\n") + " }\nfragment " + f.name + " on PullRequest { " + f.fields + " }"
+	query := "query(" + strings.Join(params, ", ") + ") {\n" + strings.Join(fields, "\n") + " }\n" + prFragments[prLink].text()
 	resp, err := postGraphQL(ctx, post, query, vars)
 	views := map[string]PRLink{}
 	for i, l := range links {

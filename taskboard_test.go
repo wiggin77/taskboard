@@ -275,6 +275,36 @@ func TestGitHubResult(t *testing.T) {
 	}
 }
 
+func TestGitHubResultPrefersFresherCopy(t *testing.T) {
+	node := func(state string, updated int64) ghPRNode {
+		var n ghPRNode
+		n.Number, n.State, n.UpdatedAt = 1, state, time.Unix(updated, 0)
+		n.Repository.NameWithOwner = "mattermost/mattermost"
+		return n
+	}
+	found := make([][]ghPRNode, searchReviewed+1)
+	found[searchMineOpen] = []ghPRNode{node("OPEN", 100)}
+	found[searchMineMerged] = []ghPRNode{node("MERGED", 200)}
+	if prs := githubResult(testConfig(t), "me", found).prs; len(prs) != 1 || prs[0].State != "MERGED" {
+		t.Errorf("prs = %+v, want only the merged copy, since an older open copy can come from a search that fell back", prs)
+	}
+}
+
+func TestPauseAfter(t *testing.T) {
+	now := time.Now()
+	b := NewBoard(testConfig(t))
+	b.pauseAfter(context.Background(), fmt.Errorf("You have exceeded a secondary rate limit"), ghRate{}, now)
+	if !b.ghPause.until.Equal(now.Add(time.Minute)) {
+		t.Errorf("secondary limit: paused until %v, want a minute from now", b.ghPause.until)
+	}
+	b.ghPause = ghPause{}
+	b.ghRate = ghRate{5000, 0, now.Add(20 * time.Minute)}
+	b.pauseAfter(context.Background(), fmt.Errorf("API rate limit exceeded"), ghRate{}, now)
+	if !b.ghPause.until.Equal(b.ghRate.ResetAt) {
+		t.Errorf("budget used up: paused until %v, want the last reset GitHub reported, %v", b.ghPause.until, b.ghRate.ResetAt)
+	}
+}
+
 func TestRunSearches(t *testing.T) {
 	searches := []prSearch{
 		{"is:pr is:open author:@me", 3, prOpen},
@@ -355,12 +385,15 @@ func TestRunSearchesStopsWithoutProgress(t *testing.T) {
 }
 
 func TestRunSearchesPartialFailure(t *testing.T) {
+	delay := graphQLRetryDelay
+	graphQLRetryDelay = 0
+	t.Cleanup(func() { graphQLRetryDelay = delay })
 	searches := []prSearch{{"a", searchMax, prOpen}, {"b", searchMax, prLink}}
 	requests := 0
 	post := func(context.Context, string, map[string]string) ([]byte, error) {
 		requests++
 		return []byte(`{"data": {"viewer": {"login": "me"}, "rateLimit": {"limit": 5000, "remaining": 4000, "resetAt": "2026-11-10T01:00:00Z"},
-			"s0": {"pageInfo": {"hasNextPage": false}, "nodes": [{"number": 1}]}, "s1": null},
+			"s0": {"pageInfo": {"hasNextPage": false}, "nodes": [{"number": 1}, null]}, "s1": null},
 			"errors": [{"message": "SAML enforcement blocks this"}]}`), fmt.Errorf("gh: exit status 1")
 	}
 	res, err := runSearches(context.Background(), post, searches)
@@ -371,7 +404,22 @@ func TestRunSearchesPartialFailure(t *testing.T) {
 		t.Errorf("%d requests, want 1: partial data isn't retried", requests)
 	}
 	if res.login != "me" || len(res.found[0]) != 1 || !slices.Equal(res.failed, []bool{false, true}) || res.rate.Remaining != 4000 {
-		t.Errorf("login %q, found %d, failed %v, rate %+v: want the parts that came back kept and the null one failed", res.login, len(res.found[0]), res.failed, res.rate)
+		t.Errorf("login %q, found %d, failed %v, rate %+v: want the parts that came back kept, a PR you can't see skipped, and the null search failed", res.login, len(res.found[0]), res.failed, res.rate)
+	}
+
+	for _, c := range []struct {
+		name string
+		out  string
+		err  error
+		want string
+	}{
+		{"no data", `{"data": null}`, nil, "no data"},
+		{"gh failed without GraphQL errors", `{"data": {"viewer": {"login": "me"}}}`, fmt.Errorf("gh: exit status 1"), "exit status 1"},
+	} {
+		post := func(context.Context, string, map[string]string) ([]byte, error) { return []byte(c.out), c.err }
+		if _, err := postGraphQL(context.Background(), post, "q", nil); err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: err = %v, want one mentioning %q", c.name, err, c.want)
+		}
 	}
 
 	requests = 0
@@ -443,6 +491,7 @@ func TestGitHubPause(t *testing.T) {
 	}{
 		{"healthy", ghPause{}, nil, ghRate{5000, 4000, reset}, time.Time{}, time.Time{}},
 		{"budget low", ghPause{}, nil, ghRate{5000, 499, reset}, time.Time{}, reset},
+		{"budget low, reset passed", ghPause{}, nil, ghRate{5000, 499, now.Add(-time.Minute)}, time.Time{}, time.Time{}},
 		{"other error", ghPause{}, fmt.Errorf("HTTP 502"), ghRate{}, time.Time{}, time.Time{}},
 		{"secondary limit", ghPause{}, secondary, ghRate{}, time.Time{}, now.Add(time.Minute)},
 		{"secondary limit again", ghPause{backoff: 20 * time.Minute}, secondary, ghRate{}, time.Time{}, now.Add(30 * time.Minute)},
