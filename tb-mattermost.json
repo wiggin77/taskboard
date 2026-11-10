@@ -4,7 +4,7 @@
   "poll_interval": "5m",
   "refresh_timeout": "5m",
   "project_keys": ["MM"],
-  "merged_pr_limit": 20,
+  "merged_pr_days": 90,
   "done_days": 30,
   "attach_command": ["gnome-terminal", "--", "tmux", "attach", "-t", "{target}"],
   "worktree_dir": "~/worktrees",

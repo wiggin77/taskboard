@@ -34,7 +34,7 @@ func testConfig(t *testing.T) *Config {
 	cfg := &Config{
 		PollInterval:   Duration{time.Minute},
 		RefreshTimeout: Duration{5 * time.Minute},
-		MergedPRLimit:  20,
+		MergedPRDays:   90,
 		DoneDays:       30,
 		ProjectKeys:    []string{"MM"},
 		Jira:           JiraConfig{BaseURL: "https://example.atlassian.net/"},
@@ -215,26 +215,112 @@ func TestAssignedSearch(t *testing.T) {
 	}
 }
 
-func TestAssignedReviewRequests(t *testing.T) {
-	out := []byte(`[
-		{"number":1,"state":"OPEN","headRefName":"MM-1-x","reviewRequests":[{"__typename":"User","login":"Wiggin77"}]},
-		{"number":2,"state":"OPEN","headRefName":"MM-2-x","reviewRequests":[{"__typename":"Team","slug":"core-server"}]},
-		{"number":3,"state":"OPEN","headRefName":"MM-3-x","reviewRequests":[{"__typename":"User","login":"someone"}]},
-		{"number":4,"state":"OPEN","headRefName":"MM-4-x","reviewRequests":[]}
-	]`)
-	prs, err := parsePRs(testConfig(t), "mattermost/mattermost", out)
+func TestGitHubResult(t *testing.T) {
+	var resp struct {
+		Data map[string]struct {
+			Nodes []ghPRNode `json:"nodes"`
+		} `json:"data"`
+	}
+	err := json.Unmarshal([]byte(`{"data": {
+		"s0": {"nodes": [
+			{"number": 1, "url": "u1", "state": "OPEN", "headRefName": "MM-1-x", "repository": {"nameWithOwner": "Mattermost/Mattermost"},
+			 "commits": {"nodes": [{"commit": {"statusCheckRollup": {"contexts": {"nodes": [{"__typename": "StatusContext", "state": "FAILURE"}]}}}}]}},
+			{"number": 2, "url": "u2", "state": "OPEN", "title": "Unrelated", "repository": {"nameWithOwner": "other/repo"}}
+		]},
+		"s1": {"nodes": [
+			{"number": 3, "state": "OPEN", "headRefName": "MM-3-x", "repository": {"nameWithOwner": "mattermost/mattermost"},
+			 "reviewRequests": {"nodes": [{"requestedReviewer": {"__typename": "User", "login": "Wiggin77"}}]}},
+			{"number": 4, "state": "OPEN", "headRefName": "MM-4-x", "repository": {"nameWithOwner": "mattermost/mattermost"},
+			 "reviewRequests": {"nodes": [{"requestedReviewer": {"__typename": "Team"}}, {"requestedReviewer": {"__typename": "User", "login": "someone"}}]}}
+		]},
+		"s2": {"nodes": [
+			{"number": 5, "state": "MERGED", "headRefName": "MM-5-x", "repository": {"nameWithOwner": "mattermost/mattermost"}},
+			{"number": 5, "state": "MERGED", "headRefName": "MM-5-x", "repository": {"nameWithOwner": "mattermost/mattermost"}}
+		]},
+		"s3": {"nodes": [{"number": 6, "state": "MERGED", "headRefName": "MM-6-x", "repository": {"nameWithOwner": "mattermost/mattermost"}}]},
+		"s4": {"nodes": [{"number": 7, "url": "u7", "state": "OPEN", "repository": {"nameWithOwner": "mattermost/mattermost"}, "author": {"login": "someone"}}]},
+		"s5": {"nodes": []}
+	}}`), &resp)
 	if err != nil {
 		t.Fatal(err)
 	}
-	markAssigned(prs, "wiggin77")
-	for i, want := range []bool{true, false, false, false} {
-		if !prs[i].Assigned || prs[i].ReviewRequested != want {
-			t.Errorf("PR %d: Assigned %v ReviewRequested %v, want true %v (only a request naming you counts, not a team's)", prs[i].Number, prs[i].Assigned, prs[i].ReviewRequested, want)
+	found := make([][]ghPRNode, searchReviewed+1)
+	for i := range found {
+		found[i] = resp.Data[fmt.Sprintf("s%d", i)].Nodes
+	}
+	res := githubResult(testConfig(t), "wiggin77", found)
+
+	type want struct {
+		n                         int
+		assigned, reviewRequested bool
+	}
+	var got []want
+	for _, pr := range res.prs {
+		if pr.Repo != "mattermost/mattermost" {
+			t.Errorf("PR %d repo %q, want the configured name", pr.Number, pr.Repo)
+		}
+		got = append(got, want{pr.Number, pr.Assigned, pr.ReviewRequested})
+	}
+	if w := []want{{1, false, false}, {5, false, false}, {3, true, true}, {4, true, false}, {6, true, false}}; !slices.Equal(got, w) {
+		t.Errorf("task PRs %v, want %v: only configured repos, duplicates dropped, a review request counts only when it names you", got, w)
+	}
+	if res.prs[0].CI != CIFailing || res.prs[0].Key != "MM-1" {
+		t.Errorf("PR 1 = CI %v key %q, want failing MM-1", res.prs[0].CI, res.prs[0].Key)
+	}
+	if len(res.reviews) != 1 || res.reviews[0].Number != 7 || res.reviews[0].Author != "someone" {
+		t.Errorf("reviews = %+v, want #7 by someone", res.reviews)
+	}
+	if len(res.others) != 1 || res.others[0].Number != 2 || res.others[0].Role != RoleAuthor {
+		t.Errorf("others = %+v, want your open PR #2 in other/repo", res.others)
+	}
+}
+
+func TestRunSearches(t *testing.T) {
+	searches := []prSearch{
+		{"is:pr is:open author:@me", 3, prOpen},
+		{"is:pr is:open review-requested:@me", 100, prLink},
+	}
+	page := func(hasNext bool, cursor string, numbers ...int) string {
+		var nodes []string
+		for _, n := range numbers {
+			nodes = append(nodes, fmt.Sprintf(`{"number": %d}`, n))
+		}
+		return fmt.Sprintf(`{"pageInfo": {"hasNextPage": %v, "endCursor": %q}, "nodes": [%s]}`, hasNext, cursor, strings.Join(nodes, ","))
+	}
+	var queries []string
+	var varSets []map[string]string
+	post := func(_ context.Context, query string, vars map[string]string) ([]byte, error) {
+		queries, varSets = append(queries, query), append(varSets, vars)
+		switch len(queries) {
+		case 1:
+			return nil, fmt.Errorf("HTTP 502")
+		case 2:
+			return []byte(`{"data": {"viewer": {"login": "wiggin77"}, "s0": ` + page(true, "c1", 1, 2) + `, "s1": ` + page(false, "", 3) + `}}`), nil
+		default:
+			return []byte(`{"data": {"viewer": {"login": "wiggin77"}, "s0": ` + page(true, "c2", 4) + `}}`), nil
 		}
 	}
-	markAssigned(prs, "")
-	if prs[0].ReviewRequested {
-		t.Error("ReviewRequested set without a known login")
+	delay := graphQLRetryDelay
+	graphQLRetryDelay = 0
+	t.Cleanup(func() { graphQLRetryDelay = delay })
+	login, found, err := runSearches(context.Background(), post, searches)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if login != "wiggin77" || len(found[0]) != 3 || len(found[1]) != 1 {
+		t.Fatalf("login %q, found %d and %d PRs, want wiggin77, 3 and 1", login, len(found[0]), len(found[1]))
+	}
+	if len(queries) != 3 {
+		t.Fatalf("%d requests, want 3: a retry, then a second page only for the search that has one, then stop at the limit", len(queries))
+	}
+	if !strings.Contains(queries[1], "...openPR") || !strings.Contains(queries[1], "fragment linkPR") || !strings.Contains(queries[1], "first: 100") {
+		t.Errorf("first page query lacks a search or fragment:\n%s", queries[1])
+	}
+	if strings.Contains(queries[2], "s1:") || strings.Contains(queries[2], "fragment linkPR") || !strings.Contains(queries[2], "first: 1, after: $a0") {
+		t.Errorf("second page should ask only for search 0's remaining 1, after its cursor, without unused fragments:\n%s", queries[2])
+	}
+	if varSets[2]["a0"] != "c1" || varSets[2]["q0"] != searches[0].query {
+		t.Errorf("second page vars = %v", varSets[2])
 	}
 }
 
@@ -451,8 +537,8 @@ func TestDecodeIssues(t *testing.T) {
 }
 
 func TestMergePRLinks(t *testing.T) {
-	pr := func(repo string, n, updated int) ghSearchPR {
-		var r ghSearchPR
+	pr := func(repo string, n, updated int) ghPRNode {
+		var r ghPRNode
 		r.Repository.NameWithOwner = repo
 		r.Number = n
 		r.URL = fmt.Sprintf("https://github.com/%s/pull/%d", repo, n)
@@ -461,7 +547,7 @@ func TestMergePRLinks(t *testing.T) {
 	}
 	cfg := testConfig(t)
 	cfg.Repos = []RepoConfig{{Name: "mattermost/mattermost"}}
-	found := [3][]ghSearchPR{
+	found := [3][]ghPRNode{
 		RoleRequested: {pr("mattermost/mattermost", 1, 1), pr("other/repo", 2, 3)},
 		RoleAuthor:    {pr("mattermost/mattermost", 3, 9), pr("Other/Repo", 4, 2)},
 		RoleReviewed:  {pr("mattermost/mattermost", 1, 1), pr("Mattermost/Mattermost", 5, 5), pr("other/repo", 6, 4), pr("mattermost/mattermost", 7, 2)},

@@ -23,7 +23,7 @@ type Config struct {
 	ManualRefresh  bool         `json:"manual_refresh,omitempty"`
 	RefreshTimeout Duration     `json:"refresh_timeout"`
 	ProjectKeys    []string     `json:"project_keys"`
-	MergedPRLimit  int          `json:"merged_pr_limit"`
+	MergedPRDays   int          `json:"merged_pr_days"`
 	DoneDays       int          `json:"done_days"`
 	AttachCommand  []string     `json:"attach_command,omitempty"`
 	TmuxSession    string       `json:"tmux_session,omitempty"`
@@ -149,7 +149,7 @@ func parseConfig(b []byte) (*Config, error) {
 		Listen:         "127.0.0.1:8484",
 		PollInterval:   Duration{5 * time.Minute},
 		RefreshTimeout: Duration{5 * time.Minute},
-		MergedPRLimit:  20,
+		MergedPRDays:   90,
 		DoneDays:       30,
 	}
 	if err := json.Unmarshal(b, cfg); err != nil {
@@ -253,8 +253,8 @@ func (c *Config) validate() error {
 			return fmt.Errorf("worktree_links: %q must be an absolute path or start with ~/", l)
 		}
 	}
-	if c.MergedPRLimit < 1 {
-		return errors.New("merged_pr_limit must be at least 1")
+	if c.MergedPRDays < 1 {
+		return errors.New("merged_pr_days must be at least 1")
 	}
 	if c.DoneDays < 1 {
 		return errors.New("done_days must be at least 1")

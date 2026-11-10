@@ -93,8 +93,8 @@ button.primary{background:var(--link);border-color:var(--link);color:var(--surfa
   <div class="row2">
     <label>Days to keep finished tasks<span class="hint">Tasks whose PR merged or ticket was resolved this recently stay under Done. Default is 30.</span>
       <input name="done_days" type="number" min="1" required value="{{.DoneDays}}"></label>
-    <label>Merged PRs to check per repo<span class="hint">Recent merged PRs checked for a ticket that still needs closing. Default is 20.</span>
-      <input name="merged_pr_limit" type="number" min="1" required value="{{.MergedPRLimit}}"></label>
+    <label>Days of merged PRs to check<span class="hint">PRs merged this recently are checked for a ticket that still needs closing. Default is 90.</span>
+      <input name="merged_pr_days" type="number" min="1" required value="{{.MergedPRDays}}"></label>
   </div>
 </fieldset>
 
@@ -219,7 +219,7 @@ form.addEventListener("submit", async e => {
     manual_refresh: !form.elements.auto_refresh.checked,
     refresh_timeout: val("refresh_timeout"),
     project_keys: val("project_keys").split(/[\s,]+/).filter(Boolean),
-    merged_pr_limit: Number(val("merged_pr_limit")),
+    merged_pr_days: Number(val("merged_pr_days")),
     done_days: Number(val("done_days")),
     attach_command: lines("attach_command"),
     agent_command: val("agent_command"),

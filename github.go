@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"encoding/json"
+	"fmt"
 	"path"
 	"slices"
 	"strconv"
@@ -48,7 +49,6 @@ type PR struct {
 	MergedAt        time.Time
 	Assigned        bool
 	ReviewRequested bool
-	requested       []string
 }
 
 type ghCheck struct {
@@ -58,72 +58,78 @@ type ghCheck struct {
 	State      string `json:"state"`
 }
 
-type ghPR struct {
-	Number            int       `json:"number"`
-	Title             string    `json:"title"`
-	URL               string    `json:"url"`
-	HeadRefName       string    `json:"headRefName"`
-	HeadRefOid        string    `json:"headRefOid"`
-	State             string    `json:"state"`
-	IsDraft           bool      `json:"isDraft"`
-	ReviewDecision    string    `json:"reviewDecision"`
-	StatusCheckRollup []ghCheck `json:"statusCheckRollup"`
-	UpdatedAt         time.Time `json:"updatedAt"`
-	MergedAt          time.Time `json:"mergedAt"`
-	ReviewRequests    []struct {
+type ghPRNode struct {
+	Number         int       `json:"number"`
+	Title          string    `json:"title"`
+	URL            string    `json:"url"`
+	Body           string    `json:"body"`
+	HeadRefName    string    `json:"headRefName"`
+	HeadRefOid     string    `json:"headRefOid"`
+	State          string    `json:"state"`
+	IsDraft        bool      `json:"isDraft"`
+	ReviewDecision string    `json:"reviewDecision"`
+	UpdatedAt      time.Time `json:"updatedAt"`
+	MergedAt       time.Time `json:"mergedAt"`
+	Repository     struct {
+		NameWithOwner string `json:"nameWithOwner"`
+	} `json:"repository"`
+	Author struct {
+		Login string `json:"login"`
+	} `json:"author"`
+	ReviewRequests struct {
+		Nodes []ghReviewRequest `json:"nodes"`
+	} `json:"reviewRequests"`
+	Commits struct {
+		Nodes []struct {
+			Commit struct {
+				StatusCheckRollup struct {
+					Contexts struct {
+						Nodes []ghCheck `json:"nodes"`
+					} `json:"contexts"`
+				} `json:"statusCheckRollup"`
+			} `json:"commit"`
+		} `json:"nodes"`
+	} `json:"commits"`
+}
+
+type ghReviewRequest struct {
+	RequestedReviewer struct {
 		TypeName string `json:"__typename"`
 		Login    string `json:"login"`
-	} `json:"reviewRequests"`
+	} `json:"requestedReviewer"`
 }
 
-func listPRs(ctx context.Context, cfg *Config, repo, state string, limit int, search string) ([]PR, error) {
-	out, err := runCmd(ctx, "", "gh", "pr", "list",
-		"--repo", repo,
-		"--state", state,
-		"--limit", strconv.Itoa(limit),
-		"--search", search,
-		"--json", "number,title,url,headRefName,headRefOid,state,isDraft,reviewDecision,statusCheckRollup,updatedAt,mergedAt,reviewRequests")
-	if err != nil {
-		return nil, err
+func (n ghPRNode) pr(cfg *Config, repo string) PR {
+	key := cfg.findKey(n.HeadRefName)
+	if key == "" {
+		key = cfg.findKey(n.Title)
 	}
-	return parsePRs(cfg, repo, out)
+	var checks []ghCheck
+	if len(n.Commits.Nodes) > 0 {
+		checks = n.Commits.Nodes[0].Commit.StatusCheckRollup.Contexts.Nodes
+	}
+	return PR{
+		Repo:      repo,
+		Key:       key,
+		Number:    n.Number,
+		Title:     n.Title,
+		URL:       n.URL,
+		Branch:    n.HeadRefName,
+		HeadSHA:   n.HeadRefOid,
+		State:     n.State,
+		Draft:     n.IsDraft,
+		Review:    n.ReviewDecision,
+		CI:        rollupCI(checks),
+		UpdatedAt: n.UpdatedAt,
+		MergedAt:  n.MergedAt,
+	}
 }
 
-func parsePRs(cfg *Config, repo string, out []byte) ([]PR, error) {
-	var raw []ghPR
-	if err := json.Unmarshal(out, &raw); err != nil {
-		return nil, err
-	}
-	prs := make([]PR, 0, len(raw))
-	for _, r := range raw {
-		key := cfg.findKey(r.HeadRefName)
-		if key == "" {
-			key = cfg.findKey(r.Title)
-		}
-		var requested []string
-		for _, rr := range r.ReviewRequests {
-			if rr.TypeName == "User" {
-				requested = append(requested, rr.Login)
-			}
-		}
-		prs = append(prs, PR{
-			Repo:      repo,
-			Key:       key,
-			Number:    r.Number,
-			Title:     r.Title,
-			URL:       r.URL,
-			Branch:    r.HeadRefName,
-			HeadSHA:   r.HeadRefOid,
-			State:     r.State,
-			Draft:     r.IsDraft,
-			Review:    r.ReviewDecision,
-			CI:        rollupCI(r.StatusCheckRollup),
-			UpdatedAt: r.UpdatedAt,
-			MergedAt:  r.MergedAt,
-			requested: requested,
-		})
-	}
-	return prs, nil
+// requests reports whether login is requested by name; a team's request, such as one CODEOWNERS adds, doesn't count.
+func (n ghPRNode) requests(login string) bool {
+	return login != "" && slices.ContainsFunc(n.ReviewRequests.Nodes, func(r ghReviewRequest) bool {
+		return r.RequestedReviewer.TypeName == "User" && strings.EqualFold(r.RequestedReviewer.Login, login)
+	})
 }
 
 type prRef struct {
@@ -132,15 +138,6 @@ type prRef struct {
 }
 
 func refOf(repo string, number int) prRef { return prRef{strings.ToLower(repo), number} }
-
-// markAssigned leaves ReviewRequested unset for team requests, such as ones CODEOWNERS adds, so only a
-// request naming you hands an assigned PR back to you.
-func markAssigned(prs []PR, login string) {
-	for i := range prs {
-		prs[i].Assigned = true
-		prs[i].ReviewRequested = login != "" && slices.ContainsFunc(prs[i].requested, func(r string) bool { return strings.EqualFold(r, login) })
-	}
-}
 
 // withoutTaskPRs keeps every row while login is unknown, since ReviewRequested can't be trusted then, and keeps
 // the row for a draft that requests you by name, since a draft's stage never shows the request.
@@ -289,53 +286,7 @@ func viewPR(ctx context.Context, cfg *Config, link *PRLink) error {
 	return nil
 }
 
-type ghSearchPR struct {
-	Repository struct {
-		NameWithOwner string `json:"nameWithOwner"`
-	} `json:"repository"`
-	Number int    `json:"number"`
-	Title  string `json:"title"`
-	URL    string `json:"url"`
-	Body   string `json:"body"`
-	Author struct {
-		Login string `json:"login"`
-	} `json:"author"`
-	IsDraft   bool      `json:"isDraft"`
-	UpdatedAt time.Time `json:"updatedAt"`
-}
-
-func listPRLinks(ctx context.Context, cfg *Config) (reviews, others []PRLink, err error) {
-	var found [3][]ghSearchPR
-	// GitHub drops a review request once you submit a review, so reviewed-by covers PRs you have already looked at.
-	queries := [3][]string{
-		RoleRequested: {"review-requested:@me"},
-		RoleAuthor:    {"author:@me"},
-		RoleReviewed:  {"reviewed-by:@me", "-author:@me"},
-	}
-	for role, q := range queries {
-		if found[role], err = searchPRs(ctx, q...); err != nil {
-			return nil, nil, err
-		}
-	}
-	reviews, others = splitPRLinks(cfg, mergePRLinks(cfg, found))
-	return reviews, others, nil
-}
-
-func searchPRs(ctx context.Context, query ...string) ([]ghSearchPR, error) {
-	args := []string{"search", "prs", "--state", "open", "--limit", "100",
-		"--json", "repository,number,title,url,body,author,isDraft,updatedAt", "--"}
-	out, err := runCmd(ctx, "", "gh", append(args, query...)...)
-	if err != nil {
-		return nil, err
-	}
-	var raw []ghSearchPR
-	if err := json.Unmarshal(out, &raw); err != nil {
-		return nil, err
-	}
-	return raw, nil
-}
-
-func mergePRLinks(cfg *Config, found [3][]ghSearchPR) []PRLink {
+func mergePRLinks(cfg *Config, found [3][]ghPRNode) []PRLink {
 	seen := map[string]bool{}
 	var links []PRLink
 	for role, prs := range found {
@@ -381,4 +332,209 @@ func splitPRLinks(cfg *Config, links []PRLink) (reviews, others []PRLink) {
 		}
 	}
 	return reviews, others
+}
+
+type prKind int
+
+const (
+	prOpen prKind = iota
+	prMerged
+	prLink
+)
+
+// One fragment per kind keeps CI and review requests off searches that never show them.
+var prFragments = [...]string{
+	prOpen: `fragment openPR on PullRequest { number title url body headRefName headRefOid state isDraft reviewDecision updatedAt mergedAt
+  repository { nameWithOwner } author { login }
+  reviewRequests(first: 50) { nodes { requestedReviewer { __typename ... on User { login } } } }
+  commits(last: 1) { nodes { commit { statusCheckRollup { contexts(first: 100) { nodes {
+    __typename ... on CheckRun { status conclusion } ... on StatusContext { state } } } } } } } }`,
+	prMerged: `fragment mergedPR on PullRequest { number title url headRefName headRefOid state isDraft reviewDecision updatedAt mergedAt repository { nameWithOwner } }`,
+	prLink:   `fragment linkPR on PullRequest { number title url body isDraft updatedAt state repository { nameWithOwner } author { login } }`,
+}
+
+var prFragmentNames = [...]string{prOpen: "openPR", prMerged: "mergedPR", prLink: "linkPR"}
+
+type prSearch struct {
+	query string
+	limit int
+	kind  prKind
+}
+
+const (
+	searchMineOpen = iota
+	searchAssignedOpen
+	searchMineMerged
+	searchAssignedMerged
+	searchRequested
+	searchReviewed
+)
+
+// GitHub search returns at most 1000 results per query.
+const searchMax = 1000
+
+func prSearches(cfg *Config, now time.Time) []prSearch {
+	merged := " merged:>=" + now.AddDate(0, 0, -max(cfg.DoneDays, cfg.MergedPRDays)).Format("2006-01-02")
+	assigned := cfg.assignedSearch()
+	return []prSearch{
+		searchMineOpen:       {"is:pr is:open author:@me", searchMax, prOpen},
+		searchAssignedOpen:   {"is:pr is:open " + assigned, searchMax, prOpen},
+		searchMineMerged:     {"is:pr is:merged author:@me" + merged, searchMax, prMerged},
+		searchAssignedMerged: {"is:pr is:merged " + assigned + merged, searchMax, prMerged},
+		searchRequested:      {"is:pr is:open review-requested:@me", 100, prLink},
+		// GitHub drops a review request once you submit a review, so reviewed-by covers PRs you have already looked at.
+		searchReviewed: {"is:pr is:open reviewed-by:@me -author:@me", 100, prLink},
+	}
+}
+
+func searchQuery(searches []prSearch, pending []int, cursors []string, have [][]ghPRNode) (string, map[string]string) {
+	var params, fields []string
+	vars := map[string]string{}
+	var used [len(prFragments)]bool
+	for _, i := range pending {
+		s := searches[i]
+		q := fmt.Sprintf("q%d", i)
+		vars[q] = s.query
+		params = append(params, "$"+q+": String!")
+		after := ""
+		if cursors[i] != "" {
+			a := fmt.Sprintf("a%d", i)
+			vars[a] = cursors[i]
+			params = append(params, "$"+a+": String!")
+			after = ", after: $" + a
+		}
+		first := min(100, s.limit-len(have[i]))
+		fields = append(fields, fmt.Sprintf("s%d: search(type: ISSUE, query: $%s, first: %d%s) { pageInfo { hasNextPage endCursor } nodes { ...%s } }",
+			i, q, first, after, prFragmentNames[s.kind]))
+		used[s.kind] = true
+	}
+	query := "query(" + strings.Join(params, ", ") + ") { viewer { login }\n" + strings.Join(fields, "\n") + " }"
+	for kind, ok := range used {
+		if ok {
+			query += "\n" + prFragments[kind]
+		}
+	}
+	return query, vars
+}
+
+type graphQLFunc func(ctx context.Context, query string, vars map[string]string) ([]byte, error)
+
+func ghGraphQL(ctx context.Context, query string, vars map[string]string) ([]byte, error) {
+	args := []string{"api", "graphql", "-f", "query=" + query}
+	for k, v := range vars {
+		args = append(args, "-f", k+"="+v)
+	}
+	return runCmd(ctx, "", "gh", args...)
+}
+
+var graphQLRetryDelay = 2 * time.Second
+
+// postGraphQL retries once, since GitHub sometimes answers a large search with an HTML error page.
+func postGraphQL(ctx context.Context, post graphQLFunc, query string, vars map[string]string) (map[string]json.RawMessage, error) {
+	for attempt := 0; ; attempt++ {
+		out, err := post(ctx, query, vars)
+		if err == nil {
+			var resp struct {
+				Data map[string]json.RawMessage `json:"data"`
+			}
+			if err = json.Unmarshal(out, &resp); err == nil {
+				return resp.Data, nil
+			}
+		}
+		if attempt > 0 {
+			return nil, err
+		}
+		select {
+		case <-ctx.Done():
+			return nil, err
+		case <-time.After(graphQLRetryDelay):
+		}
+	}
+}
+
+func runSearches(ctx context.Context, post graphQLFunc, searches []prSearch) (string, [][]ghPRNode, error) {
+	found := make([][]ghPRNode, len(searches))
+	cursors := make([]string, len(searches))
+	pending := make([]int, len(searches))
+	for i := range pending {
+		pending[i] = i
+	}
+	var login string
+	for len(pending) > 0 {
+		query, vars := searchQuery(searches, pending, cursors, found)
+		data, err := postGraphQL(ctx, post, query, vars)
+		if err != nil {
+			return "", nil, err
+		}
+		var viewer struct {
+			Login string `json:"login"`
+		}
+		if err := json.Unmarshal(data["viewer"], &viewer); err != nil {
+			return "", nil, fmt.Errorf("viewer: %w", err)
+		}
+		login = viewer.Login
+		var next []int
+		for _, i := range pending {
+			var page struct {
+				PageInfo struct {
+					HasNextPage bool   `json:"hasNextPage"`
+					EndCursor   string `json:"endCursor"`
+				} `json:"pageInfo"`
+				Nodes []ghPRNode `json:"nodes"`
+			}
+			if err := json.Unmarshal(data[fmt.Sprintf("s%d", i)], &page); err != nil {
+				return "", nil, fmt.Errorf("search %q: %w", searches[i].query, err)
+			}
+			found[i] = append(found[i], page.Nodes...)
+			if page.PageInfo.HasNextPage && len(found[i]) < searches[i].limit {
+				cursors[i] = page.PageInfo.EndCursor
+				next = append(next, i)
+			}
+		}
+		pending = next
+	}
+	return login, found, nil
+}
+
+type ghResult struct {
+	login           string
+	prs             []PR
+	reviews, others []PRLink
+}
+
+func fetchGitHub(ctx context.Context, cfg *Config) (ghResult, error) {
+	login, found, err := runSearches(ctx, ghGraphQL, prSearches(cfg, time.Now()))
+	if err != nil {
+		return ghResult{}, err
+	}
+	return githubResult(cfg, login, found), nil
+}
+
+// githubResult keeps task PRs to the configured repos, named as the config names them, since sessions and
+// worktrees are matched on that name.
+func githubResult(cfg *Config, login string, found [][]ghPRNode) ghResult {
+	res := ghResult{login: login}
+	seen := map[prRef]bool{}
+	for _, i := range []int{searchMineOpen, searchMineMerged, searchAssignedOpen, searchAssignedMerged} {
+		assigned := i == searchAssignedOpen || i == searchAssignedMerged
+		for _, n := range found[i] {
+			repo, ok := cfg.repo(n.Repository.NameWithOwner)
+			if !ok || seen[refOf(repo.Name, n.Number)] {
+				continue
+			}
+			seen[refOf(repo.Name, n.Number)] = true
+			pr := n.pr(cfg, repo.Name)
+			if assigned {
+				pr.Assigned = true
+				pr.ReviewRequested = n.requests(login)
+			}
+			res.prs = append(res.prs, pr)
+		}
+	}
+	res.reviews, res.others = splitPRLinks(cfg, mergePRLinks(cfg, [3][]ghPRNode{
+		RoleRequested: found[searchRequested],
+		RoleAuthor:    found[searchMineOpen],
+		RoleReviewed:  found[searchReviewed],
+	}))
+	return res
 }
