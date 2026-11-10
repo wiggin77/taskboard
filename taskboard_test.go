@@ -2736,3 +2736,38 @@ func TestExtensionDownload(t *testing.T) {
 		t.Error("install page lacks the download link")
 	}
 }
+
+func TestConfigTemplates(t *testing.T) {
+	names := templateNames()
+	if !slices.Contains(names, "basic") || !slices.Contains(names, "mattermost") {
+		t.Fatalf("templates = %v", names)
+	}
+	for _, name := range names {
+		data, err := configTemplate(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := parseConfig(data); err != nil {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	if _, err := configTemplate("nope"); err == nil {
+		t.Error("unknown template accepted")
+	}
+}
+
+func TestWriteNewConfig(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "taskboard.json")
+	if err := writeNewConfig(path, []byte("one"), false); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeNewConfig(path, []byte("two"), false); err == nil {
+		t.Error("overwrote an existing config without -force")
+	}
+	if err := writeNewConfig(path, []byte("three"), true); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(path); string(b) != "three" {
+		t.Errorf("config = %q, want three", b)
+	}
+}

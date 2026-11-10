@@ -26,8 +26,6 @@ archives:
     files:
       - README.md
       - LICENSE
-      - config.example.json
-      - tb-mattermost.json
       - extension/*
 
 checksum:
