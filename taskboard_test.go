@@ -275,6 +275,41 @@ func TestGitHubResult(t *testing.T) {
 	}
 }
 
+func TestGitHubResultPrefersFresherCopy(t *testing.T) {
+	node := func(state string, updated int64) ghPRNode {
+		var n ghPRNode
+		n.Number, n.State, n.UpdatedAt = 1, state, time.Unix(updated, 0)
+		n.Repository.NameWithOwner = "mattermost/mattermost"
+		return n
+	}
+	found := make([][]ghPRNode, searchReviewed+1)
+	found[searchMineOpen] = []ghPRNode{node("OPEN", 100)}
+	found[searchMineMerged] = []ghPRNode{node("MERGED", 200)}
+	if prs := githubResult(testConfig(t), "me", found).prs; len(prs) != 1 || prs[0].State != "MERGED" {
+		t.Errorf("prs = %+v, want only the merged copy, since an older open copy can come from a search that fell back", prs)
+	}
+	found[searchMineMerged] = nil
+	found[searchAssignedOpen] = []ghPRNode{node("OPEN", 300)}
+	if prs := githubResult(testConfig(t), "me", found).prs; len(prs) != 1 || prs[0].UpdatedAt.Unix() != 300 || prs[0].Assigned {
+		t.Errorf("prs = %+v, want the fresher copy, still counted as authored rather than assigned", prs)
+	}
+}
+
+func TestPauseAfter(t *testing.T) {
+	now := time.Now()
+	b := NewBoard(testConfig(t))
+	b.pauseAfter(context.Background(), fmt.Errorf("You have exceeded a secondary rate limit"), ghRate{}, now)
+	if !b.ghPause.until.Equal(now.Add(time.Minute)) {
+		t.Errorf("secondary limit: paused until %v, want a minute from now", b.ghPause.until)
+	}
+	b.ghPause = ghPause{}
+	b.ghRate = ghRate{5000, 0, now.Add(20 * time.Minute)}
+	b.pauseAfter(context.Background(), fmt.Errorf("API rate limit exceeded"), ghRate{}, now)
+	if !b.ghPause.until.Equal(b.ghRate.ResetAt) {
+		t.Errorf("budget used up: paused until %v, want the last reset GitHub reported, %v", b.ghPause.until, b.ghRate.ResetAt)
+	}
+}
+
 func TestRunSearches(t *testing.T) {
 	searches := []prSearch{
 		{"is:pr is:open author:@me", 3, prOpen},
@@ -303,12 +338,12 @@ func TestRunSearches(t *testing.T) {
 	delay := graphQLRetryDelay
 	graphQLRetryDelay = 0
 	t.Cleanup(func() { graphQLRetryDelay = delay })
-	login, found, err := runSearches(context.Background(), post, searches)
+	res, err := runSearches(context.Background(), post, searches)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if login != "wiggin77" || len(found[0]) != 3 || len(found[1]) != 1 {
-		t.Fatalf("login %q, found %d and %d PRs, want wiggin77, 3 and 1", login, len(found[0]), len(found[1]))
+	if res.login != "wiggin77" || len(res.found[0]) != 3 || len(res.found[1]) != 1 || slices.Contains(res.failed, true) {
+		t.Fatalf("login %q, found %d and %d PRs, failed %v, want wiggin77, 3 and 1, none failed", res.login, len(res.found[0]), len(res.found[1]), res.failed)
 	}
 	if len(queries) != 3 {
 		t.Fatalf("%d requests, want 3: a retry, then a second page only for the search that has one, then stop at the limit", len(queries))
@@ -345,12 +380,166 @@ func TestRunSearchesStopsWithoutProgress(t *testing.T) {
 			requests++
 			return []byte(`{"data": {"viewer": {"login": "me"}, "s0": ` + c.pages[requests-1] + `}}`), nil
 		}
-		if _, _, err := runSearches(context.Background(), post, []prSearch{{"q", searchMax, prOpen}}); err != nil {
+		if _, err := runSearches(context.Background(), post, []prSearch{{"q", searchMax, prOpen}}); err != nil {
 			t.Fatal(err)
 		}
 		if requests != c.want {
 			t.Errorf("%s: %d requests, want %d", c.name, requests, c.want)
 		}
+	}
+}
+
+func TestRunSearchesPartialFailure(t *testing.T) {
+	delay := graphQLRetryDelay
+	graphQLRetryDelay = 0
+	t.Cleanup(func() { graphQLRetryDelay = delay })
+	searches := []prSearch{{"a", searchMax, prOpen}, {"b", searchMax, prLink}}
+	requests := 0
+	post := func(context.Context, string, map[string]string) ([]byte, error) {
+		requests++
+		return []byte(`{"data": {"viewer": {"login": "me"}, "rateLimit": {"limit": 5000, "remaining": 4000, "resetAt": "2026-11-10T01:00:00Z"},
+			"s0": {"pageInfo": {"hasNextPage": false}, "nodes": [{"number": 1}, null]}, "s1": null},
+			"errors": [{"message": "SAML enforcement blocks this"}]}`), fmt.Errorf("gh: exit status 1")
+	}
+	res, err := runSearches(context.Background(), post, searches)
+	if err == nil || !strings.Contains(err.Error(), "SAML") {
+		t.Errorf("err = %v, want the GraphQL error", err)
+	}
+	if requests != 1 {
+		t.Errorf("%d requests, want 1: partial data isn't retried", requests)
+	}
+	if res.login != "me" || len(res.found[0]) != 1 || !slices.Equal(res.failed, []bool{false, true}) || res.rate.Remaining != 4000 {
+		t.Errorf("login %q, found %d, failed %v, rate %+v: want the parts that came back kept, a PR you can't see skipped, and the null search failed", res.login, len(res.found[0]), res.failed, res.rate)
+	}
+
+	for _, c := range []struct {
+		name string
+		out  string
+		err  error
+		want string
+	}{
+		{"no data", `{"data": null}`, nil, "no data"},
+		{"gh failed without GraphQL errors", `{"data": {"viewer": {"login": "me"}}}`, fmt.Errorf("gh: exit status 1"), "exit status 1"},
+	} {
+		post := func(context.Context, string, map[string]string) ([]byte, error) { return []byte(c.out), c.err }
+		if _, err := postGraphQL(context.Background(), post, "q", nil); err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: err = %v, want one mentioning %q", c.name, err, c.want)
+		}
+	}
+
+	requests = 0
+	post = func(context.Context, string, map[string]string) ([]byte, error) {
+		requests++
+		return nil, fmt.Errorf("gh: API rate limit exceeded for user ID 1")
+	}
+	res, err = runSearches(context.Background(), post, searches)
+	if !isRateLimited(err) || requests != 1 || !slices.Equal(res.failed, []bool{true, true}) {
+		t.Errorf("rate limited: err %v, %d requests, failed %v; want no retry and every search failed", err, requests, res.failed)
+	}
+}
+
+func TestSearchFallback(t *testing.T) {
+	old, now := time.Unix(1000, 0), time.Unix(2000, 0)
+	prev := ghData{login: "me", found: [][]ghPRNode{{{Number: 1}}, {{Number: 2}}, nil}, at: []time.Time{old, old, {}}}
+	res := searchResult{found: [][]ghPRNode{{{Number: 3}}, nil, nil}, failed: []bool{false, true, true}}
+	d := res.withFallback(prev, now)
+	if d.login != "me" || d.found[0][0].Number != 3 || d.found[1][0].Number != 2 || d.found[2] != nil {
+		t.Errorf("found %v, login %q: want new results, then the last good ones for a failed search, and nothing where there were none", d.found, d.login)
+	}
+	if !slices.Equal(d.at, []time.Time{now, old, {}}) {
+		t.Errorf("at %v", d.at)
+	}
+	if at := d.staleSince(now); !at.Equal(old) {
+		t.Errorf("staleSince = %v, want %v", at, old)
+	}
+	fresh := searchResult{found: [][]ghPRNode{nil, nil, nil}, failed: []bool{false, false, false}}.withFallback(prev, now)
+	if at := fresh.staleSince(now); !at.IsZero() {
+		t.Errorf("fresh data staleSince = %v, want zero", at)
+	}
+	if d := res.withFallback(ghData{}, now); d.found[1] != nil || !d.staleSince(now).IsZero() {
+		t.Errorf("first refresh: found %v; want nothing to fall back to", d.found)
+	}
+	partial := searchResult{found: [][]ghPRNode{nil, {{Number: 4}}, nil}, failed: []bool{false, true, true}}
+	if d := partial.withFallback(ghData{}, now); len(d.found[1]) != 1 || !d.at[1].IsZero() {
+		t.Errorf("first refresh, later page failed: found %v, at %v; want the pages that came back, not marked fresh", d.found, d.at)
+	}
+}
+
+func TestPauseNotice(t *testing.T) {
+	now := time.Date(2026, 11, 10, 14, 31, 0, 0, time.Local)
+	p := ghPause{}.next(nil, ghRate{5000, 412, now.Add(33 * time.Minute).UTC()}, time.Time{}, now)
+	if got, want := p.notice(), "GitHub paused until 15:04 (412 of 5,000 points left this hour)"; got != want {
+		t.Errorf("notice = %q, want %q", got, want)
+	}
+	if got := asOf(now.Add(-30*time.Hour), now); got != now.Add(-30*time.Hour).Format("Jan 2 15:04") {
+		t.Errorf("asOf a day ago = %q, want the date too", got)
+	}
+	for n, want := range map[int]string{0: "0", 999: "999", 1000: "1,000", 1234567: "1,234,567"} {
+		if got := thousands(n); got != want {
+			t.Errorf("thousands(%d) = %q, want %q", n, got, want)
+		}
+	}
+}
+
+func TestGitHubPause(t *testing.T) {
+	now := time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC)
+	reset := now.Add(40 * time.Minute)
+	secondary := fmt.Errorf("gh: HTTP 403: You have exceeded a secondary rate limit")
+	for _, c := range []struct {
+		name      string
+		prev      ghPause
+		err       error
+		rate      ghRate
+		reset     time.Time
+		wantUntil time.Time
+	}{
+		{"healthy", ghPause{}, nil, ghRate{5000, 4000, reset}, time.Time{}, time.Time{}},
+		{"budget low", ghPause{}, nil, ghRate{5000, 499, reset}, time.Time{}, reset},
+		{"budget low, reset passed", ghPause{}, nil, ghRate{5000, 499, now.Add(-time.Minute)}, time.Time{}, time.Time{}},
+		{"other error", ghPause{}, fmt.Errorf("HTTP 502"), ghRate{}, time.Time{}, time.Time{}},
+		{"secondary limit", ghPause{}, secondary, ghRate{}, time.Time{}, now.Add(time.Minute)},
+		{"secondary limit again", ghPause{backoff: 20 * time.Minute}, secondary, ghRate{}, time.Time{}, now.Add(30 * time.Minute)},
+		{"hourly limit", ghPause{}, fmt.Errorf("API rate limit exceeded"), ghRate{}, reset, reset},
+		{"hourly limit, reset unknown", ghPause{}, fmt.Errorf("API rate limit exceeded"), ghRate{}, time.Time{}, now.Add(15 * time.Minute)},
+	} {
+		if got := c.prev.next(c.err, c.rate, c.reset, now); !got.until.Equal(c.wantUntil) {
+			t.Errorf("%s: paused until %v, want %v", c.name, got.until, c.wantUntil)
+		}
+	}
+	backedOff := ghPause{backoff: 2 * time.Minute}
+	if got := backedOff.next(fmt.Errorf("HTTP 502"), ghRate{}, time.Time{}, now); got.backoff != 2*time.Minute {
+		t.Errorf("failed request: backoff %v, want it kept", got.backoff)
+	}
+	if got := backedOff.next(nil, ghRate{5000, 4000, reset}, time.Time{}, now); got.backoff != 0 {
+		t.Errorf("answered request: backoff %v, want it reset", got.backoff)
+	}
+}
+
+func TestViewPRs(t *testing.T) {
+	links := []PRLink{
+		{Repo: "mattermost/mattermost", Number: 5, URL: "u5"},
+		{Repo: "mattermost/gone", Number: 6, URL: "u6"},
+	}
+	var gotQuery string
+	var gotVars map[string]string
+	post := func(_ context.Context, query string, vars map[string]string) ([]byte, error) {
+		gotQuery, gotVars = query, vars
+		return []byte(`{"data": {"v0": {"pullRequest": {"title": "MM-9 Fix", "url": "https://github.com/mattermost/mattermost/pull/5",
+			"state": "MERGED", "author": {"login": "someone"}}}, "v1": null}, "errors": [{"message": "Could not resolve to a Repository"}]}`), fmt.Errorf("gh: exit status 1")
+	}
+	views, gone, err := viewPRs(context.Background(), post, testConfig(t), links)
+	if err == nil {
+		t.Error("want the failed lookup reported")
+	}
+	if len(gone) != 1 || !gone["u6"] {
+		t.Errorf("gone = %v, want the PR GitHub couldn't resolve", gone)
+	}
+	if !strings.Contains(gotQuery, "pullRequest(number: 5)") || gotVars["o1"] != "mattermost" || gotVars["n1"] != "gone" {
+		t.Errorf("query %s vars %v", gotQuery, gotVars)
+	}
+	v, ok := views["u5"]
+	if len(views) != 1 || !ok || v.State != "MERGED" || v.Author != "someone" || v.Key != "MM-9" || v.URL != "https://github.com/mattermost/mattermost/pull/5" {
+		t.Errorf("views = %+v", views)
 	}
 }
 
@@ -1126,6 +1315,30 @@ func TestSnapshotVersion(t *testing.T) {
 	snap.Tasks[0].PR.CI = CIFailing
 	if got := snapshotVersion(snap); got == v {
 		t.Error("version should change when a task changes")
+	}
+}
+
+func TestIndexShowsStaleSources(t *testing.T) {
+	board := NewBoard(testConfig(t))
+	board.snap = Snapshot{
+		Updated: time.Now(),
+		Notices: []string{"GitHub paused until 15:04 (412 of 5,000 points left this hour); PRs as of 14:05"},
+		AsOf:    []string{"GitHub as of 14:05", "Jira as of 13:50"},
+		Errors:  []string{"Jira search: acli: exit status 1"},
+	}
+	req := httptest.NewRequest("GET", "/", nil)
+	req.Host = "localhost"
+	rec := httptest.NewRecorder()
+	newServer(board, "").ServeHTTP(rec, req)
+	body := rec.Body.String()
+	for _, want := range []string{
+		`<div class="notices" role="status"><p>GitHub paused until 15:04 (412 of 5,000 points left this hour); PRs as of 14:05</p></div>`,
+		`· GitHub as of 14:05, Jira as of 13:50</span>`,
+		`Some sources failed. The board shows their last good data where it has it.`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("page lacks %q", want)
+		}
 	}
 }
 

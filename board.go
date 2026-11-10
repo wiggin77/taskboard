@@ -22,6 +22,8 @@ type Snapshot struct {
 	Reviews  []PRLink
 	OtherPRs []PRLink
 	Errors   []string
+	Notices  []string
+	AsOf     []string
 	Updated  time.Time
 	Version  string
 }
@@ -36,6 +38,9 @@ type Board struct {
 
 	jiraDetails  map[string]jiraDetail
 	updatedCheck time.Time
+
+	ghPause ghPause
+	ghRate  ghRate
 
 	wake chan struct{}
 
@@ -228,11 +233,14 @@ type fetched struct {
 	resolved map[string]bool
 	missing  map[string]bool
 	children map[string][]JiraIssue
+	jiraAt   time.Time
+	github   ghData
+	started  time.Time
+	notices  []string
 	prs      []PR
 	reviews  []PRLink
 	otherPRs []PRLink
 	views    map[string]PRLink
-	login    string
 	errs     []string
 	updated  time.Time
 }
@@ -257,14 +265,17 @@ func (b *Board) refresh(ctx context.Context) {
 	}
 
 	gen := b.localGen.Load()
+	prev := b.lastFetched()
+	started := time.Now()
 	var (
 		wg       sync.WaitGroup
 		issues   []JiraIssue
 		resolved []JiraIssue
 		jiraErr  error
 		loc      localState
-		gh       ghResult
-		ghErr    error
+		ghd      ghData
+		ghErrs   []string
+		ghNotice string
 	)
 	wg.Add(3)
 	go func() {
@@ -282,29 +293,39 @@ func (b *Board) refresh(ctx context.Context) {
 	}()
 	go func() {
 		defer wg.Done()
-		gh, ghErr = fetchGitHub(ctx, cfg)
+		ghd, ghErrs, ghNotice = b.fetchGitHub(ctx, cfg, prev.github)
 	}()
 	wg.Wait()
+	gh := githubResult(cfg, ghd.login, ghd.found)
 	reviews := gh.reviews
 
+	now := time.Now()
 	r := &fetched{
 		cfg:      cfg,
 		issues:   map[string]JiraIssue{},
 		resolved: map[string]bool{},
+		jiraAt:   now,
+		github:   ghd,
+		started:  started,
 		prs:      gh.prs,
 		reviews:  reviews,
 		otherPRs: gh.others,
 		views:    map[string]PRLink{},
-		login:    gh.login,
+		errs:     ghErrs,
+	}
+	if ghNotice != "" {
+		r.notices = append(r.notices, ghNotice)
 	}
 	if jiraErr != nil {
+		r.issues, r.resolved, r.jiraAt = maps.Clone(prev.issues), maps.Clone(prev.resolved), prev.jiraAt
+		if r.issues == nil {
+			r.issues, r.resolved = map[string]JiraIssue{}, map[string]bool{}
+		}
 		r.errs = append(r.errs, "Jira search: "+jiraErr.Error())
-	}
-	if ghErr != nil {
-		r.errs = append(r.errs, "GitHub: "+ghErr.Error())
 	}
 	for _, is := range issues {
 		r.issues[is.Key] = is
+		delete(r.resolved, is.Key)
 	}
 	for _, is := range resolved {
 		r.issues[is.Key] = is
@@ -328,6 +349,9 @@ func (b *Board) refresh(ctx context.Context) {
 		is, ok, err := jiraGet(ctx, key)
 		if err != nil {
 			r.errs = append(r.errs, fmt.Sprintf("Jira %s: %v", key, err))
+			if is, ok := prev.issues[key]; ok {
+				r.issues[key] = is
+			}
 			continue
 		}
 		if !ok {
@@ -350,17 +374,38 @@ func (b *Board) refresh(ctx context.Context) {
 	childrenDone := make(chan struct{})
 	go func() {
 		defer close(childrenDone)
+		if jiraErr != nil {
+			r.children = prev.children
+			return
+		}
 		r.children, childErrs = epicChildren(ctx, epics)
+		for _, key := range epics {
+			if _, ok := r.children[key]; !ok && prev.children[key] != nil {
+				r.children[key] = prev.children[key]
+			}
+		}
 	}()
 
 	_, leftovers := attachReviews(cfg, reviews, loc.worktrees, loc.windows)
-	for _, l := range leftovers {
-		url := l.URL
-		if err := viewPR(ctx, cfg, &l); err != nil {
-			r.errs = append(r.errs, fmt.Sprintf("%s #%d: %v", l.Repo, l.Number, err))
-			continue
+	if len(leftovers) > 0 {
+		var gone map[string]bool
+		if !time.Now().Before(b.ghPause.until) {
+			var err error
+			if r.views, gone, err = viewPRs(ctx, ghGraphQL, cfg, leftovers); err != nil {
+				r.errs = append(r.errs, "GitHub review checkouts: "+err.Error())
+				if isRateLimited(err) {
+					b.pauseAfter(ctx, err, ghRate{}, time.Now())
+					r.notices = []string{b.ghPause.notice()}
+				}
+			}
 		}
-		r.views[url] = l
+		for _, l := range leftovers {
+			if _, ok := r.views[l.URL]; !ok && !gone[l.URL] {
+				if v, ok := prev.views[l.URL]; ok {
+					r.views[l.URL] = v
+				}
+			}
+		}
 	}
 
 	if jiraErr != nil {
@@ -375,6 +420,16 @@ func (b *Board) refresh(ctx context.Context) {
 	for _, e := range b.compose(ctx, r, &loc, gen) {
 		log.Print(e)
 	}
+}
+
+// lastFetched returns the last refresh's data, or an empty one before the first refresh.
+func (b *Board) lastFetched() *fetched {
+	b.composeMu.Lock()
+	defer b.composeMu.Unlock()
+	if b.fetched == nil {
+		return &fetched{}
+	}
+	return b.fetched
 }
 
 // LocalChanged shows a session action's result at once, from fresh local state and the last remote
@@ -405,7 +460,7 @@ func (b *Board) compose(ctx context.Context, r *fetched, loc *localState, gen ui
 		worktrees: loc.worktrees, plans: loc.plans, sessions: ticketSessions(loc.windows)}
 	tasks := buildTasks(r.cfg, s, time.Now())
 	reviews, leftovers := attachReviews(r.cfg, r.reviews, loc.worktrees, loc.windows)
-	reviews = withoutTaskPRs(reviews, tasks, r.login)
+	reviews = withoutTaskPRs(reviews, tasks, r.github.login)
 	for i, l := range leftovers {
 		if v, ok := r.views[l.URL]; ok {
 			v.Role, v.ReviewName, v.Review = l.Role, l.ReviewName, l.Review
@@ -413,7 +468,15 @@ func (b *Board) compose(ctx context.Context, r *fetched, loc *localState, gen ui
 		}
 	}
 	errs := append(slices.Clone(r.errs), loc.errs...)
-	snap := Snapshot{Tasks: tasks, Epics: buildEpics(r.cfg, tasks, r.children), Reviews: append(reviews, leftovers...), OtherPRs: r.otherPRs, Errors: errs, Updated: r.updated}
+	var stale []string
+	if at := r.github.staleSince(r.started); !at.IsZero() {
+		stale = append(stale, "GitHub as of "+asOf(at, r.updated))
+	}
+	if !r.jiraAt.IsZero() && r.jiraAt.Before(r.started) {
+		stale = append(stale, "Jira as of "+asOf(r.jiraAt, r.updated))
+	}
+	snap := Snapshot{Tasks: tasks, Epics: buildEpics(r.cfg, tasks, r.children), Reviews: append(reviews, leftovers...), OtherPRs: r.otherPRs,
+		Errors: errs, Notices: r.notices, AsOf: stale, Updated: r.updated}
 	snap.Version = snapshotVersion(snap)
 	b.mu.Lock()
 	b.snap = snap
@@ -607,7 +670,7 @@ func epicChildren(ctx context.Context, epics []string) (map[string][]JiraIssue, 
 
 // The version leaves out Updated so a refresh that finds nothing new does not reload open pages.
 func snapshotVersion(snap Snapshot) string {
-	b, err := json.Marshal([]any{snap.Tasks, snap.Epics, snap.Reviews, snap.OtherPRs, snap.Errors})
+	b, err := json.Marshal([]any{snap.Tasks, snap.Epics, snap.Reviews, snap.OtherPRs, snap.Errors, snap.Notices, snap.AsOf})
 	if err != nil {
 		return snap.Updated.String()
 	}
