@@ -83,7 +83,11 @@ type ghPRNode struct {
 		Nodes []struct {
 			Commit struct {
 				StatusCheckRollup struct {
+					State    string `json:"state"`
 					Contexts struct {
+						PageInfo struct {
+							HasNextPage bool `json:"hasNextPage"`
+						} `json:"pageInfo"`
 						Nodes []ghCheck `json:"nodes"`
 					} `json:"contexts"`
 				} `json:"statusCheckRollup"`
@@ -104,9 +108,14 @@ func (n ghPRNode) pr(cfg *Config, repo string) PR {
 	if key == "" {
 		key = cfg.findKey(n.Title)
 	}
-	var checks []ghCheck
+	var ci CIState
 	if len(n.Commits.Nodes) > 0 {
-		checks = n.Commits.Nodes[0].Commit.StatusCheckRollup.Contexts.Nodes
+		rollup := n.Commits.Nodes[0].Commit.StatusCheckRollup
+		ci = rollupCI(rollup.Contexts.Nodes)
+		// Only the first 100 checks are fetched; GitHub's overall state covers the rest.
+		if rollup.Contexts.PageInfo.HasNextPage {
+			ci = cmp.Or(rollupStateCI(rollup.State), ci)
+		}
 	}
 	return PR{
 		Repo:      repo,
@@ -119,7 +128,7 @@ func (n ghPRNode) pr(cfg *Config, repo string) PR {
 		State:     n.State,
 		Draft:     n.IsDraft,
 		Review:    n.ReviewDecision,
-		CI:        rollupCI(checks),
+		CI:        ci,
 		UpdatedAt: n.UpdatedAt,
 		MergedAt:  n.MergedAt,
 	}
@@ -174,6 +183,18 @@ func rollupCI(checks []ghCheck) CIState {
 		return CIPending
 	}
 	return CIPassing
+}
+
+func rollupStateCI(state string) CIState {
+	switch state {
+	case "SUCCESS":
+		return CIPassing
+	case "FAILURE", "ERROR":
+		return CIFailing
+	case "PENDING", "EXPECTED":
+		return CIPending
+	}
+	return CINone
 }
 
 // Declared in display order; sorting relies on it.
@@ -343,17 +364,15 @@ const (
 )
 
 // One fragment per kind keeps CI and review requests off searches that never show them.
-var prFragments = [...]string{
-	prOpen: `fragment openPR on PullRequest { number title url body headRefName headRefOid state isDraft reviewDecision updatedAt mergedAt
+var prFragments = [...]struct{ name, fields string }{
+	prOpen: {"openPR", `number title url body headRefName headRefOid state isDraft reviewDecision updatedAt mergedAt
   repository { nameWithOwner } author { login }
   reviewRequests(first: 50) { nodes { requestedReviewer { __typename ... on User { login } } } }
-  commits(last: 1) { nodes { commit { statusCheckRollup { contexts(first: 100) { nodes {
-    __typename ... on CheckRun { status conclusion } ... on StatusContext { state } } } } } } } }`,
-	prMerged: `fragment mergedPR on PullRequest { number title url headRefName headRefOid state isDraft reviewDecision updatedAt mergedAt repository { nameWithOwner } }`,
-	prLink:   `fragment linkPR on PullRequest { number title url body isDraft updatedAt state repository { nameWithOwner } author { login } }`,
+  commits(last: 1) { nodes { commit { statusCheckRollup { state contexts(first: 100) { pageInfo { hasNextPage } nodes {
+    __typename ... on CheckRun { status conclusion } ... on StatusContext { state } } } } } } }`},
+	prMerged: {"mergedPR", `number title url headRefName headRefOid state isDraft reviewDecision updatedAt mergedAt repository { nameWithOwner }`},
+	prLink:   {"linkPR", `number title url body isDraft updatedAt state repository { nameWithOwner } author { login }`},
 }
-
-var prFragmentNames = [...]string{prOpen: "openPR", prMerged: "mergedPR", prLink: "linkPR"}
 
 type prSearch struct {
 	query string
@@ -387,31 +406,37 @@ func prSearches(cfg *Config, now time.Time) []prSearch {
 	}
 }
 
-func searchQuery(searches []prSearch, pending []int, cursors []string, have [][]ghPRNode) (string, map[string]string) {
+type pageRequest struct {
+	search int
+	first  int
+	after  string
+}
+
+func searchQuery(searches []prSearch, pages []pageRequest) (string, map[string]string) {
 	var params, fields []string
 	vars := map[string]string{}
 	var used [len(prFragments)]bool
-	for _, i := range pending {
-		s := searches[i]
-		q := fmt.Sprintf("q%d", i)
+	for _, p := range pages {
+		s := searches[p.search]
+		q := fmt.Sprintf("q%d", p.search)
 		vars[q] = s.query
 		params = append(params, "$"+q+": String!")
 		after := ""
-		if cursors[i] != "" {
-			a := fmt.Sprintf("a%d", i)
-			vars[a] = cursors[i]
+		if p.after != "" {
+			a := fmt.Sprintf("a%d", p.search)
+			vars[a] = p.after
 			params = append(params, "$"+a+": String!")
 			after = ", after: $" + a
 		}
-		first := min(100, s.limit-len(have[i]))
 		fields = append(fields, fmt.Sprintf("s%d: search(type: ISSUE, query: $%s, first: %d%s) { pageInfo { hasNextPage endCursor } nodes { ...%s } }",
-			i, q, first, after, prFragmentNames[s.kind]))
+			p.search, q, p.first, after, prFragments[s.kind].name))
 		used[s.kind] = true
 	}
 	query := "query(" + strings.Join(params, ", ") + ") { viewer { login }\n" + strings.Join(fields, "\n") + " }"
 	for kind, ok := range used {
 		if ok {
-			query += "\n" + prFragments[kind]
+			f := prFragments[kind]
+			query += "\nfragment " + f.name + " on PullRequest { " + f.fields + " }"
 		}
 	}
 	return query, vars
@@ -454,14 +479,13 @@ func postGraphQL(ctx context.Context, post graphQLFunc, query string, vars map[s
 
 func runSearches(ctx context.Context, post graphQLFunc, searches []prSearch) (string, [][]ghPRNode, error) {
 	found := make([][]ghPRNode, len(searches))
-	cursors := make([]string, len(searches))
-	pending := make([]int, len(searches))
-	for i := range pending {
-		pending[i] = i
+	var pending []pageRequest
+	for i, s := range searches {
+		pending = append(pending, pageRequest{search: i, first: min(100, s.limit)})
 	}
 	var login string
 	for len(pending) > 0 {
-		query, vars := searchQuery(searches, pending, cursors, found)
+		query, vars := searchQuery(searches, pending)
 		data, err := postGraphQL(ctx, post, query, vars)
 		if err != nil {
 			return "", nil, err
@@ -473,8 +497,9 @@ func runSearches(ctx context.Context, post graphQLFunc, searches []prSearch) (st
 			return "", nil, fmt.Errorf("viewer: %w", err)
 		}
 		login = viewer.Login
-		var next []int
-		for _, i := range pending {
+		var next []pageRequest
+		for _, p := range pending {
+			i := p.search
 			var page struct {
 				PageInfo struct {
 					HasNextPage bool   `json:"hasNextPage"`
@@ -486,9 +511,11 @@ func runSearches(ctx context.Context, post graphQLFunc, searches []prSearch) (st
 				return "", nil, fmt.Errorf("search %q: %w", searches[i].query, err)
 			}
 			found[i] = append(found[i], page.Nodes...)
-			if page.PageInfo.HasNextPage && len(found[i]) < searches[i].limit {
-				cursors[i] = page.PageInfo.EndCursor
-				next = append(next, i)
+			left := searches[i].limit - len(found[i])
+			// A page that adds nothing or doesn't move the cursor would otherwise repeat forever.
+			moved := len(page.Nodes) > 0 && page.PageInfo.EndCursor != "" && page.PageInfo.EndCursor != p.after
+			if page.PageInfo.HasNextPage && moved && left > 0 {
+				next = append(next, pageRequest{search: i, first: min(100, left), after: page.PageInfo.EndCursor})
 			}
 		}
 		pending = next

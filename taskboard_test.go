@@ -324,6 +324,63 @@ func TestRunSearches(t *testing.T) {
 	}
 }
 
+func TestRunSearchesStopsWithoutProgress(t *testing.T) {
+	for _, c := range []struct {
+		name  string
+		pages []string
+		want  int
+	}{
+		{"empty page", []string{`{"pageInfo": {"hasNextPage": true, "endCursor": "c1"}, "nodes": []}`}, 1},
+		{"no cursor", []string{`{"pageInfo": {"hasNextPage": true, "endCursor": null}, "nodes": [{"number": 1}]}`}, 1},
+		{"same cursor", []string{
+			`{"pageInfo": {"hasNextPage": true, "endCursor": "c1"}, "nodes": [{"number": 1}]}`,
+			`{"pageInfo": {"hasNextPage": true, "endCursor": "c1"}, "nodes": [{"number": 2}]}`,
+		}, 2},
+	} {
+		requests := 0
+		post := func(context.Context, string, map[string]string) ([]byte, error) {
+			if requests == len(c.pages) {
+				t.Fatalf("%s: request %d made after the search stopped moving", c.name, requests+1)
+			}
+			requests++
+			return []byte(`{"data": {"viewer": {"login": "me"}, "s0": ` + c.pages[requests-1] + `}}`), nil
+		}
+		if _, _, err := runSearches(context.Background(), post, []prSearch{{"q", searchMax, prOpen}}); err != nil {
+			t.Fatal(err)
+		}
+		if requests != c.want {
+			t.Errorf("%s: %d requests, want %d", c.name, requests, c.want)
+		}
+	}
+}
+
+func TestCIBeyondFirstChecks(t *testing.T) {
+	node := func(truncated bool, state string) ghPRNode {
+		var n ghPRNode
+		js := fmt.Sprintf(`{"commits": {"nodes": [{"commit": {"statusCheckRollup": {"state": %q, "contexts": {
+			"pageInfo": {"hasNextPage": %v}, "nodes": [{"__typename": "CheckRun", "status": "COMPLETED", "conclusion": "SUCCESS"}]}}}}]}}`, state, truncated)
+		if err := json.Unmarshal([]byte(js), &n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	cfg := testConfig(t)
+	for _, c := range []struct {
+		truncated bool
+		state     string
+		want      CIState
+	}{
+		{false, "FAILURE", CIPassing},
+		{true, "FAILURE", CIFailing},
+		{true, "PENDING", CIPending},
+		{true, "", CIPassing},
+	} {
+		if got := node(c.truncated, c.state).pr(cfg, "a/b").CI; got != c.want {
+			t.Errorf("truncated %v, state %q: CI %v, want %v (GitHub's state only stands in for checks past the first 100)", c.truncated, c.state, got, c.want)
+		}
+	}
+}
+
 func TestReviewRowsForTaskPRs(t *testing.T) {
 	links := []PRLink{
 		{Repo: "Mattermost/Mattermost", Number: 12, Role: RoleRequested},
