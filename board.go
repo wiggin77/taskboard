@@ -41,8 +41,6 @@ type Board struct {
 
 	highlights *highlights
 
-	login string
-
 	composeMu sync.Mutex
 	fetched   *fetched
 	localGen  atomic.Uint64
@@ -259,20 +257,16 @@ func (b *Board) refresh(ctx context.Context) {
 	}
 
 	gen := b.localGen.Load()
-	login, loginErr := b.githubLogin(ctx)
 	var (
-		wg        sync.WaitGroup
-		issues    []JiraIssue
-		resolved  []JiraIssue
-		jiraErr   error
-		loc       localState
-		reviews   []PRLink
-		otherPRs  []PRLink
-		prLinkErr error
-		prs       = make([][]PR, len(cfg.Repos))
-		prErrs    = make([][]string, len(cfg.Repos))
+		wg       sync.WaitGroup
+		issues   []JiraIssue
+		resolved []JiraIssue
+		jiraErr  error
+		loc      localState
+		gh       ghResult
+		ghErr    error
 	)
-	wg.Add(3 + len(cfg.Repos))
+	wg.Add(3)
 	go func() {
 		defer wg.Done()
 		issues, jiraErr = jiraSearch(ctx, cfg.jql())
@@ -288,33 +282,26 @@ func (b *Board) refresh(ctx context.Context) {
 	}()
 	go func() {
 		defer wg.Done()
-		reviews, otherPRs, prLinkErr = listPRLinks(ctx, cfg)
+		gh, ghErr = fetchGitHub(ctx, cfg)
 	}()
-	for i, repo := range cfg.Repos {
-		go func() {
-			defer wg.Done()
-			prs[i], prErrs[i] = repoPRs(ctx, cfg, repo, login)
-		}()
-	}
 	wg.Wait()
+	reviews := gh.reviews
 
 	r := &fetched{
 		cfg:      cfg,
 		issues:   map[string]JiraIssue{},
 		resolved: map[string]bool{},
+		prs:      gh.prs,
 		reviews:  reviews,
-		otherPRs: otherPRs,
+		otherPRs: gh.others,
 		views:    map[string]PRLink{},
-		login:    login,
+		login:    gh.login,
 	}
 	if jiraErr != nil {
 		r.errs = append(r.errs, "Jira search: "+jiraErr.Error())
 	}
-	if prLinkErr != nil {
-		r.errs = append(r.errs, "GitHub search: "+prLinkErr.Error())
-	}
-	if loginErr != nil {
-		r.errs = append(r.errs, "GitHub login: "+loginErr.Error())
+	if ghErr != nil {
+		r.errs = append(r.errs, "GitHub: "+ghErr.Error())
 	}
 	for _, is := range issues {
 		r.issues[is.Key] = is
@@ -322,10 +309,6 @@ func (b *Board) refresh(ctx context.Context) {
 	for _, is := range resolved {
 		r.issues[is.Key] = is
 		r.resolved[is.Key] = true
-	}
-	for i := range prs {
-		r.prs = append(r.prs, prs[i]...)
-		r.errs = append(r.errs, prErrs[i]...)
 	}
 
 	var recheck, view []string
@@ -468,63 +451,6 @@ func (b *Board) keepUnlisted(issues map[string]JiraIssue, key string, is JiraIss
 	} else {
 		b.unlistedOpen[key] = true
 	}
-}
-
-// githubLogin is cached for the life of the process; only refresh calls it, and refreshes don't overlap.
-func (b *Board) githubLogin(ctx context.Context) (string, error) {
-	if b.login == "" {
-		out, err := runCmd(ctx, "", "gh", "api", "user", "--jq", ".login")
-		if err != nil {
-			return "", err
-		}
-		b.login = strings.TrimSpace(string(out))
-	}
-	return b.login, nil
-}
-
-func repoPRs(ctx context.Context, cfg *Config, repo RepoConfig, login string) ([]PR, []string) {
-	cutoff := time.Now().AddDate(0, 0, -cfg.DoneDays).Format("2006-01-02")
-	var (
-		wg           sync.WaitGroup
-		assigned     []PR
-		assignedErrs []string
-	)
-	wg.Go(func() {
-		assigned, assignedErrs = listMyPRs(ctx, cfg, repo.Name, "assigned ", cfg.assignedSearch(), cutoff, 0)
-	})
-	authored, authoredErrs := listMyPRs(ctx, cfg, repo.Name, "", "author:@me", cutoff, cfg.MergedPRLimit)
-	wg.Wait()
-	markAssigned(assigned, login)
-	return append(authored, assigned...), append(authoredErrs, assignedErrs...)
-}
-
-func listMyPRs(ctx context.Context, cfg *Config, repo, label, search, cutoff string, mergedLimit int) ([]PR, []string) {
-	var errs []string
-	open, err := listPRs(ctx, cfg, repo, "open", 100, search)
-	if err != nil {
-		errs = append(errs, fmt.Sprintf("%s open %sPRs: %v", repo, label, err))
-	}
-	var merged []PR
-	if mergedLimit > 0 {
-		merged, err = listPRs(ctx, cfg, repo, "merged", mergedLimit, search)
-		if err != nil {
-			errs = append(errs, fmt.Sprintf("%s merged %sPRs: %v", repo, label, err))
-		}
-	}
-	recent, err := listPRs(ctx, cfg, repo, "merged", 100, search+" merged:>="+cutoff)
-	if err != nil {
-		errs = append(errs, fmt.Sprintf("%s recently merged %sPRs: %v", repo, label, err))
-	}
-	seen := map[int]bool{}
-	for _, pr := range merged {
-		seen[pr.Number] = true
-	}
-	for _, pr := range recent {
-		if !seen[pr.Number] {
-			merged = append(merged, pr)
-		}
-	}
-	return append(open, merged...), errs
 }
 
 func scanLocal(ctx context.Context, cfg *Config) localState {
