@@ -93,6 +93,14 @@ func taskGroup(t Task) string {
 
 func (t Task) NeedsCleanup() bool { return t.Stage == StageCleanup }
 
+// removableWorktree is nil for a main checkout, which clean-up leaves in place.
+func (t Task) removableWorktree() *Worktree {
+	if t.Worktree == nil || t.Worktree.Main {
+		return nil
+	}
+	return t.Worktree
+}
+
 func (t Task) CanStart() bool {
 	if t.NoTicket || t.Session != nil {
 		return false
@@ -143,7 +151,7 @@ func (t Task) Track() []Stop {
 
 func stageFor(t *Task) Stage {
 	st := progressStage(t)
-	if st == StageDone && (t.Worktree != nil || t.Session != nil) {
+	if st == StageDone && (t.removableWorktree() != nil || t.Session != nil) {
 		return StageCleanup
 	}
 	return st

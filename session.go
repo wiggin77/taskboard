@@ -427,15 +427,16 @@ func checkWorktree(ctx context.Context, wt Worktree, pr *PR) (Removal, error) {
 
 // cleanup keeps a branch with unpushed commits even when forced, so an override only loses uncommitted changes.
 func cleanup(ctx context.Context, cfg *Config, t Task, force bool) (Removal, error) {
-	rm, r, err := removeWorktree(ctx, cfg, t.Worktree, t.Session, t.PR, force)
-	if err != nil || t.Worktree == nil || t.Worktree.Branch == "" {
+	wt := t.removableWorktree()
+	rm, r, err := removeWorktree(ctx, cfg, wt, t.Session, t.PR, force)
+	if err != nil || wt == nil || wt.Branch == "" {
 		return rm, err
 	}
 	if len(rm.Unpushed) > 0 {
-		rm.Kept = t.Worktree.Branch
+		rm.Kept = wt.Branch
 		return rm, nil
 	}
-	_, err = runCmd(ctx, r.Dir(), "git", "branch", "-D", t.Worktree.Branch)
+	_, err = runCmd(ctx, r.Dir(), "git", "branch", "-D", wt.Branch)
 	return rm, err
 }
 

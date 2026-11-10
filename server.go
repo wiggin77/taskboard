@@ -164,6 +164,9 @@ func taskControls(t Task, d indexData) controls {
 	}
 	if d.CanAct && t.NeedsCleanup() {
 		c.Clean = "Clean up: close the session, remove the worktree and branch"
+		if t.removableWorktree() == nil {
+			c.Clean = "Clean up: close the session"
+		}
 	}
 	return c
 }
