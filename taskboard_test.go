@@ -288,6 +288,11 @@ func TestGitHubResultPrefersFresherCopy(t *testing.T) {
 	if prs := githubResult(testConfig(t), "me", found).prs; len(prs) != 1 || prs[0].State != "MERGED" {
 		t.Errorf("prs = %+v, want only the merged copy, since an older open copy can come from a search that fell back", prs)
 	}
+	found[searchMineMerged] = nil
+	found[searchAssignedOpen] = []ghPRNode{node("OPEN", 300)}
+	if prs := githubResult(testConfig(t), "me", found).prs; len(prs) != 1 || prs[0].UpdatedAt.Unix() != 300 || prs[0].Assigned {
+		t.Errorf("prs = %+v, want the fresher copy, still counted as authored rather than assigned", prs)
+	}
 }
 
 func TestPauseAfter(t *testing.T) {
@@ -454,11 +459,15 @@ func TestSearchFallback(t *testing.T) {
 	if d := res.withFallback(ghData{}, now); d.found[1] != nil || !d.staleSince(now).IsZero() {
 		t.Errorf("first refresh: found %v; want nothing to fall back to", d.found)
 	}
+	partial := searchResult{found: [][]ghPRNode{nil, {{Number: 4}}, nil}, failed: []bool{false, true, true}}
+	if d := partial.withFallback(ghData{}, now); len(d.found[1]) != 1 || !d.at[1].IsZero() {
+		t.Errorf("first refresh, later page failed: found %v, at %v; want the pages that came back, not marked fresh", d.found, d.at)
+	}
 }
 
 func TestPauseNotice(t *testing.T) {
 	now := time.Date(2026, 11, 10, 14, 31, 0, 0, time.Local)
-	p := ghPause{}.next(nil, ghRate{5000, 412, now.Add(33 * time.Minute)}, time.Time{}, now)
+	p := ghPause{}.next(nil, ghRate{5000, 412, now.Add(33 * time.Minute).UTC()}, time.Time{}, now)
 	fresh := ghData{at: []time.Time{now}}
 	if got, want := p.notice(fresh, now), "GitHub paused until 15:04 (412 of 5,000 points left this hour)"; got != want {
 		t.Errorf("notice = %q, want %q", got, want)

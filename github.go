@@ -568,13 +568,12 @@ type ghData struct {
 }
 
 func (res searchResult) withFallback(prev ghData, now time.Time) ghData {
-	d := ghData{login: cmp.Or(res.login, prev.login), found: res.found, at: make([]time.Time, len(res.found))}
+	d := ghData{login: cmp.Or(res.login, prev.login), found: slices.Clone(res.found), at: make([]time.Time, len(res.found))}
 	for i := range d.found {
 		if !res.failed[i] {
 			d.at[i] = now
 			continue
 		}
-		d.found[i] = nil
 		if i < len(prev.found) && !prev.at[i].IsZero() {
 			d.found[i], d.at[i] = prev.found[i], prev.at[i]
 		}
@@ -659,7 +658,7 @@ func thousands(n int) string {
 }
 
 func (p ghPause) notice(data ghData, now time.Time) string {
-	msg := fmt.Sprintf("GitHub paused until %s (%s)", p.until.Format("15:04"), p.reason)
+	msg := fmt.Sprintf("GitHub paused until %s (%s)", p.until.Local().Format("15:04"), p.reason)
 	if at := data.staleSince(now); !at.IsZero() {
 		msg += "; PRs as of " + asOf(at, now)
 	}
@@ -721,9 +720,13 @@ func githubResult(cfg *Config, login string, found [][]ghPRNode) ghResult {
 				pr.ReviewRequested = n.requests(login)
 			}
 			// A search that fell back to old results can hold an older copy of a PR another search just returned.
+			// The earlier search still decides whether it counts as assigned, as it does when both are fresh.
 			ref := refOf(repo.Name, n.Number)
 			if j, ok := index[ref]; ok {
 				if pr.UpdatedAt.After(res.prs[j].UpdatedAt) {
+					if !res.prs[j].Assigned {
+						pr.Assigned, pr.ReviewRequested = false, false
+					}
 					res.prs[j] = pr
 				}
 				continue

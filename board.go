@@ -325,6 +325,7 @@ func (b *Board) refresh(ctx context.Context) {
 	}
 	for _, is := range issues {
 		r.issues[is.Key] = is
+		delete(r.resolved, is.Key)
 	}
 	for _, is := range resolved {
 		r.issues[is.Key] = is
@@ -394,7 +395,7 @@ func (b *Board) refresh(ctx context.Context) {
 				if isRateLimited(err) {
 					now := time.Now()
 					b.pauseAfter(ctx, err, ghRate{}, now)
-					r.notices = []string{b.ghPause.notice(r.github, now)}
+					r.notices = []string{b.ghPause.notice(r.github, r.started)}
 				}
 			}
 		}
