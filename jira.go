@@ -107,7 +107,7 @@ func decodeIssues(out []byte) ([]JiraIssue, error) {
 // jiraGet returns ok=false when the issue does not exist or is not visible to the user.
 func jiraGet(ctx context.Context, key string) (JiraIssue, bool, error) {
 	out, err := runCmd(ctx, "", "acli", "jira", "workitem", "view", key,
-		"--fields", "summary,status,updated,issuetype,parent", "--json")
+		"--fields", "summary,status,updated,issuetype,parent,assignee", "--json")
 	if err != nil {
 		if isNotFound(err) {
 			return JiraIssue{}, false, nil

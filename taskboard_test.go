@@ -2366,6 +2366,58 @@ func TestDecodeEpicFields(t *testing.T) {
 	}
 }
 
+func TestChangedJQL(t *testing.T) {
+	for _, c := range []struct {
+		keys, epics []string
+		want        string
+	}{
+		{[]string{"MM-1", "MM-2"}, nil, "(key in (MM-1,MM-2)) AND updated >= -7m"},
+		{nil, []string{"MM-10"}, "(parent in (MM-10)) AND updated >= -7m"},
+		{[]string{"MM-1"}, []string{"MM-10", "MM-20"}, "(key in (MM-1) OR parent in (MM-10,MM-20)) AND updated >= -7m"},
+	} {
+		if got := changedJQL(c.keys, c.epics, 7); got != c.want {
+			t.Errorf("changedJQL(%v, %v) = %q, want %q", c.keys, c.epics, got, c.want)
+		}
+	}
+}
+
+func TestMoveChild(t *testing.T) {
+	a := []JiraIssue{{Key: "MM-1"}, {Key: "MM-2"}}
+	children := map[string][]JiraIssue{"MM-10": a, "MM-20": {{Key: "MM-3"}}}
+	keys := func(epic string) []string {
+		var ks []string
+		for _, c := range children[epic] {
+			ks = append(ks, c.Key)
+		}
+		return ks
+	}
+
+	moveChild(children, "MM-2", JiraIssue{Key: "MM-2", Summary: "Renamed", Parent: "MM-10"}, true)
+	if got := keys("MM-10"); !slices.Equal(got, []string{"MM-2", "MM-1"}) || children["MM-10"][0].Summary != "Renamed" {
+		t.Errorf("changed in place: MM-10 = %v, want MM-2 first with its new summary", children["MM-10"])
+	}
+	if a[0].Key != "MM-1" || a[1].Key != "MM-2" {
+		t.Errorf("the old list was changed in place: %v", a)
+	}
+
+	moveChild(children, "MM-1", JiraIssue{Key: "MM-1", Parent: "MM-20"}, true)
+	if !slices.Equal(keys("MM-10"), []string{"MM-2"}) || !slices.Equal(keys("MM-20"), []string{"MM-1", "MM-3"}) {
+		t.Errorf("moved: %v", children)
+	}
+
+	moveChild(children, "MM-4", JiraIssue{Key: "MM-4", Parent: "MM-10"}, true)
+	moveChild(children, "MM-5", JiraIssue{Key: "MM-5", Parent: "MM-99"}, true)
+	if !slices.Equal(keys("MM-10"), []string{"MM-4", "MM-2"}) || len(children) != 2 {
+		t.Errorf("new child of a cached epic, then of an epic not cached: %v", children)
+	}
+
+	moveChild(children, "MM-3", JiraIssue{}, false)
+	moveChild(children, "MM-2", JiraIssue{Key: "MM-2"}, true)
+	if !slices.Equal(keys("MM-20"), []string{"MM-1"}) || !slices.Equal(keys("MM-10"), []string{"MM-4"}) {
+		t.Errorf("deleted, then moved out of every epic: %v", children)
+	}
+}
+
 func TestBuildTasksEpicFields(t *testing.T) {
 	cfg := testConfig(t)
 	tasks := buildTasks(cfg, sources{issues: map[string]JiraIssue{
