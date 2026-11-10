@@ -5,27 +5,43 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io/fs"
 	"log"
 	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 )
 
 func main() {
-	if len(os.Args) > 1 && os.Args[1] == "certs" {
-		if err := runCerts(os.Args[2:]); err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			os.Exit(1)
+	if len(os.Args) > 1 {
+		run := map[string]func([]string) error{"certs": runCerts, "init": runInit}[os.Args[1]]
+		if run != nil {
+			if err := run(os.Args[2:]); err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(1)
+			}
+			return
 		}
-		return
 	}
 	configPath := flag.String("config", "taskboard.json", "path to the config file")
+	flag.Usage = func() {
+		fmt.Fprintf(flag.CommandLine.Output(), `usage:
+  taskboard [-config FILE]                           start the board
+  taskboard init [TEMPLATE] [-config FILE] [-force]  write a starter config (TEMPLATE: %s)
+  taskboard certs init|server|client ...             manage certificates for remote access
+`, strings.Join(templateNames(), ", "))
+		flag.PrintDefaults()
+	}
 	flag.Parse()
 
 	cfg, err := LoadConfig(*configPath)
+	if errors.Is(err, fs.ErrNotExist) {
+		log.Fatalf("%s not found. Create it with `taskboard init`, or `taskboard init mattermost` at Mattermost.", *configPath)
+	}
 	if err != nil {
 		log.Fatal(err)
 	}
