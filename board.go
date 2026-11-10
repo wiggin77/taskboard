@@ -37,6 +37,8 @@ type Board struct {
 
 	jiraDetails  map[string]jiraDetail
 	children     map[string][]JiraIssue
+	retryViews   map[string]bool
+	retryEpics   map[string]bool
 	updatedCheck time.Time
 	fullCheck    time.Time
 
@@ -70,6 +72,8 @@ func NewBoard(cfg *Config) *Board {
 		unlistedOpen:  map[string]JiraIssue{},
 		jiraDetails:   map[string]jiraDetail{},
 		children:      map[string][]JiraIssue{},
+		retryViews:    map[string]bool{},
+		retryEpics:    map[string]bool{},
 		cachesReset:   time.Now(),
 		wake:          make(chan struct{}, 1),
 		highlights:    &highlights{ids: map[string]bool{}},
@@ -550,11 +554,8 @@ func detailOf(is JiraIssue) jiraDetail {
 
 const fullCheckEvery = time.Hour
 
-// updateJira views the issues in view, and fills in what acli search cannot return (the updated and parent
-// fields) with one view per issue. Those details, open issues outside the JQL (recheck) and epic children
-// are cached, and one search for what changed since the last check decides which issues to view again.
-// Moving an issue to another epic changes its updated date, so that search catches new parents too. Deleted
-// issues never show up in it, so with full every open epic's children are searched again.
+// acli search cannot return the updated or parent fields, so they come from one view per issue. Deleted issues
+// never show up in the search for changes, so with full every open epic's children are searched again.
 func (b *Board) updateJira(ctx context.Context, issues, prevIssues map[string]JiraIssue, recheck, view []string, full bool) (map[string][]JiraIssue, []string) {
 	checked := time.Now()
 	if b.updatedCheck.IsZero() {
@@ -574,24 +575,35 @@ func (b *Board) updateJira(ctx context.Context, issues, prevIssues map[string]Ji
 			watch[key] = true
 		}
 	}
-	for _, kids := range b.children {
-		for _, c := range kids {
-			watch[c.Key] = true
+	var epics []string
+	if !full {
+		epics = slices.Sorted(maps.Keys(b.children))
+		// Only a child moved out of its epic needs its key listed, and done children rarely move.
+		for _, kids := range b.children {
+			for _, c := range kids {
+				if !c.Done {
+					watch[c.Key] = true
+				}
+			}
 		}
 	}
 
 	var errs []string
-	changed := map[string]bool{}
-	if epics := slices.Sorted(maps.Keys(b.children)); len(watch) > 0 || len(epics) > 0 {
+	changed := maps.Clone(b.retryViews)
+	if len(watch) > 0 || len(epics) > 0 {
 		mins := int(checked.Sub(b.updatedCheck).Minutes()) + 2
 		found, err := jiraSearch(ctx, changedJQL(slices.Sorted(maps.Keys(watch)), epics, mins))
 		if err != nil {
 			errs = append(errs, "Jira changes: "+err.Error())
 		}
 		for _, is := range found {
-			changed[is.Key], lookup[is.Key] = true, true
+			changed[is.Key] = true
 		}
 	}
+	if len(errs) == 0 {
+		b.updatedCheck = checked
+	}
+	maps.Copy(lookup, changed)
 
 	keys := slices.Sorted(maps.Keys(lookup))
 	got := make([]JiraIssue, len(keys))
@@ -607,16 +619,21 @@ func (b *Board) updateJira(ctx context.Context, issues, prevIssues map[string]Ji
 		})
 	}
 	wg.Wait()
+	var moved []int
+	clear(b.retryViews)
 	for i, key := range keys {
 		if getErrs[i] != nil {
 			errs = append(errs, fmt.Sprintf("Jira %s: %v", key, getErrs[i]))
 			if is, found := prevIssues[key]; found && viewed[key] {
 				issues[key] = is
 			}
+			if changed[key] {
+				b.retryViews[key] = true
+			}
 			continue
 		}
 		if changed[key] {
-			moveChild(b.children, key, got[i], ok[i])
+			moved = append(moved, i)
 		}
 		switch {
 		case !viewed[key] && !rechecked[key]:
@@ -631,8 +648,10 @@ func (b *Board) updateJira(ctx context.Context, issues, prevIssues map[string]Ji
 			b.jiraDetails[key] = detailOf(got[i])
 		}
 	}
-	if len(errs) == 0 {
-		b.updatedCheck = checked
+	// moveChild puts each child first, so the most recently updated goes last.
+	slices.SortStableFunc(moved, func(i, j int) int { return got[i].Updated.Compare(got[j].Updated) })
+	for _, i := range moved {
+		moveChild(b.children, keys[i], got[i], ok[i])
 	}
 	for key := range b.jiraDetails {
 		if _, listed := issues[key]; !listed {
@@ -641,24 +660,37 @@ func (b *Board) updateJira(ctx context.Context, issues, prevIssues map[string]Ji
 	}
 	b.applyJiraDetails(issues)
 
-	var open, search []string
+	open := map[string]bool{}
 	for key, is := range issues {
 		if is.Epic && !is.Done {
-			open = append(open, key)
+			open[key] = true
 		}
 	}
 	for epic := range b.children {
-		if !slices.Contains(open, epic) {
+		if !open[epic] {
 			delete(b.children, epic)
 		}
 	}
-	for _, epic := range open {
-		if _, cached := b.children[epic]; full || !cached {
+	for epic := range b.retryEpics {
+		if !open[epic] {
+			delete(b.retryEpics, epic)
+		}
+	}
+	var search []string
+	for epic := range open {
+		if _, cached := b.children[epic]; full || !cached || b.retryEpics[epic] {
 			search = append(search, epic)
 		}
 	}
 	slices.Sort(search)
 	found, childErrs := epicChildren(ctx, search)
+	for _, epic := range search {
+		if _, ok := found[epic]; ok {
+			delete(b.retryEpics, epic)
+		} else {
+			b.retryEpics[epic] = true
+		}
+	}
 	maps.Copy(b.children, found)
 	if full {
 		b.fullCheck = checked
