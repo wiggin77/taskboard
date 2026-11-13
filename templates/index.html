@@ -163,7 +163,7 @@ a:hover{text-decoration:underline}
       </a>{{end}}
     </div>
   </div>
-  {{with .Nav}}<nav class="jump" aria-label="Sections"><a href="#" class="to-highlight" title="Jump to the next highlighted item" hidden>Highlighted <span class="count"></span></a>{{range .}}<a href="#{{slug .Name}}"{{with .Tone}} class="tone-{{.}}"{{end}}>{{.Name}} <span class="count">{{.Count}}</span></a>{{end}}</nav>{{end}}
+  {{with .Nav}}<nav class="jump" aria-label="Sections"><a href="#highlighted" class="to-highlight" hidden>Highlighted <span class="count"></span></a>{{range .}}<a href="#{{slug .Name}}"{{with .Tone}} class="tone-{{.}}"{{end}}>{{.Name}} <span class="count">{{.Count}}</span></a>{{end}}</nav>{{end}}
 </header>
 
 {{with .Notices}}
@@ -180,6 +180,10 @@ a:hover{text-decoration:underline}
 {{if and (not .Sections) (not .Updated.IsZero)}}
 <p class="empty">No tasks yet. Check jira.jql, project_keys and repos in your config.</p>
 {{end}}
+
+<section id="highlighted" hidden>
+  <details open><summary>Highlighted <span class="count"></span></summary><ul class="tasks"></ul></details>
+</section>
 
 {{$stations := .Stations}}
 {{range .Sections}}
@@ -322,52 +326,52 @@ function setHighlighted(card, on) {
   button.title = label;
   button.setAttribute("aria-label", label);
 }
-// An epic with work of its own has a row in its stage section and another in its epic group.
-function highlightedCards() {
+const highlightSection = document.getElementById("highlighted");
+let shownHighlights = "";
+// An epic with work of its own has a row in its stage section and another in its epic group; copy only one.
+function showHighlights() {
   const seen = new Set();
-  return [...document.querySelectorAll(".task.highlighted")].filter(c => !seen.has(c.dataset.id) && seen.add(c.dataset.id));
-}
-function countHighlights() {
+  const rows = [...document.querySelectorAll(".task.highlighted")]
+    .filter(c => !highlightSection.contains(c) && !seen.has(c.dataset.id) && seen.add(c.dataset.id));
+  const ids = rows.map(c => c.dataset.id).join(" ");
+  if (ids === shownHighlights) return;
+  shownHighlights = ids;
+  highlightSection.querySelector("ul").replaceChildren(...rows.map(c => c.cloneNode(true)));
+  highlightSection.querySelector(".count").textContent = rows.length;
+  highlightSection.hidden = rows.length === 0;
   if (!highlightChip) return;
-  const n = highlightedCards().length;
-  highlightChip.hidden = n === 0;
-  highlightChip.querySelector(".count").textContent = n;
+  highlightChip.hidden = rows.length === 0;
+  highlightChip.querySelector(".count").textContent = rows.length;
 }
 function applyHighlights(ids) {
   const set = new Set(ids);
   for (const card of cards()) setHighlighted(card, set.has(card.dataset.id));
-  countHighlights();
+  showHighlights();
 }
 async function toggleHighlight(button) {
   const id = button.closest(".task").dataset.id;
   const on = !button.closest(".task").classList.contains("highlighted");
-  const same = [...cards()].filter(c => c.dataset.id === id);
-  for (const card of same) setHighlighted(card, on);
-  countHighlights();
+  const same = () => [...cards()].filter(c => c.dataset.id === id);
+  for (const card of same()) setHighlighted(card, on);
+  showHighlights();
   const r = await post("/highlight", { id, on: on ? "1" : "0" });
   if (r.ok) {
     if (!pending) applyHighlights(r.body.highlights);
     return;
   }
-  for (const card of same) setHighlighted(card, !on);
-  countHighlights();
-  flashIcon(button, "err", "Could not save the highlight");
+  for (const card of same()) setHighlighted(card, !on);
+  showHighlights();
+  for (const card of same()) {
+    const mark = card.querySelector("[data-highlight]");
+    if (mark) flashIcon(mark, "err", "Could not save the highlight");
+  }
 }
-let lastHighlight = -1;
 function reveal(card) {
   for (let d = card.closest("details"); d; d = d.parentElement.closest("details")) d.open = true;
   card.scrollIntoView({ block: "center" });
 }
-function nextHighlight() {
-  const list = highlightedCards();
-  if (!list.length) return;
-  lastHighlight = (lastHighlight + 1) % list.length;
-  const card = list[lastHighlight];
-  reveal(card);
-  card.querySelector("[data-highlight]")?.focus({ preventScroll: true });
-}
 function goToRow(key) {
-  const card = [...cards()].find(c => c.dataset.id === key && !c.closest("#epics"));
+  const card = [...cards()].find(c => c.dataset.id === key && !c.closest("#epics, #highlighted"));
   if (!card) return;
   reveal(card);
   card.classList.add("jumped");
@@ -378,10 +382,6 @@ applyHighlights({{.Highlights}});
 document.addEventListener("click", async (e) => {
   const mark = e.target.closest("[data-highlight]");
   if (mark) return toggleHighlight(mark);
-  if (e.target.closest(".to-highlight")) {
-    e.preventDefault();
-    return nextHighlight();
-  }
   const jump = e.target.closest(".jump a");
   if (jump) {
     document.querySelector(jump.getAttribute("href") + " > details")?.setAttribute("open", "");
