@@ -78,14 +78,20 @@ const sendSize = () => send(JSON.stringify({ cols: term.cols, rows: term.rows })
 const ctrlButton = document.getElementById("ctrl");
 let ctrl = false;
 const setCtrl = on => { ctrl = on; ctrlButton.setAttribute("aria-pressed", on); };
-const withCtrl = d => {
-  const c = d.length === 1 ? d.toUpperCase().charCodeAt(0) : 0;
-  return c >= 64 && c <= 95 ? String.fromCharCode(c - 64) : d;
+const ctrlChar = ch => {
+  if (ch === " ") return "\0";
+  if (ch === "?") return "\x7f";
+  const c = ch.charCodeAt(0);
+  if (c >= 64 && c <= 95) return String.fromCharCode(c - 64);
+  if (c >= 97 && c <= 122) return String.fromCharCode(c - 96);
+  return ch;
 };
+// Escape sequences come from xterm itself (focus and mouse reports), not from the key Ctrl is waiting for.
+// On-screen keyboards can deliver several characters at once, so Ctrl goes to the first.
 term.onData(d => {
-  if (ctrl) {
+  if (ctrl && !d.startsWith("\x1b")) {
     setCtrl(false);
-    d = withCtrl(d);
+    d = ctrlChar(d[0]) + d.slice(1);
   }
   send(encoder.encode(d));
 });
@@ -100,9 +106,10 @@ keys.addEventListener("click", e => {
   if (!b) return;
   if (b === ctrlButton) setCtrl(!ctrl);
   else {
-    setCtrl(false);
     const k = b.dataset.key;
-    send(encoder.encode(fixedKeys[k] ?? (term.modes.applicationCursorKeysMode ? "\x1bO" : "\x1b[") + arrowKeys[k]));
+    const arrowPrefix = ctrl ? "\x1b[1;5" : term.modes.applicationCursorKeysMode ? "\x1bO" : "\x1b[";
+    setCtrl(false);
+    send(encoder.encode(fixedKeys[k] ?? arrowPrefix + arrowKeys[k]));
   }
   term.focus();
 });
@@ -112,6 +119,7 @@ const sendFlow = () => send(document.hidden ? "pause" : "resume");
 document.addEventListener("visibilitychange", sendFlow);
 
 function connect() {
+  setCtrl(false);
   status("Connecting to " + id);
   ws = new WebSocket((location.protocol === "https:" ? "wss://" : "ws://") + location.host + "/term/" + encodeURIComponent(id) + "/ws");
   ws.binaryType = "arraybuffer";

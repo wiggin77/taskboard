@@ -106,7 +106,7 @@ Some builds expect sibling checkouts at a relative path, such as mattermost/matt
 
 Once a session is running, its row gets **Open in the browser** and **Open in a terminal** buttons, plus **Stop**, which closes the tmux window and keeps the worktree. Each terminal attaches through its own linked tmux session, so several can be open on different tasks without switching each other's window. In the browser terminal, closing the tab or detaching (Ctrl-b d) leaves the session running.
 
-On a phone, the board uses larger buttons and the browser terminal adds a row of Esc, Tab, Shift-Tab, Ctrl and arrow keys above the on-screen keyboard. Ctrl applies to the next key you type, so Ctrl then b, d detaches.
+On a phone, the board uses larger buttons and the browser terminal adds a row of Esc, Tab, Shift-Tab, Ctrl and arrow keys, which on Android sits above the on-screen keyboard. Ctrl applies to the next key you type or arrow you tap, so Ctrl then b, d detaches.
 
 **Clean up** (trash icon, on Needs clean-up rows) closes the session, removes the worktree and deletes its branch. If there are uncommitted changes or unpushed commits it lists them and asks first, and it always keeps a branch with unpushed commits. A repo's main checkout is never removed or switched to another branch; clean-up only closes its session.
 
