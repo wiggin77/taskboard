@@ -2,8 +2,9 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
 {{template "theme"}}
+{{template "phone"}}
 <title>{{.ID}}{{with .Title}} · {{.}}{{end}}</title>
 <link rel="icon" href="/static/terminal.svg" type="image/svg+xml">
 <link rel="stylesheet" href="/static/xterm.css">
@@ -19,11 +20,27 @@ body{max-width:none;margin:0;padding:0;background:#0F1318;overflow:hidden}
 #status button{padding:.25rem .75rem;border:1px solid #28313B;border-radius:999px;background:#232B34;color:#E4E9EF;font:inherit;cursor:pointer}
 #status button:hover{border-color:#9AA5B2}
 #status button[hidden]{display:none}
+#keys{display:none}
+.phone #term{bottom:2.75rem}
+.phone #keys{position:absolute;left:0;right:0;bottom:0;height:2.75rem;display:flex;gap:1px;border-top:1px solid #28313B;background:#28313B}
+#keys button{flex:1;min-width:0;padding:0;border:0;background:#171C23;color:#E4E9EF;font:600 .9375rem/1 ui-monospace,"JetBrains Mono","SF Mono",Menlo,monospace;
+  touch-action:manipulation;-webkit-user-select:none;user-select:none}
+#keys button:active,#keys button[aria-pressed=true]{background:#3A4654}
 </style>
 </head>
 <body>
 <div id="term"></div>
 <div id="status" role="status" hidden><span></span><button type="button" id="start" hidden></button><button type="button" id="reconnect" hidden>Reconnect</button></div>
+<div id="keys" role="toolbar" aria-label="Terminal keys">
+  <button type="button" data-key="esc">Esc</button>
+  <button type="button" data-key="tab">Tab</button>
+  <button type="button" data-key="backtab" aria-label="Shift Tab">⇧Tab</button>
+  <button type="button" id="ctrl" aria-pressed="false">Ctrl</button>
+  <button type="button" data-key="left" aria-label="Left">←</button>
+  <button type="button" data-key="up" aria-label="Up">↑</button>
+  <button type="button" data-key="down" aria-label="Down">↓</button>
+  <button type="button" data-key="right" aria-label="Right">→</button>
+</div>
 {{template "actions"}}
 <script src="/static/xterm.js"></script>
 <script src="/static/addon-fit.js"></script>
@@ -58,7 +75,37 @@ let ws = null;
 const encoder = new TextEncoder();
 const send = data => { if (ws?.readyState === WebSocket.OPEN) ws.send(data); };
 const sendSize = () => send(JSON.stringify({ cols: term.cols, rows: term.rows }));
-term.onData(d => send(encoder.encode(d)));
+const ctrlButton = document.getElementById("ctrl");
+let ctrl = false;
+const setCtrl = on => { ctrl = on; ctrlButton.setAttribute("aria-pressed", on); };
+const withCtrl = d => {
+  const c = d.length === 1 ? d.toUpperCase().charCodeAt(0) : 0;
+  return c >= 64 && c <= 95 ? String.fromCharCode(c - 64) : d;
+};
+term.onData(d => {
+  if (ctrl) {
+    setCtrl(false);
+    d = withCtrl(d);
+  }
+  send(encoder.encode(d));
+});
+const fixedKeys = { esc: "\x1b", tab: "\t", backtab: "\x1b[Z" };
+const arrowKeys = { up: "A", down: "B", right: "C", left: "D" };
+const keys = document.getElementById("keys");
+// Keep focus in the terminal so the on-screen keyboard stays open.
+keys.addEventListener("pointerdown", e => e.preventDefault());
+keys.addEventListener("mousedown", e => e.preventDefault());
+keys.addEventListener("click", e => {
+  const b = e.target.closest("button");
+  if (!b) return;
+  if (b === ctrlButton) setCtrl(!ctrl);
+  else {
+    setCtrl(false);
+    const k = b.dataset.key;
+    send(encoder.encode(fixedKeys[k] ?? (term.modes.applicationCursorKeysMode ? "\x1bO" : "\x1b[") + arrowKeys[k]));
+  }
+  term.focus();
+});
 term.onBinary(d => send(Uint8Array.from(d, c => c.charCodeAt(0))));
 term.onResize(sendSize);
 const sendFlow = () => send(document.hidden ? "pause" : "resume");

@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="application-name" content="taskboard">
 {{template "theme"}}
+{{template "phone"}}
 {{template "tabs"}}
 {{template "extensioninstall"}}
 {{if .RefreshSeconds}}<noscript><meta http-equiv="refresh" content="{{.RefreshSeconds}}"></noscript>{{end}}
@@ -142,6 +143,19 @@ a:hover{text-decoration:underline}
   .child{grid-template-columns:auto minmax(0,1fr)}
   .child .stage,.child .meta{grid-column:2}
 }
+.phone .bar{flex-wrap:wrap;row-gap:.5rem}
+.phone .get-extension{display:none}
+.phone .icon,.phone .links .icon{width:40px;height:40px}
+.phone .icon svg,.phone .links .icon svg{width:18px;height:18px}
+.phone .jump a{padding:.55rem .45rem .55rem .9rem}
+.phone summary{min-height:40px}
+.phone .task,.phone .legend{padding-left:2.5rem}
+.phone .mark{width:calc(2.5rem - 3px);padding-top:1rem}
+.phone .mark svg{width:16px;height:16px}
+.phone .links{gap:0 .9rem}
+.phone .links>a:not(.icon){line-height:40px}
+.phone .child{padding-left:2.5rem}
+.phone .child a.key{padding:.45rem .55rem}
 </style>
 </head>
 <body>
