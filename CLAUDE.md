@@ -11,7 +11,10 @@ go build -o taskboard .
 go vet ./...
 go test ./...
 go test -run TestBuildTasks ./...    # single test
+goreleaser release --snapshot --clean   # local release build into dist/
 ```
+
+Releases: pushing a `vX.Y.Z` tag runs `.github/workflows/release.yml`, and GoReleaser (`.goreleaser.yaml`) tests, builds linux/darwin amd64/arm64 archives with `main.version` set (printed by `-version`), and publishes the GitHub release. A `vX.Y.Z-suffix` tag becomes a pre-release; other tags don't trigger it.
 
 Single `main` package (Go 1.27, uses `ServeMux` method/path patterns). Dependencies are limited to `coder/websocket` and `creack/pty` (browser terminal), `go-pkcs12` (client certificate files) and `goldmark` (plan pages, which leaves raw HTML out of the rendered Markdown; keep it that way); xterm.js is vendored in `static/` and embedded. All tests are in `taskboard_test.go` and use `testConfig(t)`; they never shell out, so they run without `gh`/`acli`. The binary requires `acli`, `gh` and `git` on PATH at startup.
 
