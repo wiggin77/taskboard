@@ -764,14 +764,14 @@ func TestCheckHost(t *testing.T) {
 }
 
 func TestDecodeIssues(t *testing.T) {
-	out := []byte(`[{"changelog":null,"fields":{"status":{"id":"6","name":"Closed","statusCategory":{"id":3,"key":"done","name":"Done"}},"summary":"Cross Guard fix"},"id":"154491","key":"MM-71003","names":null},
+	out := []byte(`[{"changelog":null,"fields":{"status":{"id":"6","name":"Closed","statusCategory":{"id":3,"key":"done","name":"Done"}},"summary":"Plugin fix"},"id":"154491","key":"MM-71003","names":null},
 {"fields":{"status":{"name":"In Progress","statusCategory":{"key":"indeterminate"}},"summary":"Other"},"key":"MM-2"}]`)
 	issues, err := decodeIssues(out)
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := []JiraIssue{
-		{Key: "MM-71003", Summary: "Cross Guard fix", Status: "Closed", Done: true},
+		{Key: "MM-71003", Summary: "Plugin fix", Status: "Closed", Done: true},
 		{Key: "MM-2", Summary: "Other", Status: "In Progress"},
 	}
 	if len(issues) != len(want) {
