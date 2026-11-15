@@ -4,11 +4,11 @@
 [![Release](https://img.shields.io/github/v/release/wiggin77/taskboard)](https://github.com/wiggin77/taskboard/releases/latest)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
-A local dashboard for multitasking across many coding-agent sessions.
+Keep a dozen parallel coding-agent sessions on track.
 
-With a dozen agent sessions running in parallel, each in its own worktree on its own ticket, the hard part is keeping track of them: which session is waiting on you, which plan needs review, whose CI broke, what merged and still needs its ticket closed, which worktrees can go. taskboard collects that from Jira, GitHub PRs, git worktrees, plan files and tmux windows, and shows one row per task with the work blocked on you at the top. Each row links to the ticket, PR, plan and session.
+Each session works in its own worktree on its own ticket, and the hard part is knowing which one needs you: a plan to review, a failing CI run, a PR ready to merge, a merged ticket to close, a worktree to clean up. taskboard joins Jira tickets, GitHub PRs, plan files, git worktrees and tmux windows into one board, one row per task, with what needs you first.
 
-taskboard can also start a session for a ticket (a worktree plus a tmux window), stop it, and clean up after the work merges. Sessions you start yourself work too, as long as the ticket key is in the branch and tmux window names. Jira is the only ticket tracker supported today.
+From the board you can start a session for a ticket (a worktree plus a tmux window running your agent), attach to it in a browser or native terminal, approve plans, review PRs and clean up after the work merges. That works on the taskboard machine, and from another computer or your phone with a client certificate. Sessions you start yourself show up too, as long as the ticket key is in the branch and tmux window names. Jira is the only ticket tracker supported today.
 
 ## Quick start
 
@@ -29,23 +29,20 @@ You need `gh` (logged in with `gh auth login`), `acli` (logged in with `acli jir
    ./taskboard
    ```
 
-The macOS builds aren't signed. If macOS refuses to run one, clear the quarantine flag with `xattr -d com.apple.quarantine taskboard`. To build from source instead, use Go 1.27+ and `go build -o taskboard .`.
+The macOS builds aren't signed. If macOS refuses to run one, clear the quarantine flag with `xattr -d com.apple.quarantine taskboard`.
 
 ## Using the board
 
-Tasks move through Ticket, Plan, Code, Review, Ready, Merged and Done. The sections at the top are the ones waiting on you: CI failing, changes requested, review requested, ready to merge, plan needs review, and merged but Jira not yet updated. Done tasks that still have a worktree or tmux window go to Needs clean-up (a repo's main checkout on the ticket's branch doesn't count). Done shows tasks whose PR merged, or whose ticket was resolved, in the last `done_days` days (default 30).
+Tasks move through Ticket, Plan, Code, Review, Ready, Merged and Done. The Needs you section at the top lists the tasks waiting on you: CI failing, changes requested, review requested, ready to merge, plan needs review, and merged but Jira not yet updated. Done tasks that still have a worktree or tmux window go to Needs clean-up (a repo's main checkout on the ticket's branch doesn't count). Done shows tasks whose PR merged, or whose ticket was resolved, in the last `done_days` days (default 30).
 
 - **Refreshing.** While a board tab is open, taskboard refreshes every `poll_interval` (default 5m) and the page reloads only when something changed. With no tab open it stops asking Jira and GitHub. The Refresh button refreshes now. Set `manual_refresh` to refresh only when you ask.
 - **Highlights.** Hover over a row and click the bookmark at its left edge to highlight it. Highlighted rows are also copied into a Highlighted section at the top of the board, which the Highlighted chip jumps to. Highlights are saved next to the config file, so every device sees them.
 - **Epics** have their own section listing each open epic's child tickets, including other people's. Your own children also keep their full rows in the stage sections.
 - **Sections** collapse when you click their heading, and the chips at the top jump to them. Done starts collapsed.
 - **Theme.** The theme button cycles between your system setting, light and dark.
+- **Settings** edits every config option and applies it straight away; only `listen` needs a restart. An empty field uses the default shown as its placeholder. Saving rewrites the file in a standard layout, dropping hand formatting and unknown keys.
 
 Starting, stopping and cleaning up sessions, approving plans, highlighting and Settings only work from a browser on the taskboard machine or one with a client certificate (see [Remote access](#remote-access)). Any other browser can only look.
-
-## Settings
-
-The Settings link opens a form for every config option. Saving writes the config file and applies it straight away; only `listen` needs a restart. An empty field uses the default shown as its placeholder. Saving rewrites the file in a standard layout, so hand formatting and unknown keys are not kept.
 
 ## Conventions
 
@@ -95,7 +92,7 @@ taskboard works out where the work lives:
 3. Otherwise, if the task has an open PR, it adds a worktree and runs `gh pr checkout`.
 4. Otherwise it asks for the repo and a branch name, and creates the branch from the repo's `base_branch` (default: what `origin/HEAD` points at).
 
-New worktrees go in `worktree_dir` as `<repo>-<KEY>`, for example `~/worktrees/mattermost-MM-1234`, or next to the repo's checkout when `worktree_dir` is empty. Windows open in the `tmux_session` session (default `taskboard`). The agent command is typed into the window's shell, so quitting the agent leaves you at a prompt in the worktree. Start taskboard from a shell that has the agent on its `PATH`, since tmux inherits its environment.
+New worktrees go in `worktree_dir` as `<repo>-<KEY>` (e.g. `~/worktrees/mattermost-MM-1234`), or next to the repo's checkout when `worktree_dir` is empty, and windows open in the `tmux_session` session (default `taskboard`). The agent command is typed into the window's shell, so quitting the agent leaves you at a prompt in the worktree. Start taskboard from a shell with the agent on its `PATH`; tmux inherits its environment.
 
 Some builds expect sibling checkouts at a relative path, such as mattermost/mattermost's server looking for `../../enterprise`. List those in `worktree_links` and taskboard links each one into `worktree_dir`:
 
@@ -104,18 +101,11 @@ Some builds expect sibling checkouts at a relative path, such as mattermost/matt
 "worktree_links": ["~/src/enterprise"]
 ```
 
-Once a session is running, its row gets **Open in the browser** and **Open in a terminal** buttons, plus **Stop**, which closes the tmux window and keeps the worktree. Each terminal attaches through its own linked tmux session, so several can be open on different tasks without switching each other's window. In the browser terminal, closing the tab or detaching (Ctrl-b d) leaves the session running.
+Once a session is running, its row gets **Open in the browser**, **Open in a terminal** and **Stop**, which closes the tmux window and keeps the worktree. Terminals open on different tasks don't switch each other's window, and closing a browser terminal's tab or detaching (Ctrl-b d) leaves the session running.
 
 On a phone, the board uses larger buttons and the browser terminal adds a row of Esc, Tab, Shift-Tab, Ctrl and arrow keys, which on Android sits above the on-screen keyboard. Ctrl applies to the next key you type or arrow you tap, so Ctrl then b, d detaches.
 
 **Clean up** (trash icon, on Needs clean-up rows) closes the session, removes the worktree and deletes its branch. If there are uncommitted changes or unpushed commits it lists them and asks first, and it always keeps a branch with unpushed commits. A repo's main checkout is never removed or switched to another branch; clean-up only closes its session.
-
-To start a session by hand, name the tmux window after the ticket and run your agent in the task's worktree:
-
-```sh
-git -C ~/src/mattermost worktree add ../mattermost-MM-1234 -b MM-1234-short-name
-tmux new-window -n MM-1234 -c ~/src/mattermost-MM-1234 claude
-```
 
 ### Reviews
 
@@ -144,7 +134,7 @@ To use the board from another machine, such as a Mac browser with taskboard runn
    security import mac-laptop.p12 -k ~/Library/Keychains/login.keychain-db -P '<password>'
    ```
 
-   Or in Keychain Access: import `ca.crt` into login, set "taskboard CA" to Always Trust, then import the `.p12`. When a browser first uses the certificate, choose Always Allow. Firefox and iOS have their own certificate stores.
+   When a browser first uses the certificate, choose Always Allow. Firefox and iOS have their own certificate stores.
 
    On Android, use Chrome: in Settings, under Encryption & credentials, install `ca.crt` as a CA certificate and the `.p12` as a VPN & app user certificate.
 4. Set `tls_listen` (for example `0.0.0.0:8443`, or a Tailscale address), restart taskboard and open `https://ubuntu:8443`.
@@ -158,7 +148,7 @@ The optional tab groups extension (Chrome, Edge, Firefox 140+) opens each ticket
 To install it, click the puzzle-piece button in the board's header and follow the install page:
 
 - **Chrome or Edge:** the page writes the extension into a folder you choose. Load that folder with Load unpacked in `chrome://extensions` (or `edge://extensions`) with Developer mode on. The board keeps the folder up to date when taskboard is upgraded.
-- **Firefox:** load the downloaded zip under Load Temporary Add-on in `about:debugging#/runtime/this-firefox`. Release Firefox drops unsigned extensions on restart; to keep it, sign it as an unlisted add-on with `npx web-ext sign -s extension --channel=unlisted --api-key=... --api-secret=...`.
+- **Firefox:** load the downloaded zip under Load Temporary Add-on in `about:debugging#/runtime/this-firefox`. Release Firefox drops unsigned extensions on restart; to keep it, [sign it as an unlisted add-on](https://extensionworkshop.com/documentation/publish/signing-and-distribution-overview/).
 
 The extension works on `http://127.0.0.1`, `http://localhost` and the address it was installed from. Add other addresses in its options.
 
@@ -170,10 +160,6 @@ The extension works on `http://127.0.0.1`, `http://localhost` and the address it
 - `merged_pr_days` (default 90) is how far back merged PRs are checked for "merged, update Jira".
 - The first refresh views each Jira ticket once (about 30s for 100 tickets); later refreshes only view tickets that changed.
 - When a source fails, a banner says so and the board keeps that source's last good data, with its age in the header. When GitHub's API budget (shared with everything using your `gh` login) runs low, taskboard pauses GitHub requests until it resets.
-
-## Releasing
-
-Push a tag like `v0.2.0`. The Release workflow runs [GoReleaser](https://goreleaser.com) (`.goreleaser.yaml`), which runs the tests, builds Linux and macOS binaries for amd64 and arm64, and publishes them as a GitHub release. Only tags of the form `vX.Y.Z` or `vX.Y.Z-suffix` trigger it, and a suffixed tag such as `v0.2.0-rc1` is published as a pre-release. `taskboard -version` prints the release's version (`0.2.0` for tag `v0.2.0`), or `dev` for a source build. To try the build locally, run `goreleaser release --snapshot --clean`; the archives land in `dist/`.
 
 ## License
 
