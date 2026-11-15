@@ -50,6 +50,8 @@ type PR struct {
 	MergedAt        time.Time
 	Assigned        bool
 	ReviewRequested bool
+	// A person, not a team, is still requested for review.
+	ReviewerPending bool
 }
 
 type ghCheck struct {
@@ -132,6 +134,9 @@ func (n ghPRNode) pr(cfg *Config, repo string) PR {
 		CI:        ci,
 		UpdatedAt: n.UpdatedAt,
 		MergedAt:  n.MergedAt,
+		ReviewerPending: slices.ContainsFunc(n.ReviewRequests.Nodes, func(r ghReviewRequest) bool {
+			return r.RequestedReviewer.TypeName == "User"
+		}),
 	}
 }
 
