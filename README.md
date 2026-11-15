@@ -92,7 +92,7 @@ taskboard works out where the work lives:
 3. Otherwise, if the task has an open PR, it adds a worktree and runs `gh pr checkout`.
 4. Otherwise it asks for the repo and a branch name, and creates the branch from the repo's `base_branch` (default: what `origin/HEAD` points at).
 
-New worktrees go in `worktree_dir` as `<repo>-<KEY>` (e.g. `~/worktrees/mattermost-MM-1234`), or next to the repo's checkout when `worktree_dir` is empty, and windows open in the `tmux_session` session (default `taskboard`). The agent command is typed into the window's shell, so quitting the agent leaves you at a prompt in the worktree. Start taskboard from a shell with the agent on its `PATH`; tmux inherits its environment.
+New worktrees go in `worktree_dir` as `<folder>-<KEY>`, named after the repo's checkout folder (e.g. `~/worktrees/mattermost-MM-1234`), so no two repos' checkout folders can share a name. They go next to the repo's checkout when `worktree_dir` is empty, and windows open in the `tmux_session` session (default `taskboard`). The agent command is typed into the window's shell, so quitting the agent leaves you at a prompt in the worktree. Start taskboard from a shell with the agent on its `PATH`; tmux inherits its environment.
 
 Some builds expect sibling checkouts at a relative path, such as mattermost/mattermost's server looking for `../../enterprise`. List those in `worktree_links` and taskboard links each one into `worktree_dir`:
 

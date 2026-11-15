@@ -211,6 +211,7 @@ func (c *Config) validate() error {
 	if len(c.Repos) == 0 {
 		return errors.New("repos must list at least one repository")
 	}
+	checkouts := map[string]string{}
 	for i := range c.Repos {
 		r := &c.Repos[i]
 		if r.Name == "" {
@@ -219,6 +220,15 @@ func (c *Config) validate() error {
 		if r.BaseBranch != "" && !strings.Contains(strings.Trim(r.BaseBranch, "/"), "/") {
 			return fmt.Errorf("repos[%d].base_branch must name a remote branch, like origin/main", i)
 		}
+		if r.Path == "" {
+			continue
+		}
+		// Worktrees and review checkouts are named after the folder; lower case because macOS disks ignore case.
+		folder := strings.ToLower(checkoutName(*r))
+		if other, ok := checkouts[folder]; ok {
+			return fmt.Errorf("repos %s and %s both have a checkout folder named %s; rename one, since their worktrees would get the same names", other, r.Name, checkoutName(*r))
+		}
+		checkouts[folder] = r.Name
 	}
 	for i, org := range c.GitHub.Organizations {
 		org = strings.TrimSpace(org)
