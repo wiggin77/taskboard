@@ -1,7 +1,7 @@
 # taskboard
 
 [![Build](https://github.com/wiggin77/taskboard/actions/workflows/go.yml/badge.svg?branch=main)](https://github.com/wiggin77/taskboard/actions/workflows/go.yml)
-[![Release](https://img.shields.io/badge/release-v0.1.0-blue)](https://github.com/wiggin77/taskboard/releases/latest)
+[![Release](https://img.shields.io/github/v/release/wiggin77/taskboard)](https://github.com/wiggin77/taskboard/releases/latest)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
 A local dashboard for multitasking across many coding-agent sessions.
@@ -170,8 +170,6 @@ The extension works on `http://127.0.0.1`, `http://localhost` and the address it
 ## Releasing
 
 Push a tag like `v0.2.0`. The Release workflow runs [GoReleaser](https://goreleaser.com) (`.goreleaser.yaml`), which runs the tests, builds Linux and macOS binaries for amd64 and arm64, and publishes them as a GitHub release. Only tags of the form `vX.Y.Z` or `vX.Y.Z-suffix` trigger it, and a suffixed tag such as `v0.2.0-rc1` is published as a pre-release. `taskboard -version` prints the release's version (`0.2.0` for tag `v0.2.0`), or `dev` for a source build. To try the build locally, run `goreleaser release --snapshot --clean`; the archives land in `dist/`.
-
-After a release, update the version in the Release badge at the top of this file.
 
 ## License
 
