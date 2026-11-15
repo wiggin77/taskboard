@@ -33,7 +33,7 @@ The macOS builds aren't signed. If macOS refuses to run one, clear the quarantin
 
 ## Using the board
 
-Tasks move through Ticket, Plan, Code, Review, Ready, Merged and Done. The Needs you section at the top lists the tasks waiting on you: CI failing, changes requested, review requested, ready to merge, plan needs review, and merged but Jira not yet updated. Done tasks that still have a worktree or tmux window go to Needs clean-up (a repo's main checkout on the ticket's branch doesn't count). Done shows tasks whose PR merged, or whose ticket was resolved, in the last `done_days` days (default 30).
+Tasks move through Ticket, Plan, Code, Review, Ready, Merged and Done. The Needs you section at the top lists the tasks waiting on you: CI failing, changes requested, review requested, ready to merge (approved, with checks done and no one else still asked to review), plan needs review, and merged but Jira not yet updated. Done tasks that still have a worktree or tmux window go to Needs clean-up (a repo's main checkout on the ticket's branch doesn't count). Done shows tasks whose PR merged, or whose ticket was resolved, in the last `done_days` days (default 30).
 
 - **Refreshing.** While a board tab is open, taskboard refreshes every `poll_interval` (default 5m) and the page reloads only when something changed. With no tab open it stops asking Jira and GitHub. The Refresh button refreshes now. Set `manual_refresh` to refresh only when you ask.
 - **Highlights.** Hover over a row and click the bookmark at its left edge to highlight it. Highlighted rows are also copied into a Highlighted section at the top of the board, which the Highlighted chip jumps to. Highlights are saved next to the config file, so every device sees them.

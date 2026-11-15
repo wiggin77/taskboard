@@ -104,6 +104,7 @@ func TestStageFor(t *testing.T) {
 		{"changes requested", Task{PR: &PR{State: "OPEN", Review: "CHANGES_REQUESTED", CI: CIPassing}}, StageChangesRequested},
 		{"approved, checks running", Task{PR: &PR{State: "OPEN", Review: "APPROVED", CI: CIPending}}, StageInReview},
 		{"ready", Task{PR: &PR{State: "OPEN", Review: "APPROVED", CI: CIPassing}}, StageReadyToMerge},
+		{"approved, reviewer still requested", Task{PR: &PR{State: "OPEN", Review: "APPROVED", CI: CIPassing, ReviewerPending: true}}, StageInReview},
 		{"your review requested", Task{PR: &PR{State: "OPEN", Review: "APPROVED", CI: CIPassing, ReviewRequested: true}}, StageReviewRequested},
 		{"your review requested, ci failing", Task{PR: &PR{State: "OPEN", CI: CIFailing, ReviewRequested: true}}, StageCIFailing},
 		{"assigned, changes requested", Task{PR: &PR{State: "OPEN", Review: "CHANGES_REQUESTED", CI: CIPassing, Assigned: true}}, StageAwaitingChanges},
@@ -265,6 +266,11 @@ func TestGitHubResult(t *testing.T) {
 	}
 	if w := []want{{1, false, false}, {5, false, false}, {3, true, true}, {4, true, false}, {6, true, false}}; !slices.Equal(got, w) {
 		t.Errorf("task PRs %v, want %v: only configured repos, duplicates dropped, a review request counts only when it names you", got, w)
+	}
+	for _, pr := range res.prs {
+		if want := pr.Number == 3 || pr.Number == 4; pr.ReviewerPending != want {
+			t.Errorf("PR %d ReviewerPending = %v, want %v: only a request for a person counts", pr.Number, pr.ReviewerPending, want)
+		}
 	}
 	if res.prs[0].CI != CIFailing || res.prs[0].Key != "MM-1" {
 		t.Errorf("PR 1 = CI %v key %q, want failing MM-1", res.prs[0].CI, res.prs[0].Key)

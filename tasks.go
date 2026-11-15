@@ -172,7 +172,7 @@ func progressStage(t *Task) Stage {
 				return StageAwaitingChanges
 			case pr.Review == "CHANGES_REQUESTED":
 				return StageChangesRequested
-			case pr.Review == "APPROVED" && pr.CI != CIPending:
+			case pr.Review == "APPROVED" && pr.CI != CIPending && !pr.ReviewerPending:
 				return StageReadyToMerge
 			default:
 				return StageInReview
