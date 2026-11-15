@@ -1777,11 +1777,15 @@ func TestSessionConfig(t *testing.T) {
 	if cfg.tmuxSession() != "taskboard" {
 		t.Errorf("tmux_session default = %q", cfg.tmuxSession())
 	}
+	if _, err := parseConfig([]byte(`{` + base + `,"repos":[{"name":"a/foo","path":"/src/a/foo"},{"name":"b/foo"},{"name":"c/foo"}]}`)); err != nil {
+		t.Errorf("repos without a checkout can share a name: %v", err)
+	}
 	for _, bad := range []string{
 		`"repos":[{"name":"a/b","base_branch":"main"}]`,
 		`"repos":[{"name":"a/b"}],"tmux_session":"my:work"`,
 		`"repos":[{"name":"a/b"}],"worktree_dir":"wt"`,
 		`"repos":[{"name":"a/b"}],"worktree_links":["enterprise"]`,
+		`"repos":[{"name":"a/foo","path":"/src/a/foo"},{"name":"b/foo","path":"/src/b/Foo/"}]`,
 	} {
 		if _, err := parseConfig([]byte(`{` + base + `,` + bad + `}`)); err == nil {
 			t.Errorf("config %s should be rejected", bad)
