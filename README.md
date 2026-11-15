@@ -14,7 +14,7 @@ From the board you can start a session for a ticket (a worktree plus a tmux wind
 
 You need `gh` (logged in with `gh auth login`), `acli` (logged in with `acli jira auth login`), `git`, and `tmux` for sessions, on Linux or macOS. On Windows, run all of it inside WSL.
 
-1. Download the archive for your platform from the [latest release](https://github.com/wiggin77/taskboard/releases/latest) and unpack it.
+1. Download the archive for your platform from the [latest release](https://github.com/wiggin77/taskboard/releases/latest) and unpack it. Or, with Go installed, run `go install github.com/wiggin77/taskboard@latest` and use `taskboard` in place of `./taskboard` below.
 2. Create a config file, `taskboard.json`:
 
    ```sh
@@ -29,7 +29,7 @@ You need `gh` (logged in with `gh auth login`), `acli` (logged in with `acli jir
    ./taskboard
    ```
 
-The macOS builds aren't signed. If macOS refuses to run one, clear the quarantine flag with `xattr -d com.apple.quarantine taskboard`.
+The macOS builds aren't signed. If macOS refuses to run one, clear the quarantine flag with `xattr -d com.apple.quarantine taskboard`, or install with `go install` instead.
 
 ## Using the board
 
