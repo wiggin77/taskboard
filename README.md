@@ -106,6 +106,8 @@ Some builds expect sibling checkouts at a relative path, such as mattermost/matt
 
 Once a session is running, its row gets **Open in the browser** and **Open in a terminal** buttons, plus **Stop**, which closes the tmux window and keeps the worktree. Each terminal attaches through its own linked tmux session, so several can be open on different tasks without switching each other's window. In the browser terminal, closing the tab or detaching (Ctrl-b d) leaves the session running.
 
+On a phone, the board uses larger buttons and the browser terminal adds a row of Esc, Tab, Shift-Tab, Ctrl and arrow keys, which on Android sits above the on-screen keyboard. Ctrl applies to the next key you type or arrow you tap, so Ctrl then b, d detaches.
+
 **Clean up** (trash icon, on Needs clean-up rows) closes the session, removes the worktree and deletes its branch. If there are uncommitted changes or unpushed commits it lists them and asks first, and it always keeps a branch with unpushed commits. A repo's main checkout is never removed or switched to another branch; clean-up only closes its session.
 
 To start a session by hand, name the tmux window after the ticket and run your agent in the task's worktree:
@@ -143,6 +145,8 @@ To use the board from another machine, such as a Mac browser with taskboard runn
    ```
 
    Or in Keychain Access: import `ca.crt` into login, set "taskboard CA" to Always Trust, then import the `.p12`. When a browser first uses the certificate, choose Always Allow. Firefox and iOS have their own certificate stores.
+
+   On Android, use Chrome: in Settings, under Encryption & credentials, install `ca.crt` as a CA certificate and the `.p12` as a VPN & app user certificate.
 4. Set `tls_listen` (for example `0.0.0.0:8443`, or a Tailscale address), restart taskboard and open `https://ubuntu:8443`.
 
 When the machine gets a new name, re-issue the server certificate with `./taskboard certs server -host ...` and restart. To cut off a lost device, add its serial to `revoked_certs`. Keep `listen` on 127.0.0.1: it has no login, so other machines that reach it can only view the board.
