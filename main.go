@@ -16,6 +16,9 @@ import (
 	"time"
 )
 
+// Set by the release build.
+var version = "dev"
+
 func main() {
 	if len(os.Args) > 1 {
 		run := map[string]func([]string) error{"certs": runCerts, "init": runInit}[os.Args[1]]
@@ -28,15 +31,21 @@ func main() {
 		}
 	}
 	configPath := flag.String("config", "taskboard.json", "path to the config file")
+	showVersion := flag.Bool("version", false, "print the version and exit")
 	flag.Usage = func() {
 		fmt.Fprintf(flag.CommandLine.Output(), `usage:
   taskboard [-config FILE]                           start the board
+  taskboard -version                                 print the version
   taskboard init [TEMPLATE] [-config FILE] [-force]  write a starter config (TEMPLATE: %s)
   taskboard certs init|server|client ...             manage certificates for remote access
 `, strings.Join(templateNames(), ", "))
 		flag.PrintDefaults()
 	}
 	flag.Parse()
+	if *showVersion {
+		fmt.Println(version)
+		return
+	}
 
 	cfg, err := LoadConfig(*configPath)
 	if errors.Is(err, fs.ErrNotExist) {

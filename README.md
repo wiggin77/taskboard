@@ -169,7 +169,7 @@ The extension works on `http://127.0.0.1`, `http://localhost` and the address it
 
 ## Releasing
 
-Push a tag like `v0.2.0`. The Release workflow runs [GoReleaser](https://goreleaser.com) (`.goreleaser.yaml`), which runs the tests, builds Linux and macOS binaries for amd64 and arm64, and publishes them as a GitHub release. To try the build locally, run `goreleaser release --snapshot --clean`; the archives land in `dist/`.
+Push a tag like `v0.2.0`. The Release workflow runs [GoReleaser](https://goreleaser.com) (`.goreleaser.yaml`), which runs the tests, builds Linux and macOS binaries for amd64 and arm64, and publishes them as a GitHub release. Only tags of the form `vX.Y.Z` or `vX.Y.Z-suffix` trigger it, and a suffixed tag such as `v0.2.0-rc1` is published as a pre-release. `taskboard -version` prints the release's version (`0.2.0` for tag `v0.2.0`), or `dev` for a source build. To try the build locally, run `goreleaser release --snapshot --clean`; the archives land in `dist/`.
 
 After a release, update the version in the Release badge at the top of this file.
 

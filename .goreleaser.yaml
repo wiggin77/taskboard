@@ -18,7 +18,7 @@ builds:
     flags:
       - -trimpath
     ldflags:
-      - -s -w
+      - -s -w -X main.version={{.Version}}
 
 archives:
   - formats: [tar.gz]
@@ -30,6 +30,9 @@ archives:
 
 checksum:
   name_template: checksums.txt
+
+release:
+  prerelease: auto
 
 changelog:
   use: github-native
