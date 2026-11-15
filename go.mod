@@ -1,4 +1,4 @@
-module taskboard
+module github.com/wiggin77/taskboard
 
 go 1.27
 
