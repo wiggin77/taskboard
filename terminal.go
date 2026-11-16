@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/coder/websocket"
@@ -115,10 +116,21 @@ func (s *server) termSocket(w http.ResponseWriter, r *http.Request) {
 		cmd.Wait()
 	}()
 
+	// Hidden tabs run xterm.js's parser about once a minute, so output piles up for minutes of catch-up.
+	// The page pauses while hidden; tmux, finding its terminal blocked, discards and redraws on resume.
+	var paused atomic.Bool
+	resumed := make(chan struct{}, 1)
 	go func() {
 		defer cancel()
 		buf := make([]byte, 32<<10)
 		for {
+			for paused.Load() {
+				select {
+				case <-resumed:
+				case <-ctx.Done():
+					return
+				}
+			}
 			n, err := f.Read(buf)
 			if n > 0 && conn.Write(ctx, websocket.MessageBinary, buf[:n]) != nil {
 				return
@@ -135,6 +147,18 @@ func (s *server) termSocket(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if typ == websocket.MessageText {
+			switch string(data) {
+			case "pause":
+				paused.Store(true)
+				continue
+			case "resume":
+				paused.Store(false)
+				select {
+				case resumed <- struct{}{}:
+				default:
+				}
+				continue
+			}
 			var sz resize
 			if json.Unmarshal(data, &sz) == nil && sz.Cols > 0 && sz.Rows > 0 {
 				pty.Setsize(f, &pty.Winsize{Cols: sz.Cols, Rows: sz.Rows})

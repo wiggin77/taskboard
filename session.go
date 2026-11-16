@@ -208,8 +208,46 @@ func startSession(ctx context.Context, cfg *Config, key string, p StartPlan) (st
 			return "", err
 		}
 	}
-	command := cfg.agent(p.Mode == StartResume)
+	command := cfg.agent(p.Mode == StartResume && canResume(cfg, p.Path))
 	return openWindow(ctx, cfg, key, p.Path, strings.ReplaceAll(command, "{key}", key))
+}
+
+// canResume reports whether the resume command has something to resume in dir. claude --continue fails
+// where Claude has never run, such as a worktree another agent created; a custom resume command is trusted.
+func canResume(cfg *Config, dir string) bool {
+	if cfg.agent(true) != defaultAgentResume {
+		return true
+	}
+	base := os.Getenv("CLAUDE_CONFIG_DIR")
+	if base == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return true
+		}
+		base = filepath.Join(home, ".claude")
+	}
+	if d, err := filepath.EvalSymlinks(dir); err == nil {
+		dir = d
+	}
+	name, ok := claudeProjectName(dir)
+	if !ok {
+		return true
+	}
+	found, _ := filepath.Glob(filepath.Join(base, "projects", name, "*.jsonl"))
+	return len(found) > 0
+}
+
+// claudeProjectName is the directory under ~/.claude/projects where Claude Code keeps dir's conversations:
+// the path with every non-alphanumeric character replaced by '-'. Claude shortens names over 200 characters
+// with a hash, which isn't reproduced here, so those report false.
+func claudeProjectName(dir string) (string, bool) {
+	name := strings.Map(func(c rune) rune {
+		if 'a' <= c && c <= 'z' || 'A' <= c && c <= 'Z' || '0' <= c && c <= '9' {
+			return c
+		}
+		return '-'
+	}, dir)
+	return name, len(name) <= 200
 }
 
 func createWorktree(ctx context.Context, cfg *Config, p StartPlan) error {
@@ -399,15 +437,16 @@ func checkWorktree(ctx context.Context, wt Worktree, pr *PR) (Removal, error) {
 
 // cleanup keeps a branch with unpushed commits even when forced, so an override only loses uncommitted changes.
 func cleanup(ctx context.Context, cfg *Config, t Task, force bool) (Removal, error) {
-	rm, r, err := removeWorktree(ctx, cfg, t.Worktree, t.Session, t.PR, force)
-	if err != nil || t.Worktree == nil || t.Worktree.Branch == "" {
+	wt := t.removableWorktree()
+	rm, r, err := removeWorktree(ctx, cfg, wt, t.Session, t.PR, force)
+	if err != nil || wt == nil || wt.Branch == "" {
 		return rm, err
 	}
 	if len(rm.Unpushed) > 0 {
-		rm.Kept = t.Worktree.Branch
+		rm.Kept = wt.Branch
 		return rm, nil
 	}
-	_, err = runCmd(ctx, r.Dir(), "git", "branch", "-D", t.Worktree.Branch)
+	_, err = runCmd(ctx, r.Dir(), "git", "branch", "-D", wt.Branch)
 	return rm, err
 }
 
@@ -499,13 +538,9 @@ func parseReviewName(r RepoConfig, name string) (int, bool) {
 
 // Review worktrees or windows whose PR is no longer listed come back as leftovers, so they can still be cleaned up.
 func attachReviews(cfg *Config, links []PRLink, wts []Worktree, windows []Session) ([]PRLink, []PRLink) {
-	type ref struct {
-		repo   string
-		number int
-	}
-	found := map[ref]*Review{}
-	var order []ref
-	get := func(k ref) *Review {
+	found := map[prRef]*Review{}
+	var order []prRef
+	get := func(k prRef) *Review {
 		if found[k] == nil {
 			found[k] = &Review{}
 			order = append(order, k)
@@ -520,23 +555,23 @@ func attachReviews(cfg *Config, links []PRLink, wts []Worktree, windows []Sessio
 			continue
 		}
 		if n, ok := parseReviewName(r, filepath.Base(wt.Path)); ok {
-			get(ref{r.Name, n}).Worktree = wt
+			get(prRef{r.Name, n}).Worktree = wt
 		}
 	}
 	for i := range windows {
 		for _, r := range repos {
 			if n, ok := parseReviewName(r, windows[i].Name); ok {
-				get(ref{r.Name, n}).Session = &windows[i]
+				get(prRef{r.Name, n}).Session = &windows[i]
 				break
 			}
 		}
 	}
 
 	out := make([]PRLink, len(links))
-	used := map[ref]bool{}
+	used := map[prRef]bool{}
 	for i, l := range links {
 		if r, ok := cfg.repo(l.Repo); ok && r.Path != "" {
-			k := ref{r.Name, l.Number}
+			k := prRef{r.Name, l.Number}
 			l.ReviewName = reviewName(r, l.Number)
 			l.NoCheckout = missingCheckout(r)
 			l.Review = found[k]
@@ -640,7 +675,7 @@ func startReview(ctx context.Context, cfg *Config, l PRLink) (string, error) {
 			return "", err
 		}
 	}
-	return openWindow(ctx, cfg, name, dir, reviewCommand(cfg, resume))
+	return openWindow(ctx, cfg, name, dir, reviewCommand(cfg, resume && canResume(cfg, dir)))
 }
 
 // Reviews have no ticket, so {key} is dropped; the user types the review prompt themselves.

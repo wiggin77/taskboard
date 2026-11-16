@@ -14,27 +14,27 @@ import (
 )
 
 type Config struct {
-	Listen           string       `json:"listen"`
-	TLSListen        string       `json:"tls_listen,omitempty"`
-	TLSDir           string       `json:"tls_dir,omitempty"`
-	RevokedCerts     []string     `json:"revoked_certs,omitempty"`
-	AllowedHosts     []string     `json:"allowed_hosts,omitempty"`
-	PollInterval     Duration     `json:"poll_interval"`
-	IdlePollInterval Duration     `json:"idle_poll_interval"`
-	RefreshTimeout   Duration     `json:"refresh_timeout"`
-	ProjectKeys      []string     `json:"project_keys"`
-	MergedPRLimit    int          `json:"merged_pr_limit"`
-	DoneDays         int          `json:"done_days"`
-	AttachCommand    []string     `json:"attach_command,omitempty"`
-	TmuxSession      string       `json:"tmux_session,omitempty"`
-	AgentCommand     string       `json:"agent_command,omitempty"`
-	AgentResume      string       `json:"agent_resume_command,omitempty"`
-	ReposDir         string       `json:"repos_dir,omitempty"`
-	WorktreeDir      string       `json:"worktree_dir,omitempty"`
-	WorktreeLinks    []string     `json:"worktree_links,omitempty"`
-	Jira             JiraConfig   `json:"jira"`
-	Repos            []RepoConfig `json:"repos"`
-	GitHub           GitHubConfig `json:"github,omitzero"`
+	Listen         string       `json:"listen"`
+	TLSListen      string       `json:"tls_listen,omitempty"`
+	TLSDir         string       `json:"tls_dir,omitempty"`
+	RevokedCerts   []string     `json:"revoked_certs,omitempty"`
+	AllowedHosts   []string     `json:"allowed_hosts,omitempty"`
+	PollInterval   Duration     `json:"poll_interval"`
+	ManualRefresh  bool         `json:"manual_refresh,omitempty"`
+	RefreshTimeout Duration     `json:"refresh_timeout"`
+	ProjectKeys    []string     `json:"project_keys"`
+	MergedPRDays   int          `json:"merged_pr_days"`
+	DoneDays       int          `json:"done_days"`
+	AttachCommand  []string     `json:"attach_command,omitempty"`
+	TmuxSession    string       `json:"tmux_session,omitempty"`
+	AgentCommand   string       `json:"agent_command,omitempty"`
+	AgentResume    string       `json:"agent_resume_command,omitempty"`
+	ReposDir       string       `json:"repos_dir,omitempty"`
+	WorktreeDir    string       `json:"worktree_dir,omitempty"`
+	WorktreeLinks  []string     `json:"worktree_links,omitempty"`
+	Jira           JiraConfig   `json:"jira"`
+	Repos          []RepoConfig `json:"repos"`
+	GitHub         GitHubConfig `json:"github,omitzero"`
 
 	keyRE *regexp.Regexp
 }
@@ -49,19 +49,28 @@ const (
 	defaultReposDir    = "~/src"
 )
 
-const defaultJQL = "assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC"
+const (
+	defaultJQL     = "assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC"
+	defaultDoneJQL = "assignee = currentUser()"
+)
+
+var orderByRE = regexp.MustCompile(`(?i)\border\s+by\b`)
 
 type JiraConfig struct {
 	BaseURL string `json:"base_url"`
 	JQL     string `json:"jql"`
+	DoneJQL string `json:"done_jql,omitempty"`
 }
 
 type GitHubConfig struct {
-	Organizations []string `json:"organizations,omitempty"`
+	Organizations         []string `json:"organizations,omitempty"`
+	IgnoreAssignedAuthors []string `json:"ignore_assigned_authors,omitempty"`
 }
 
 // IsZero lets omitzero drop an empty github block, including one loaded with an empty organizations list.
-func (g GitHubConfig) IsZero() bool { return len(g.Organizations) == 0 }
+func (g GitHubConfig) IsZero() bool {
+	return len(g.Organizations) == 0 && len(g.IgnoreAssignedAuthors) == 0
+}
 
 type RepoConfig struct {
 	Name       string `json:"name"`
@@ -183,9 +192,9 @@ func LoadConfig(path string) (*Config, error) {
 func parseConfig(b []byte) (*Config, error) {
 	cfg := &Config{
 		Listen:         "127.0.0.1:8484",
-		PollInterval:   Duration{2 * time.Minute},
+		PollInterval:   Duration{5 * time.Minute},
 		RefreshTimeout: Duration{5 * time.Minute},
-		MergedPRLimit:  20,
+		MergedPRDays:   90,
 		DoneDays:       30,
 	}
 	if err := json.Unmarshal(b, cfg); err != nil {
@@ -238,12 +247,16 @@ func (c *Config) validate() error {
 		return errors.New("jira.base_url is required")
 	}
 	c.Jira.BaseURL = strings.TrimRight(c.Jira.BaseURL, "/")
+	if orderByRE.MatchString(c.Jira.DoneJQL) {
+		return errors.New("jira.done_jql cannot have an ORDER BY clause")
+	}
 	if len(c.ProjectKeys) == 0 {
 		return errors.New("project_keys must list at least one Jira project key")
 	}
 	if len(c.Repos) == 0 {
 		return errors.New("repos must list at least one repository")
 	}
+	checkouts := map[string]string{}
 	for i := range c.Repos {
 		r := &c.Repos[i]
 		if r.Name == "" {
@@ -252,6 +265,15 @@ func (c *Config) validate() error {
 		if r.BaseBranch != "" && !strings.Contains(strings.Trim(r.BaseBranch, "/"), "/") {
 			return fmt.Errorf("repos[%d].base_branch must name a remote branch, like origin/main", i)
 		}
+		if r.Path == "" {
+			continue
+		}
+		// Worktrees and review checkouts are named after the folder; lower case because macOS disks ignore case.
+		folder := strings.ToLower(checkoutName(*r))
+		if other, ok := checkouts[folder]; ok {
+			return fmt.Errorf("repos %s and %s both have a checkout folder named %s; rename one, since their worktrees would get the same names", other, r.Name, checkoutName(*r))
+		}
+		checkouts[folder] = r.Name
 	}
 	for i, org := range c.GitHub.Organizations {
 		org = strings.TrimSpace(org)
@@ -264,6 +286,13 @@ func (c *Config) validate() error {
 			return fmt.Errorf("github.organizations[%d]: %q is not a GitHub organization or user name", i, org)
 		}
 		c.GitHub.Organizations[i] = org
+	}
+	for i, login := range c.GitHub.IgnoreAssignedAuthors {
+		login = strings.TrimSpace(login)
+		if !authorRE.MatchString(login) {
+			return fmt.Errorf("github.ignore_assigned_authors[%d]: %q is not a GitHub login or app/name", i, login)
+		}
+		c.GitHub.IgnoreAssignedAuthors[i] = login
 	}
 	for i, serial := range c.RevokedCerts {
 		c.RevokedCerts[i] = normalizeSerial(serial)
@@ -285,20 +314,17 @@ func (c *Config) validate() error {
 			return fmt.Errorf("worktree_links: %q must be an absolute path or start with ~/", l)
 		}
 	}
-	if c.MergedPRLimit < 1 {
-		return errors.New("merged_pr_limit must be at least 1")
+	if c.MergedPRDays < 1 {
+		return errors.New("merged_pr_days must be at least 1")
 	}
 	if c.DoneDays < 1 {
 		return errors.New("done_days must be at least 1")
 	}
-	if c.PollInterval.Duration < 10*time.Second {
-		return errors.New("poll_interval must be at least 10s")
+	if c.PollInterval.Duration < time.Minute {
+		return errors.New("poll_interval must be at least 1m")
 	}
 	if c.RefreshTimeout.Duration < 10*time.Second {
 		return errors.New("refresh_timeout must be at least 10s")
-	}
-	if idle := c.IdlePollInterval.Duration; idle != 0 && idle < c.PollInterval.Duration {
-		return errors.New("idle_poll_interval must be 0 (no idle polling) or at least poll_interval")
 	}
 
 	quoted := make([]string, len(c.ProjectKeys))
@@ -341,11 +367,36 @@ func (c *Config) tlsDir(configPath string) string {
 	return dir
 }
 
+// refreshSeconds is the delay for the page's no-script reload, 0 for none.
+func (c *Config) refreshSeconds() int {
+	if c.ManualRefresh {
+		return 0
+	}
+	return int(c.PollInterval.Seconds())
+}
+
 func (c *Config) jql() string {
 	if strings.TrimSpace(c.Jira.JQL) == "" {
 		return defaultJQL
 	}
 	return c.Jira.JQL
+}
+
+// doneJQL is wrapped in parentheses so an OR in the configured query can't escape the Done and date filters.
+func (c *Config) doneJQL() string {
+	mine := strings.TrimSpace(c.Jira.DoneJQL)
+	if mine == "" {
+		mine = defaultDoneJQL
+	}
+	return fmt.Sprintf("(%s) AND statusCategory = Done AND resolved >= -%dd", mine, c.DoneDays)
+}
+
+func (c *Config) assignedSearch() string {
+	q := "assignee:@me -author:@me"
+	for _, login := range c.GitHub.IgnoreAssignedAuthors {
+		q += " -author:" + login
+	}
+	return q
 }
 
 func (c *Config) tmuxSession() string {
@@ -386,6 +437,9 @@ func (c *Config) repo(name string) (RepoConfig, bool) {
 }
 
 var ownerRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9-]*$`)
+
+// authorRE accepts app/name too, which is how GitHub search names an app's PRs, such as app/cursor.
+var authorRE = regexp.MustCompile(`^(app/)?[A-Za-z0-9][A-Za-z0-9-]*$`)
 
 // showsOther reports whether a repo outside repos may appear under Other repos. An empty github.organizations shows every repo.
 func (c *Config) showsOther(repo string) bool {

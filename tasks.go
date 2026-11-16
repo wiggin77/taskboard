@@ -14,9 +14,11 @@ type Stage int
 const (
 	StageCIFailing Stage = iota
 	StageChangesRequested
+	StageReviewRequested
 	StageReadyToMerge
 	StagePlanning
 	StageMergedJiraPending
+	StageAwaitingChanges
 	StageInReview
 	StageCoding
 	StageTicket
@@ -34,9 +36,11 @@ type stageMeta struct {
 var stageInfo = map[Stage]stageMeta{
 	StageCIFailing:         {"CI failing", "fail", groupNeedsYou, 3},
 	StageChangesRequested:  {"Changes requested", "fail", groupNeedsYou, 3},
+	StageReviewRequested:   {"Review requested", "needs", groupNeedsYou, 3},
 	StageReadyToMerge:      {"Ready to merge", "ok", groupNeedsYou, 4},
 	StagePlanning:          {"Plan needs review", "needs", groupNeedsYou, 1},
 	StageMergedJiraPending: {"Merged, update Jira", "needs", groupNeedsYou, 5},
+	StageAwaitingChanges:   {"Changes requested, waiting on author", "active", groupWaiting, 3},
 	StageInReview:          {"In review", "active", groupWaiting, 3},
 	StageCoding:            {"Coding", "active", groupInProgress, 2},
 	StageTicket:            {"Not started", "idle", groupNotStarted, 0},
@@ -91,6 +95,14 @@ func taskGroup(t Task) string {
 
 func (t Task) NeedsCleanup() bool { return t.Stage == StageCleanup }
 
+// removableWorktree is nil for a main checkout, which clean-up leaves in place.
+func (t Task) removableWorktree() *Worktree {
+	if t.Worktree == nil || t.Worktree.Main {
+		return nil
+	}
+	return t.Worktree
+}
+
 func (t Task) CanStart() bool {
 	if t.NoTicket || t.Session != nil {
 		return false
@@ -141,7 +153,7 @@ func (t Task) Track() []Stop {
 
 func stageFor(t *Task) Stage {
 	st := progressStage(t)
-	if st == StageDone && (t.Worktree != nil || t.Session != nil) {
+	if st == StageDone && (t.removableWorktree() != nil || t.Session != nil) {
 		return StageCleanup
 	}
 	return st
@@ -156,9 +168,13 @@ func progressStage(t *Task) Stage {
 				return StageCoding
 			case pr.CI == CIFailing:
 				return StageCIFailing
+			case pr.ReviewRequested:
+				return StageReviewRequested
+			case pr.Review == "CHANGES_REQUESTED" && pr.Assigned:
+				return StageAwaitingChanges
 			case pr.Review == "CHANGES_REQUESTED":
 				return StageChangesRequested
-			case pr.Review == "APPROVED" && pr.CI != CIPending:
+			case pr.Review == "APPROVED" && pr.CI != CIPending && !pr.ReviewerPending:
 				return StageReadyToMerge
 			default:
 				return StageInReview

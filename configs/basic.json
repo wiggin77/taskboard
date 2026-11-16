@@ -1,0 +1,19 @@
+{
+  "listen": "127.0.0.1:8484",
+  "poll_interval": "5m",
+  "refresh_timeout": "5m",
+  "project_keys": ["PROJ"],
+  "merged_pr_days": 90,
+  "done_days": 30,
+  "attach_command": ["gnome-terminal", "--", "tmux", "attach", "-t", "{target}"],
+  "worktree_dir": "~/worktrees",
+  "jira": {
+    "base_url": "https://yourcompany.atlassian.net"
+  },
+  "repos": [
+    {"name": "yourorg/yourrepo", "path": "~/src/yourrepo", "plans_dir": "plans"}
+  ],
+  "github": {
+    "organizations": ["yourorg"]
+  }
+}

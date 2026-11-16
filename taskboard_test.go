@@ -1,6 +1,8 @@
 package main
 
 import (
+	"archive/zip"
+	"bytes"
 	"compress/gzip"
 	"context"
 	"crypto"
@@ -15,6 +17,7 @@ import (
 	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -30,14 +33,13 @@ import (
 func testConfig(t *testing.T) *Config {
 	t.Helper()
 	cfg := &Config{
-		PollInterval:     Duration{time.Minute},
-		IdlePollInterval: Duration{15 * time.Minute},
-		RefreshTimeout:   Duration{5 * time.Minute},
-		MergedPRLimit:    20,
-		DoneDays:         30,
-		ProjectKeys:      []string{"MM"},
-		Jira:             JiraConfig{BaseURL: "https://example.atlassian.net/"},
-		Repos:            []RepoConfig{{Name: "mattermost/mattermost"}},
+		PollInterval:   Duration{time.Minute},
+		RefreshTimeout: Duration{5 * time.Minute},
+		MergedPRDays:   90,
+		DoneDays:       30,
+		ProjectKeys:    []string{"MM"},
+		Jira:           JiraConfig{BaseURL: "https://example.atlassian.net/"},
+		Repos:          []RepoConfig{{Name: "mattermost/mattermost"}},
 	}
 	if err := cfg.validate(); err != nil {
 		t.Fatal(err)
@@ -103,12 +105,19 @@ func TestStageFor(t *testing.T) {
 		{"changes requested", Task{PR: &PR{State: "OPEN", Review: "CHANGES_REQUESTED", CI: CIPassing}}, StageChangesRequested},
 		{"approved, checks running", Task{PR: &PR{State: "OPEN", Review: "APPROVED", CI: CIPending}}, StageInReview},
 		{"ready", Task{PR: &PR{State: "OPEN", Review: "APPROVED", CI: CIPassing}}, StageReadyToMerge},
+		{"approved, reviewer still requested", Task{PR: &PR{State: "OPEN", Review: "APPROVED", CI: CIPassing, ReviewerPending: true}}, StageInReview},
+		{"your review requested", Task{PR: &PR{State: "OPEN", Review: "APPROVED", CI: CIPassing, ReviewRequested: true}}, StageReviewRequested},
+		{"your review requested, ci failing", Task{PR: &PR{State: "OPEN", CI: CIFailing, ReviewRequested: true}}, StageCIFailing},
+		{"assigned, changes requested", Task{PR: &PR{State: "OPEN", Review: "CHANGES_REQUESTED", CI: CIPassing, Assigned: true}}, StageAwaitingChanges},
+		{"assigned, changes requested, review re-requested", Task{PR: &PR{State: "OPEN", Review: "CHANGES_REQUESTED", CI: CIPassing, Assigned: true, ReviewRequested: true}}, StageReviewRequested},
 		{"merged, jira open", Task{PR: &PR{State: "MERGED"}}, StageMergedJiraPending},
 		{"merged, jira done", Task{PR: &PR{State: "MERGED"}, JiraDone: true}, StageDone},
 		{"merged, jira not found", Task{PR: &PR{State: "MERGED"}, JiraMissing: true}, StageDone},
 		{"merged, no ticket", Task{PR: &PR{State: "MERGED"}, NoTicket: true}, StageDone},
 		{"merged, leftover worktree", Task{PR: &PR{State: "MERGED"}, JiraDone: true, Worktree: &Worktree{}}, StageCleanup},
 		{"done ticket, open session", Task{JiraDone: true, Session: &Session{}}, StageCleanup},
+		{"done ticket, main checkout on its branch", Task{JiraDone: true, Worktree: &Worktree{Main: true}}, StageDone},
+		{"done ticket, main checkout and open session", Task{JiraDone: true, Worktree: &Worktree{Main: true}, Session: &Session{}}, StageCleanup},
 		{"merged, jira open, leftover worktree", Task{PR: &PR{State: "MERGED"}, Worktree: &Worktree{}}, StageMergedJiraPending},
 		{"open PR, jira not found", Task{PR: &PR{State: "OPEN"}, JiraMissing: true}, StageInReview},
 		{"open PR beats done ticket", Task{PR: &PR{State: "OPEN"}, JiraDone: true}, StageInReview},
@@ -168,6 +177,443 @@ func TestBuildTasks(t *testing.T) {
 	}
 }
 
+func TestAssignedPRs(t *testing.T) {
+	now := time.Now()
+	tasks := buildTasks(testConfig(t), sources{
+		issues: map[string]JiraIssue{
+			"MM-1": {Key: "MM-1", Summary: "Part 2 delegated", Status: "In Progress"},
+			"MM-2": {Key: "MM-2", Summary: "Delegated", Status: "In Progress"},
+			"MM-3": {Key: "MM-3", Summary: "Both open", Status: "In Progress"},
+		},
+		prs: []PR{
+			{Key: "MM-1", Number: 10, State: "MERGED", UpdatedAt: now},
+			{Key: "MM-1", Number: 11, State: "OPEN", CI: CIFailing, UpdatedAt: now.Add(-time.Hour), Assigned: true},
+			{Key: "MM-2", Number: 12, State: "OPEN", Review: "APPROVED", CI: CIPassing, Assigned: true},
+			{Key: "MM-3", Number: 13, State: "OPEN", Draft: true, UpdatedAt: now.Add(-time.Hour)},
+			{Key: "MM-3", Number: 14, State: "OPEN", CI: CIFailing, UpdatedAt: now, Assigned: true},
+		},
+	}, now)
+	byKey := map[string]Task{}
+	for _, task := range tasks {
+		byKey[task.Key] = task
+	}
+	if task := byKey["MM-1"]; task.PR == nil || task.PR.Number != 11 || task.Stage != StageCIFailing {
+		t.Errorf("MM-1 = PR %+v stage %s, want open assigned PR 11 with CI failing over merged authored PR 10", task.PR, task.StageLabel())
+	}
+	if task := byKey["MM-2"]; task.PR == nil || task.PR.Number != 12 || task.Stage != StageReadyToMerge {
+		t.Errorf("MM-2 = PR %+v stage %s, want assigned PR 12 ready to merge", task.PR, task.StageLabel())
+	}
+	if task := byKey["MM-3"]; task.PR == nil || task.PR.Number != 14 || task.Stage != StageCIFailing {
+		t.Errorf("MM-3 = PR %+v stage %s, want the newer assigned PR 14 with CI failing over a stale authored draft", task.PR, task.StageLabel())
+	}
+}
+
+func TestAssignedSearch(t *testing.T) {
+	cfg := testConfig(t)
+	if got, want := cfg.assignedSearch(), "assignee:@me -author:@me"; got != want {
+		t.Errorf("assignedSearch = %q, want %q", got, want)
+	}
+	cfg.GitHub.IgnoreAssignedAuthors = []string{"mattermost-build", "app/cursor"}
+	if got, want := cfg.assignedSearch(), "assignee:@me -author:@me -author:mattermost-build -author:app/cursor"; got != want {
+		t.Errorf("assignedSearch = %q, want %q", got, want)
+	}
+}
+
+func TestGitHubResult(t *testing.T) {
+	var resp struct {
+		Data map[string]struct {
+			Nodes []ghPRNode `json:"nodes"`
+		} `json:"data"`
+	}
+	err := json.Unmarshal([]byte(`{"data": {
+		"s0": {"nodes": [
+			{"number": 1, "url": "u1", "state": "OPEN", "headRefName": "MM-1-x", "repository": {"nameWithOwner": "Mattermost/Mattermost"},
+			 "commits": {"nodes": [{"commit": {"statusCheckRollup": {"contexts": {"nodes": [{"__typename": "StatusContext", "state": "FAILURE"}]}}}}]}},
+			{"number": 2, "url": "u2", "state": "OPEN", "title": "Unrelated", "repository": {"nameWithOwner": "other/repo"}}
+		]},
+		"s1": {"nodes": [
+			{"number": 3, "state": "OPEN", "headRefName": "MM-3-x", "repository": {"nameWithOwner": "mattermost/mattermost"},
+			 "reviewRequests": {"nodes": [{"requestedReviewer": {"__typename": "User", "login": "Wiggin77"}}]}},
+			{"number": 4, "state": "OPEN", "headRefName": "MM-4-x", "repository": {"nameWithOwner": "mattermost/mattermost"},
+			 "reviewRequests": {"nodes": [{"requestedReviewer": {"__typename": "Team"}}, {"requestedReviewer": {"__typename": "User", "login": "someone"}}]}}
+		]},
+		"s2": {"nodes": [
+			{"number": 5, "state": "MERGED", "headRefName": "MM-5-x", "repository": {"nameWithOwner": "mattermost/mattermost"}},
+			{"number": 5, "state": "MERGED", "headRefName": "MM-5-x", "repository": {"nameWithOwner": "mattermost/mattermost"}}
+		]},
+		"s3": {"nodes": [{"number": 6, "state": "MERGED", "headRefName": "MM-6-x", "repository": {"nameWithOwner": "mattermost/mattermost"}}]},
+		"s4": {"nodes": [{"number": 7, "url": "u7", "state": "OPEN", "repository": {"nameWithOwner": "mattermost/mattermost"}, "author": {"login": "someone"}}]},
+		"s5": {"nodes": []}
+	}}`), &resp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := make([][]ghPRNode, searchReviewed+1)
+	for i := range found {
+		found[i] = resp.Data[fmt.Sprintf("s%d", i)].Nodes
+	}
+	res := githubResult(testConfig(t), "wiggin77", found)
+
+	type want struct {
+		n                         int
+		assigned, reviewRequested bool
+	}
+	var got []want
+	for _, pr := range res.prs {
+		if pr.Repo != "mattermost/mattermost" {
+			t.Errorf("PR %d repo %q, want the configured name", pr.Number, pr.Repo)
+		}
+		got = append(got, want{pr.Number, pr.Assigned, pr.ReviewRequested})
+	}
+	if w := []want{{1, false, false}, {5, false, false}, {3, true, true}, {4, true, false}, {6, true, false}}; !slices.Equal(got, w) {
+		t.Errorf("task PRs %v, want %v: only configured repos, duplicates dropped, a review request counts only when it names you", got, w)
+	}
+	for _, pr := range res.prs {
+		if want := pr.Number == 3 || pr.Number == 4; pr.ReviewerPending != want {
+			t.Errorf("PR %d ReviewerPending = %v, want %v: only a request for a person counts", pr.Number, pr.ReviewerPending, want)
+		}
+	}
+	if res.prs[0].CI != CIFailing || res.prs[0].Key != "MM-1" {
+		t.Errorf("PR 1 = CI %v key %q, want failing MM-1", res.prs[0].CI, res.prs[0].Key)
+	}
+	if len(res.reviews) != 1 || res.reviews[0].Number != 7 || res.reviews[0].Author != "someone" {
+		t.Errorf("reviews = %+v, want #7 by someone", res.reviews)
+	}
+	if len(res.others) != 1 || res.others[0].Number != 2 || res.others[0].Role != RoleAuthor {
+		t.Errorf("others = %+v, want your open PR #2 in other/repo", res.others)
+	}
+}
+
+func TestGitHubResultPrefersFresherCopy(t *testing.T) {
+	node := func(state string, updated int64) ghPRNode {
+		var n ghPRNode
+		n.Number, n.State, n.UpdatedAt = 1, state, time.Unix(updated, 0)
+		n.Repository.NameWithOwner = "mattermost/mattermost"
+		return n
+	}
+	found := make([][]ghPRNode, searchReviewed+1)
+	found[searchMineOpen] = []ghPRNode{node("OPEN", 100)}
+	found[searchMineMerged] = []ghPRNode{node("MERGED", 200)}
+	if prs := githubResult(testConfig(t), "me", found).prs; len(prs) != 1 || prs[0].State != "MERGED" {
+		t.Errorf("prs = %+v, want only the merged copy, since an older open copy can come from a search that fell back", prs)
+	}
+	found[searchMineMerged] = nil
+	found[searchAssignedOpen] = []ghPRNode{node("OPEN", 300)}
+	if prs := githubResult(testConfig(t), "me", found).prs; len(prs) != 1 || prs[0].UpdatedAt.Unix() != 300 || prs[0].Assigned {
+		t.Errorf("prs = %+v, want the fresher copy, still counted as authored rather than assigned", prs)
+	}
+}
+
+func TestPauseAfter(t *testing.T) {
+	now := time.Now()
+	b := NewBoard(testConfig(t))
+	b.pauseAfter(context.Background(), fmt.Errorf("You have exceeded a secondary rate limit"), ghRate{}, now)
+	if !b.ghPause.until.Equal(now.Add(time.Minute)) {
+		t.Errorf("secondary limit: paused until %v, want a minute from now", b.ghPause.until)
+	}
+	b.ghPause = ghPause{}
+	b.ghRate = ghRate{5000, 0, now.Add(20 * time.Minute)}
+	b.pauseAfter(context.Background(), fmt.Errorf("API rate limit exceeded"), ghRate{}, now)
+	if !b.ghPause.until.Equal(b.ghRate.ResetAt) {
+		t.Errorf("budget used up: paused until %v, want the last reset GitHub reported, %v", b.ghPause.until, b.ghRate.ResetAt)
+	}
+}
+
+func TestRunSearches(t *testing.T) {
+	searches := []prSearch{
+		{"is:pr is:open author:@me", 3, prOpen},
+		{"is:pr is:open review-requested:@me", 100, prLink},
+	}
+	page := func(hasNext bool, cursor string, numbers ...int) string {
+		var nodes []string
+		for _, n := range numbers {
+			nodes = append(nodes, fmt.Sprintf(`{"number": %d}`, n))
+		}
+		return fmt.Sprintf(`{"pageInfo": {"hasNextPage": %v, "endCursor": %q}, "nodes": [%s]}`, hasNext, cursor, strings.Join(nodes, ","))
+	}
+	var queries []string
+	var varSets []map[string]string
+	post := func(_ context.Context, query string, vars map[string]string) ([]byte, error) {
+		queries, varSets = append(queries, query), append(varSets, vars)
+		switch len(queries) {
+		case 1:
+			return nil, fmt.Errorf("HTTP 502")
+		case 2:
+			return []byte(`{"data": {"viewer": {"login": "wiggin77"}, "s0": ` + page(true, "c1", 1, 2) + `, "s1": ` + page(false, "", 3) + `}}`), nil
+		default:
+			return []byte(`{"data": {"viewer": {"login": "wiggin77"}, "s0": ` + page(true, "c2", 4) + `}}`), nil
+		}
+	}
+	delay := graphQLRetryDelay
+	graphQLRetryDelay = 0
+	t.Cleanup(func() { graphQLRetryDelay = delay })
+	res, err := runSearches(context.Background(), post, searches)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.login != "wiggin77" || len(res.found[0]) != 3 || len(res.found[1]) != 1 || slices.Contains(res.failed, true) {
+		t.Fatalf("login %q, found %d and %d PRs, failed %v, want wiggin77, 3 and 1, none failed", res.login, len(res.found[0]), len(res.found[1]), res.failed)
+	}
+	if len(queries) != 3 {
+		t.Fatalf("%d requests, want 3: a retry, then a second page only for the search that has one, then stop at the limit", len(queries))
+	}
+	if !strings.Contains(queries[1], "...openPR") || !strings.Contains(queries[1], "fragment linkPR") || !strings.Contains(queries[1], "first: 100") {
+		t.Errorf("first page query lacks a search or fragment:\n%s", queries[1])
+	}
+	if strings.Contains(queries[2], "s1:") || strings.Contains(queries[2], "fragment linkPR") || !strings.Contains(queries[2], "first: 1, after: $a0") {
+		t.Errorf("second page should ask only for search 0's remaining 1, after its cursor, without unused fragments:\n%s", queries[2])
+	}
+	if varSets[2]["a0"] != "c1" || varSets[2]["q0"] != searches[0].query {
+		t.Errorf("second page vars = %v", varSets[2])
+	}
+}
+
+func TestRunSearchesStopsWithoutProgress(t *testing.T) {
+	for _, c := range []struct {
+		name  string
+		pages []string
+		want  int
+	}{
+		{"empty page", []string{`{"pageInfo": {"hasNextPage": true, "endCursor": "c1"}, "nodes": []}`}, 1},
+		{"no cursor", []string{`{"pageInfo": {"hasNextPage": true, "endCursor": null}, "nodes": [{"number": 1}]}`}, 1},
+		{"same cursor", []string{
+			`{"pageInfo": {"hasNextPage": true, "endCursor": "c1"}, "nodes": [{"number": 1}]}`,
+			`{"pageInfo": {"hasNextPage": true, "endCursor": "c1"}, "nodes": [{"number": 2}]}`,
+		}, 2},
+	} {
+		requests := 0
+		post := func(context.Context, string, map[string]string) ([]byte, error) {
+			if requests == len(c.pages) {
+				t.Fatalf("%s: request %d made after the search stopped moving", c.name, requests+1)
+			}
+			requests++
+			return []byte(`{"data": {"viewer": {"login": "me"}, "s0": ` + c.pages[requests-1] + `}}`), nil
+		}
+		if _, err := runSearches(context.Background(), post, []prSearch{{"q", searchMax, prOpen}}); err != nil {
+			t.Fatal(err)
+		}
+		if requests != c.want {
+			t.Errorf("%s: %d requests, want %d", c.name, requests, c.want)
+		}
+	}
+}
+
+func TestRunSearchesPartialFailure(t *testing.T) {
+	delay := graphQLRetryDelay
+	graphQLRetryDelay = 0
+	t.Cleanup(func() { graphQLRetryDelay = delay })
+	searches := []prSearch{{"a", searchMax, prOpen}, {"b", searchMax, prLink}}
+	requests := 0
+	post := func(context.Context, string, map[string]string) ([]byte, error) {
+		requests++
+		return []byte(`{"data": {"viewer": {"login": "me"}, "rateLimit": {"limit": 5000, "remaining": 4000, "resetAt": "2026-11-10T01:00:00Z"},
+			"s0": {"pageInfo": {"hasNextPage": false}, "nodes": [{"number": 1}, null]}, "s1": null},
+			"errors": [{"message": "SAML enforcement blocks this"}]}`), fmt.Errorf("gh: exit status 1")
+	}
+	res, err := runSearches(context.Background(), post, searches)
+	if err == nil || !strings.Contains(err.Error(), "SAML") {
+		t.Errorf("err = %v, want the GraphQL error", err)
+	}
+	if requests != 1 {
+		t.Errorf("%d requests, want 1: partial data isn't retried", requests)
+	}
+	if res.login != "me" || len(res.found[0]) != 1 || !slices.Equal(res.failed, []bool{false, true}) || res.rate.Remaining != 4000 {
+		t.Errorf("login %q, found %d, failed %v, rate %+v: want the parts that came back kept, a PR you can't see skipped, and the null search failed", res.login, len(res.found[0]), res.failed, res.rate)
+	}
+
+	for _, c := range []struct {
+		name string
+		out  string
+		err  error
+		want string
+	}{
+		{"no data", `{"data": null}`, nil, "no data"},
+		{"gh failed without GraphQL errors", `{"data": {"viewer": {"login": "me"}}}`, fmt.Errorf("gh: exit status 1"), "exit status 1"},
+	} {
+		post := func(context.Context, string, map[string]string) ([]byte, error) { return []byte(c.out), c.err }
+		if _, err := postGraphQL(context.Background(), post, "q", nil); err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: err = %v, want one mentioning %q", c.name, err, c.want)
+		}
+	}
+
+	requests = 0
+	post = func(context.Context, string, map[string]string) ([]byte, error) {
+		requests++
+		return nil, fmt.Errorf("gh: API rate limit exceeded for user ID 1")
+	}
+	res, err = runSearches(context.Background(), post, searches)
+	if !isRateLimited(err) || requests != 1 || !slices.Equal(res.failed, []bool{true, true}) {
+		t.Errorf("rate limited: err %v, %d requests, failed %v; want no retry and every search failed", err, requests, res.failed)
+	}
+}
+
+func TestSearchFallback(t *testing.T) {
+	old, now := time.Unix(1000, 0), time.Unix(2000, 0)
+	prev := ghData{login: "me", found: [][]ghPRNode{{{Number: 1}}, {{Number: 2}}, nil}, at: []time.Time{old, old, {}}}
+	res := searchResult{found: [][]ghPRNode{{{Number: 3}}, nil, nil}, failed: []bool{false, true, true}}
+	d := res.withFallback(prev, now)
+	if d.login != "me" || d.found[0][0].Number != 3 || d.found[1][0].Number != 2 || d.found[2] != nil {
+		t.Errorf("found %v, login %q: want new results, then the last good ones for a failed search, and nothing where there were none", d.found, d.login)
+	}
+	if !slices.Equal(d.at, []time.Time{now, old, {}}) {
+		t.Errorf("at %v", d.at)
+	}
+	if at := d.staleSince(now); !at.Equal(old) {
+		t.Errorf("staleSince = %v, want %v", at, old)
+	}
+	fresh := searchResult{found: [][]ghPRNode{nil, nil, nil}, failed: []bool{false, false, false}}.withFallback(prev, now)
+	if at := fresh.staleSince(now); !at.IsZero() {
+		t.Errorf("fresh data staleSince = %v, want zero", at)
+	}
+	if d := res.withFallback(ghData{}, now); d.found[1] != nil || !d.staleSince(now).IsZero() {
+		t.Errorf("first refresh: found %v; want nothing to fall back to", d.found)
+	}
+	partial := searchResult{found: [][]ghPRNode{nil, {{Number: 4}}, nil}, failed: []bool{false, true, true}}
+	if d := partial.withFallback(ghData{}, now); len(d.found[1]) != 1 || !d.at[1].IsZero() {
+		t.Errorf("first refresh, later page failed: found %v, at %v; want the pages that came back, not marked fresh", d.found, d.at)
+	}
+}
+
+func TestPauseNotice(t *testing.T) {
+	now := time.Date(2026, 11, 10, 14, 31, 0, 0, time.Local)
+	p := ghPause{}.next(nil, ghRate{5000, 412, now.Add(33 * time.Minute).UTC()}, time.Time{}, now)
+	if got, want := p.notice(), "GitHub paused until 15:04 (412 of 5,000 points left this hour)"; got != want {
+		t.Errorf("notice = %q, want %q", got, want)
+	}
+	if got := asOf(now.Add(-30*time.Hour), now); got != now.Add(-30*time.Hour).Format("Jan 2 15:04") {
+		t.Errorf("asOf a day ago = %q, want the date too", got)
+	}
+	for n, want := range map[int]string{0: "0", 999: "999", 1000: "1,000", 1234567: "1,234,567"} {
+		if got := thousands(n); got != want {
+			t.Errorf("thousands(%d) = %q, want %q", n, got, want)
+		}
+	}
+}
+
+func TestGitHubPause(t *testing.T) {
+	now := time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC)
+	reset := now.Add(40 * time.Minute)
+	secondary := fmt.Errorf("gh: HTTP 403: You have exceeded a secondary rate limit")
+	for _, c := range []struct {
+		name      string
+		prev      ghPause
+		err       error
+		rate      ghRate
+		reset     time.Time
+		wantUntil time.Time
+	}{
+		{"healthy", ghPause{}, nil, ghRate{5000, 4000, reset}, time.Time{}, time.Time{}},
+		{"budget low", ghPause{}, nil, ghRate{5000, 499, reset}, time.Time{}, reset},
+		{"budget low, reset passed", ghPause{}, nil, ghRate{5000, 499, now.Add(-time.Minute)}, time.Time{}, time.Time{}},
+		{"other error", ghPause{}, fmt.Errorf("HTTP 502"), ghRate{}, time.Time{}, time.Time{}},
+		{"secondary limit", ghPause{}, secondary, ghRate{}, time.Time{}, now.Add(time.Minute)},
+		{"secondary limit again", ghPause{backoff: 20 * time.Minute}, secondary, ghRate{}, time.Time{}, now.Add(30 * time.Minute)},
+		{"hourly limit", ghPause{}, fmt.Errorf("API rate limit exceeded"), ghRate{}, reset, reset},
+		{"hourly limit, reset unknown", ghPause{}, fmt.Errorf("API rate limit exceeded"), ghRate{}, time.Time{}, now.Add(15 * time.Minute)},
+	} {
+		if got := c.prev.next(c.err, c.rate, c.reset, now); !got.until.Equal(c.wantUntil) {
+			t.Errorf("%s: paused until %v, want %v", c.name, got.until, c.wantUntil)
+		}
+	}
+	backedOff := ghPause{backoff: 2 * time.Minute}
+	if got := backedOff.next(fmt.Errorf("HTTP 502"), ghRate{}, time.Time{}, now); got.backoff != 2*time.Minute {
+		t.Errorf("failed request: backoff %v, want it kept", got.backoff)
+	}
+	if got := backedOff.next(nil, ghRate{5000, 4000, reset}, time.Time{}, now); got.backoff != 0 {
+		t.Errorf("answered request: backoff %v, want it reset", got.backoff)
+	}
+}
+
+func TestViewPRs(t *testing.T) {
+	links := []PRLink{
+		{Repo: "mattermost/mattermost", Number: 5, URL: "u5"},
+		{Repo: "mattermost/gone", Number: 6, URL: "u6"},
+	}
+	var gotQuery string
+	var gotVars map[string]string
+	post := func(_ context.Context, query string, vars map[string]string) ([]byte, error) {
+		gotQuery, gotVars = query, vars
+		return []byte(`{"data": {"v0": {"pullRequest": {"title": "MM-9 Fix", "url": "https://github.com/mattermost/mattermost/pull/5",
+			"state": "MERGED", "author": {"login": "someone"}}}, "v1": null}, "errors": [{"message": "Could not resolve to a Repository"}]}`), fmt.Errorf("gh: exit status 1")
+	}
+	views, gone, err := viewPRs(context.Background(), post, testConfig(t), links)
+	if err == nil {
+		t.Error("want the failed lookup reported")
+	}
+	if len(gone) != 1 || !gone["u6"] {
+		t.Errorf("gone = %v, want the PR GitHub couldn't resolve", gone)
+	}
+	if !strings.Contains(gotQuery, "pullRequest(number: 5)") || gotVars["o1"] != "mattermost" || gotVars["n1"] != "gone" {
+		t.Errorf("query %s vars %v", gotQuery, gotVars)
+	}
+	v, ok := views["u5"]
+	if len(views) != 1 || !ok || v.State != "MERGED" || v.Author != "someone" || v.Key != "MM-9" || v.URL != "https://github.com/mattermost/mattermost/pull/5" {
+		t.Errorf("views = %+v", views)
+	}
+}
+
+func TestCIBeyondFirstChecks(t *testing.T) {
+	node := func(truncated bool, state string) ghPRNode {
+		var n ghPRNode
+		js := fmt.Sprintf(`{"commits": {"nodes": [{"commit": {"statusCheckRollup": {"state": %q, "contexts": {
+			"pageInfo": {"hasNextPage": %v}, "nodes": [{"__typename": "CheckRun", "status": "COMPLETED", "conclusion": "SUCCESS"}]}}}}]}}`, state, truncated)
+		if err := json.Unmarshal([]byte(js), &n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	cfg := testConfig(t)
+	for _, c := range []struct {
+		truncated bool
+		state     string
+		want      CIState
+	}{
+		{false, "FAILURE", CIPassing},
+		{true, "FAILURE", CIFailing},
+		{true, "PENDING", CIPending},
+		{true, "", CIPassing},
+	} {
+		if got := node(c.truncated, c.state).pr(cfg, "a/b").CI; got != c.want {
+			t.Errorf("truncated %v, state %q: CI %v, want %v (GitHub's state only stands in for checks past the first 100)", c.truncated, c.state, got, c.want)
+		}
+	}
+}
+
+func TestReviewRowsForTaskPRs(t *testing.T) {
+	links := []PRLink{
+		{Repo: "Mattermost/Mattermost", Number: 12, Role: RoleRequested},
+		{Repo: "mattermost/mattermost", Number: 13, Role: RoleRequested},
+		{Repo: "mattermost/logr", Number: 12, Role: RoleReviewed},
+		{Repo: "mattermost/mattermost", Number: 14, Role: RoleReviewed},
+		{Repo: "mattermost/mattermost", Number: 15, Role: RoleRequested, Review: &Review{Worktree: &Worktree{}}},
+		{Repo: "mattermost/mattermost", Number: 16, Role: RoleRequested},
+		{Repo: "mattermost/mattermost", Number: 17, Role: RoleRequested},
+	}
+	prs := []PR{
+		{Repo: "mattermost/mattermost", Number: 12},
+		{Repo: "mattermost/mattermost", Number: 13},
+		{Repo: "mattermost/mattermost", Number: 14},
+		{Repo: "mattermost/mattermost", Number: 15},
+		{Repo: "mattermost/mattermost", Number: 16, Draft: true, ReviewRequested: true},
+		{Repo: "mattermost/mattermost", Number: 17, Draft: true},
+	}
+
+	tasks := []Task{{PR: &prs[0]}, {PR: &prs[2]}, {PR: &prs[3]}, {PR: &prs[4]}, {PR: &prs[5]}}
+	numbers := func(links []PRLink) []int {
+		var got []int
+		for _, l := range links {
+			got = append(got, l.Number)
+		}
+		return got
+	}
+	if got, want := numbers(withoutTaskPRs(slices.Clone(links), tasks, "wiggin77")), []int{13, 12, 15, 16}; !slices.Equal(got, want) {
+		t.Errorf("rows kept %v, want %v: drop rows for PRs a task shows, keep other PRs' rows, rows with a review session and drafts requesting you", got, want)
+	}
+	if got, want := numbers(withoutTaskPRs(slices.Clone(links), tasks, "")), numbers(links); !slices.Equal(got, want) {
+		t.Errorf("rows kept %v, want all %v while the GitHub login is unknown", got, want)
+	}
+}
+
 func TestParseWorktrees(t *testing.T) {
 	out := []byte("worktree /src/mm\nHEAD abc\nbranch refs/heads/master\n\nworktree /src/mm-wt/MM-5\nHEAD def\nbranch refs/heads/MM-5-fix\n\nworktree /src/detached\nHEAD 123\ndetached\n")
 	wts := parseWorktrees(out)
@@ -198,6 +644,85 @@ func TestPlanApproved(t *testing.T) {
 		if got := planApproved([]byte(in)); got != want {
 			t.Errorf("planApproved(%q) = %v, want %v", in, got, want)
 		}
+	}
+}
+
+func TestApprovePlan(t *testing.T) {
+	cases := map[string]string{
+		"# Plan\n":                        "---\nstatus: approved\n---\n# Plan\n",
+		"":                                "---\nstatus: approved\n---\n",
+		"---\nstatus: draft\n---\n# Plan": "---\nstatus: approved\n---\n# Plan",
+		"---\ntitle: x\nstatus: \"Draft\"\n---\n": "---\ntitle: x\nstatus: approved\n---\n",
+		"---\ntitle: x\n---\nstatus: draft\n":     "---\nstatus: approved\ntitle: x\n---\nstatus: draft\n",
+		"---\r\nstatus: draft\r\n---\r\nbody":     "---\r\nstatus: approved\r\n---\r\nbody",
+		"---\nstatus: draft\n":                    "---\nstatus: approved\n---\n---\nstatus: draft\n",
+	}
+	for in, want := range cases {
+		got := approvePlan([]byte(in))
+		if string(got) != want {
+			t.Errorf("approvePlan(%q) = %q, want %q", in, got, want)
+		}
+		if !planApproved(got) {
+			t.Errorf("approvePlan(%q) is not approved", in)
+		}
+	}
+}
+
+func TestApproveEndpoint(t *testing.T) {
+	plan := filepath.Join(t.TempDir(), "MM-1.md")
+	draft := []byte("---\nstatus: draft\n---\n# Plan\n")
+	if err := os.WriteFile(plan, draft, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	board := NewBoard(testConfig(t))
+	board.snap = Snapshot{
+		Tasks:   []Task{{Key: "MM-1", Stage: StagePlanning, Plan: &Plan{Key: "MM-1", Path: plan}}, {Key: "MM-2", Stage: StageTicket}},
+		Updated: time.Now(),
+	}
+	h := newServer(board, "")
+	do := func(path, remote, hash string) int {
+		req := httptest.NewRequest("POST", path, strings.NewReader(url.Values{"hash": {hash}}.Encode()))
+		req.Host = "localhost"
+		req.RemoteAddr = remote
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.Header.Set("X-Taskboard", "1")
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec.Code
+	}
+	const local = "127.0.0.1:1234"
+	hash := planHash(draft)
+	page := func(remote string) string {
+		req := httptest.NewRequest("GET", "/plan/MM-1", nil)
+		req.Host = "localhost"
+		req.RemoteAddr = remote
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("plan page: %d %s", rec.Code, rec.Body.String())
+		}
+		return rec.Body.String()
+	}
+	if p := page(local); !strings.Contains(p, `id="approve"`) || !strings.Contains(p, hash) {
+		t.Error("local plan page should offer Approve with the plan's hash")
+	}
+	if strings.Contains(page("192.0.2.1:1234"), `id="approve"`) {
+		t.Error("a viewer should not get the Approve button")
+	}
+	if code := do("/approve/MM-1", "192.0.2.1:1234", hash); code != http.StatusForbidden {
+		t.Errorf("viewer: %d, want 403", code)
+	}
+	if code := do("/approve/MM-2", local, hash); code != http.StatusNotFound {
+		t.Errorf("no plan: %d, want 404", code)
+	}
+	if code := do("/approve/MM-1", local, planHash([]byte("older"))); code != http.StatusConflict {
+		t.Errorf("changed plan: %d, want 409", code)
+	}
+	if code := do("/approve/MM-1", local, hash); code != http.StatusNoContent {
+		t.Fatalf("approve: %d, want 204", code)
+	}
+	if got, _ := os.ReadFile(plan); !planApproved(got) {
+		t.Errorf("plan not approved: %q", got)
 	}
 }
 
@@ -246,14 +771,14 @@ func TestCheckHost(t *testing.T) {
 }
 
 func TestDecodeIssues(t *testing.T) {
-	out := []byte(`[{"changelog":null,"fields":{"status":{"id":"6","name":"Closed","statusCategory":{"id":3,"key":"done","name":"Done"}},"summary":"Cross Guard fix"},"id":"154491","key":"MM-71003","names":null},
+	out := []byte(`[{"changelog":null,"fields":{"status":{"id":"6","name":"Closed","statusCategory":{"id":3,"key":"done","name":"Done"}},"summary":"Plugin fix"},"id":"154491","key":"MM-71003","names":null},
 {"fields":{"status":{"name":"In Progress","statusCategory":{"key":"indeterminate"}},"summary":"Other"},"key":"MM-2"}]`)
 	issues, err := decodeIssues(out)
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := []JiraIssue{
-		{Key: "MM-71003", Summary: "Cross Guard fix", Status: "Closed", Done: true},
+		{Key: "MM-71003", Summary: "Plugin fix", Status: "Closed", Done: true},
 		{Key: "MM-2", Summary: "Other", Status: "In Progress"},
 	}
 	if len(issues) != len(want) {
@@ -267,8 +792,8 @@ func TestDecodeIssues(t *testing.T) {
 }
 
 func TestMergePRLinks(t *testing.T) {
-	pr := func(repo string, n, updated int) ghSearchPR {
-		var r ghSearchPR
+	pr := func(repo string, n, updated int) ghPRNode {
+		var r ghPRNode
 		r.Repository.NameWithOwner = repo
 		r.Number = n
 		r.URL = fmt.Sprintf("https://github.com/%s/pull/%d", repo, n)
@@ -277,7 +802,7 @@ func TestMergePRLinks(t *testing.T) {
 	}
 	cfg := testConfig(t)
 	cfg.Repos = []RepoConfig{{Name: "mattermost/mattermost"}}
-	found := [3][]ghSearchPR{
+	found := [3][]ghPRNode{
 		RoleRequested: {pr("mattermost/mattermost", 1, 1), pr("other/repo", 2, 3)},
 		RoleAuthor:    {pr("mattermost/mattermost", 3, 9), pr("Other/Repo", 4, 2)},
 		RoleReviewed:  {pr("mattermost/mattermost", 1, 1), pr("Mattermost/Mattermost", 5, 5), pr("other/repo", 6, 4), pr("mattermost/mattermost", 7, 2)},
@@ -381,20 +906,27 @@ func TestShowsOther(t *testing.T) {
 	}
 }
 
-func TestPRSearchScopes(t *testing.T) {
-	cfg := testConfig(t)
-	cfg.Repos = []RepoConfig{{Name: "mattermost/mattermost"}, {Name: "wiggin77/taskboard"}}
-	if got := prSearchScopes(cfg); len(got) != 1 || got[0] != nil {
-		t.Errorf("no organizations: %q, want one unscoped search", got)
+func TestIgnoreAssignedAuthorsConfig(t *testing.T) {
+	base := `"project_keys":["MM"],"jira":{"base_url":"https://x.atlassian.net"},"repos":[{"name":"a/b"}]`
+	cfg, err := parseConfig([]byte(`{` + base + `,"github":{"ignore_assigned_authors":[" mattermost-build ","app/cursor"]}}`))
+	if err != nil {
+		t.Fatal(err)
 	}
-	cfg.GitHub.Organizations = []string{"Mattermost", "acme"}
-	want := [][]string{{"--owner", "Mattermost", "--owner", "acme"}, {"--repo", "wiggin77/taskboard"}}
-	if got := prSearchScopes(cfg); !slices.EqualFunc(got, want, slices.Equal) {
-		t.Errorf("scopes = %q, want %q", got, want)
+	if want := []string{"mattermost-build", "app/cursor"}; !slices.Equal(cfg.GitHub.IgnoreAssignedAuthors, want) {
+		t.Errorf("github.ignore_assigned_authors = %q, want %q", cfg.GitHub.IgnoreAssignedAuthors, want)
 	}
-	cfg.Repos = cfg.Repos[:1]
-	if got := prSearchScopes(cfg); len(got) != 1 {
-		t.Errorf("all repos inside the organizations: %q, want only the owner search", got)
+	for _, bad := range []string{`[""]`, `["a b"]`, `["@me"]`, `["a/b"]`, `["app/"]`, `["x -author:y"]`} {
+		_, err := parseConfig([]byte(`{` + base + `,"github":{"ignore_assigned_authors":` + bad + `}}`))
+		if err == nil || !strings.Contains(err.Error(), "github.ignore_assigned_authors") {
+			t.Errorf("github.ignore_assigned_authors %s: error = %v, want one naming github.ignore_assigned_authors", bad, err)
+		}
+	}
+	path := filepath.Join(t.TempDir(), "taskboard.json")
+	if err := SaveConfig(path, cfg); err != nil {
+		t.Fatal(err)
+	}
+	if raw, _ := os.ReadFile(path); !strings.Contains(string(raw), "ignore_assigned_authors") {
+		t.Errorf("a github block with only ignore_assigned_authors was not saved:\n%s", raw)
 	}
 }
 
@@ -634,16 +1166,18 @@ func TestIdlePolling(t *testing.T) {
 			return false
 		}
 	}
-	if got := b.nextWait(); got != 15*time.Minute {
-		t.Errorf("before any view: wait %v, want idle interval", got)
+	if _, ok := b.nextWait(); ok {
+		t.Error("before any view: want no timer")
 	}
 
 	b.Viewed()
-	if !woke() {
-		t.Error("first view should wake the poll loop")
+	if !woke() || !b.requested {
+		t.Error("first view with no snapshot should request a refresh")
 	}
-	if got := b.nextWait(); got != time.Minute {
-		t.Errorf("after a view: wait %v, want poll interval", got)
+	b.requested = false
+	b.snap.Updated = time.Now()
+	if got, ok := b.nextWait(); !ok || got > time.Minute || got < 50*time.Second {
+		t.Errorf("after a view: wait %v %v, want about the poll interval", got, ok)
 	}
 	b.Viewed()
 	if woke() {
@@ -651,18 +1185,102 @@ func TestIdlePolling(t *testing.T) {
 	}
 
 	b.lastView = time.Now().Add(-idleAfter - time.Second)
-	if got := b.nextWait(); got != 15*time.Minute {
-		t.Errorf("after idling: wait %v, want idle interval", got)
+	if _, ok := b.nextWait(); ok {
+		t.Error("after idling: want no timer")
 	}
 	b.Viewed()
-	if !woke() {
-		t.Error("a view after idling should wake the poll loop")
+	if !woke() || b.requested {
+		t.Error("a view after idling with recent data should wake the loop without requesting a refresh")
+	}
+	if got, ok := b.nextWait(); !ok || got > time.Minute {
+		t.Errorf("back on screen: wait %v %v, want the rest of the poll interval", got, ok)
 	}
 
-	b.Config().IdlePollInterval.Duration = 0
-	b.lastView = time.Time{}
-	if got := b.nextWait(); got != 0 {
-		t.Errorf("idle with idle_poll_interval 0: wait %v, want 0 (no timer)", got)
+	b.lastView = time.Now().Add(-idleAfter - time.Second)
+	b.snap.Updated = time.Now().Add(-2 * time.Minute)
+	b.Viewed()
+	if !woke() || !b.requested {
+		t.Error("a view after idling with stale data should request a refresh")
+	}
+	b.requested = false
+	if got, ok := b.nextWait(); !ok || got != 0 {
+		t.Errorf("stale data on screen: wait %v %v, want 0", got, ok)
+	}
+}
+
+func TestWaitForRefresh(t *testing.T) {
+	b := NewBoard(testConfig(t))
+	b.snap.Updated = time.Now()
+	b.lastView = time.Now()
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan bool, 1)
+	go func() { done <- b.waitForRefresh(ctx) }()
+
+	b.mu.Lock()
+	b.wakeLocked()
+	b.mu.Unlock()
+	select {
+	case <-done:
+		t.Fatal("a wake without a request should only re-arm the timer")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	b.mu.Lock()
+	b.requestLocked()
+	b.mu.Unlock()
+	select {
+	case ok := <-done:
+		if !ok {
+			t.Error("a request should start a refresh")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("a request should end the wait")
+	}
+
+	go func() { done <- b.waitForRefresh(ctx) }()
+	cancel()
+	if <-done {
+		t.Error("a cancelled wait should stop the loop")
+	}
+}
+
+func TestManualRefresh(t *testing.T) {
+	b := NewBoard(testConfig(t))
+	b.Config().ManualRefresh = true
+	b.Viewed()
+	if len(b.wake) != 0 {
+		t.Error("with manual_refresh a view should not wake the poll loop")
+	}
+	if _, ok := b.nextWait(); ok {
+		t.Error("active with manual_refresh: want no timer")
+	}
+	if got := b.Config().refreshSeconds(); got != 0 {
+		t.Errorf("manual_refresh: page reload every %ds, want none", got)
+	}
+	b.Refresh()
+	if len(b.wake) != 1 {
+		t.Error("Refresh should still wake the loop with manual_refresh")
+	}
+}
+
+func TestPollConfig(t *testing.T) {
+	base := `"project_keys":["MM"],"jira":{"base_url":"https://x.atlassian.net"},"repos":[{"name":"a/b"}]`
+	cfg, err := parseConfig([]byte(`{` + base + `}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.PollInterval.Duration != 5*time.Minute || cfg.ManualRefresh {
+		t.Errorf("defaults: poll %v manual %v, want 5m and automatic", cfg.PollInterval, cfg.ManualRefresh)
+	}
+	for _, ok := range []string{`"poll_interval":"1m"`, `"poll_interval":"1h","manual_refresh":true`, `"idle_poll_interval":"30m"`} {
+		if _, err := parseConfig([]byte(`{` + base + `,` + ok + `}`)); err != nil {
+			t.Errorf("config %s: %v", ok, err)
+		}
+	}
+	for _, bad := range []string{`"poll_interval":"0s"`, `"poll_interval":"30s"`, `"poll_interval":"-1m"`} {
+		if _, err := parseConfig([]byte(`{` + base + `,` + bad + `}`)); err == nil {
+			t.Errorf("config %s should be rejected", bad)
+		}
 	}
 }
 
@@ -706,6 +1324,30 @@ func TestSnapshotVersion(t *testing.T) {
 	snap.Tasks[0].PR.CI = CIFailing
 	if got := snapshotVersion(snap); got == v {
 		t.Error("version should change when a task changes")
+	}
+}
+
+func TestIndexShowsStaleSources(t *testing.T) {
+	board := NewBoard(testConfig(t))
+	board.snap = Snapshot{
+		Updated: time.Now(),
+		Notices: []string{"GitHub paused until 15:04 (412 of 5,000 points left this hour); PRs as of 14:05"},
+		AsOf:    []string{"GitHub as of 14:05", "Jira as of 13:50"},
+		Errors:  []string{"Jira search: acli: exit status 1"},
+	}
+	req := httptest.NewRequest("GET", "/", nil)
+	req.Host = "localhost"
+	rec := httptest.NewRecorder()
+	newServer(board, "").ServeHTTP(rec, req)
+	body := rec.Body.String()
+	for _, want := range []string{
+		`<div class="notices" role="status"><p>GitHub paused until 15:04 (412 of 5,000 points left this hour); PRs as of 14:05</p></div>`,
+		`· GitHub as of 14:05, Jira as of 13:50</span>`,
+		`Some sources failed. The board shows their last good data where it has it.`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("page lacks %q", want)
+		}
 	}
 }
 
@@ -871,7 +1513,7 @@ func TestSettingsPage(t *testing.T) {
 		t.Fatalf("loopback: %d, want 200", rec.Code)
 	}
 	body := rec.Body.String()
-	for _, want := range []string{`name="repos_dir" placeholder="~/src"`, `value="1m"`, ">tmux\nattach\n-t\n{target}</textarea>", `value="mattermost/mattermost"`, `value="MM"`, `id="orgs"`, `id="add-org"`, `<input data-field="name" placeholder="e.g. mattermost" value="acme"`} {
+	for _, want := range []string{`value="1m"`, ">tmux\nattach\n-t\n{target}</textarea>", `value="mattermost/mattermost"`, `value="MM"`, `id="orgs"`, `id="add-org"`, `<input data-field="name" placeholder="e.g. mattermost" value="acme"`, `name="auto_refresh" checked`, `name="repos_dir" placeholder="~/src"`} {
 		if !strings.Contains(body, want) {
 			t.Errorf("settings page missing %q", want)
 		}
@@ -1028,8 +1670,11 @@ func TestRemovalCheck(t *testing.T) {
 func TestCleanupNeverRemovesMainCheckout(t *testing.T) {
 	cfg := sessionConfig(t)
 	task := Task{Key: "MM-1", Worktree: &Worktree{Repo: "mattermost/mattermost", Path: "/src/mattermost", Branch: "MM-1-x", Main: true}}
-	if _, err := cleanup(t.Context(), cfg, task, true); err == nil || !strings.Contains(err.Error(), "main checkout") {
-		t.Errorf("cleanup of the main checkout: %v", err)
+	if _, _, err := removeWorktree(t.Context(), cfg, task.Worktree, nil, nil, true); err == nil || !strings.Contains(err.Error(), "main checkout") {
+		t.Errorf("removing the main checkout: %v", err)
+	}
+	if rm, err := cleanup(t.Context(), cfg, task, true); err != nil || rm.Kept != "" {
+		t.Errorf("cleanup with the main checkout = %+v, %v, want it left alone", rm, err)
 	}
 }
 
@@ -1139,12 +1784,16 @@ func TestSessionConfig(t *testing.T) {
 	if cfg.tmuxSession() != "taskboard" {
 		t.Errorf("tmux_session default = %q", cfg.tmuxSession())
 	}
+	if _, err := parseConfig([]byte(`{` + base + `,"repos":[{"name":"a/foo","path":"/src/a/foo"},{"name":"b/foo"},{"name":"c/foo"}]}`)); err != nil {
+		t.Errorf("repos without a checkout can share a name: %v", err)
+	}
 	for _, bad := range []string{
 		`"repos":[{"name":"a/b","base_branch":"main"}]`,
 		`"repos":[{"name":"a/b"}],"tmux_session":"my:work"`,
 		`"repos":[{"name":"a/b"}],"worktree_dir":"wt"`,
 		`"repos":[{"name":"a/b"}],"repos_dir":"code"`,
 		`"repos":[{"name":"a/b"}],"worktree_links":["enterprise"]`,
+		`"repos":[{"name":"a/foo","path":"/src/a/foo"},{"name":"b/foo","path":"/src/b/Foo/"}]`,
 	} {
 		if _, err := parseConfig([]byte(`{` + base + `,` + bad + `}`)); err == nil {
 			t.Errorf("config %s should be rejected", bad)
@@ -1295,6 +1944,15 @@ func TestControls(t *testing.T) {
 	}
 	if c := prControls(PRLink{ReviewName: "mm-pr1", Role: RoleLeftover, Review: &Review{Worktree: &Worktree{}}}, local); c.Start != "" || c.Clean == "" {
 		t.Errorf("leftover review: %+v", c)
+	}
+	if c := taskControls(Task{Key: "MM-1", Stage: StageTicket}, indexData{}); c.Group != "MM-1" {
+		t.Errorf("task tab group: %+v", c)
+	}
+	if c := prControls(PRLink{Repo: "o/r", Number: 1, Key: "MM-2", ReviewName: "r-pr1", Role: RoleRequested}, remote); c.Group != "MM-2" {
+		t.Errorf("review of a PR with a ticket joins the ticket's tab group: %+v", c)
+	}
+	if c := prControls(PRLink{Repo: "o/r", Number: 1, ReviewName: "r-pr1", Role: RoleRequested}, remote); c.Group != "o/r#1" {
+		t.Errorf("review of a PR without a ticket: %+v", c)
 	}
 }
 
@@ -1555,6 +2213,42 @@ func TestAgentCommandDefault(t *testing.T) {
 	}
 }
 
+func TestCanResume(t *testing.T) {
+	if got, _ := claudeProjectName("/home/me/src/my_repo.v2-MM-1"); got != "-home-me-src-my-repo-v2-MM-1" {
+		t.Errorf("project name %q", got)
+	}
+	if _, ok := claudeProjectName("/" + strings.Repeat("a", 200)); ok {
+		t.Error("over-long project name accepted")
+	}
+
+	base := t.TempDir()
+	t.Setenv("CLAUDE_CONFIG_DIR", base)
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := testConfig(t)
+	cfg.AgentCommand, cfg.AgentResume = "", ""
+	if canResume(cfg, dir) {
+		t.Error("resumed with no conversation")
+	}
+	cfg.AgentResume = "aider --restore"
+	if !canResume(cfg, dir) {
+		t.Error("custom resume command not trusted")
+	}
+	cfg.AgentResume = ""
+	name, _ := claudeProjectName(dir)
+	if err := os.MkdirAll(filepath.Join(base, "projects", name), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(base, "projects", name, "s.jsonl"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if !canResume(cfg, dir) {
+		t.Error("conversation not found")
+	}
+}
+
 func TestDefaultsAreNotSaved(t *testing.T) {
 	cfg, err := parseConfig([]byte(`{"project_keys":["MM"],"jira":{"base_url":"https://x.atlassian.net","jql":"  "},"repos":[{"name":"a/b"}]}`))
 	if err != nil {
@@ -1568,9 +2262,33 @@ func TestDefaultsAreNotSaved(t *testing.T) {
 		t.Fatal(err)
 	}
 	raw, _ := os.ReadFile(path)
-	for _, def := range []string{"claude", `"taskboard"`, `"plans"`, "statusCategory", "repos_dir", "~/src"} {
+	for _, def := range []string{"claude", `"taskboard"`, `"plans"`, "statusCategory", "done_jql", "repos_dir", "~/src"} {
 		if strings.Contains(string(raw), def) {
 			t.Errorf("saved config contains the default %s; defaults belong in placeholders:\n%s", def, raw)
+		}
+	}
+}
+
+func TestDoneJQL(t *testing.T) {
+	base := `"project_keys":["MM"],"done_days":7,"repos":[{"name":"a/b"}]`
+	cfg, err := parseConfig([]byte(`{` + base + `,"jira":{"base_url":"https://x.atlassian.net"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := cfg.doneJQL(), "(assignee = currentUser()) AND statusCategory = Done AND resolved >= -7d"; got != want {
+		t.Errorf("default doneJQL = %q, want %q", got, want)
+	}
+	cfg, err = parseConfig([]byte(`{` + base + `,"jira":{"base_url":"https://x.atlassian.net","done_jql":" assignee = currentUser() OR reporter = currentUser() "}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := cfg.doneJQL(), "(assignee = currentUser() OR reporter = currentUser()) AND statusCategory = Done AND resolved >= -7d"; got != want {
+		t.Errorf("custom doneJQL = %q, want %q", got, want)
+	}
+	for _, order := range []string{"Order By updated", "order  BY updated", "ORDER\\nBY updated"} {
+		_, err = parseConfig([]byte(`{` + base + `,"jira":{"base_url":"https://x.atlassian.net","done_jql":"assignee = currentUser() ` + order + `"}}`))
+		if err == nil || !strings.Contains(err.Error(), "jira.done_jql") {
+			t.Errorf("done_jql with %q: error = %v, want one naming jira.done_jql", order, err)
 		}
 	}
 }
@@ -1685,7 +2403,7 @@ func TestReposDir(t *testing.T) {
 	base := `"project_keys":["MM"],"jira":{"base_url":"https://x.atlassian.net"}`
 	dirs := func(extra string) []string {
 		t.Helper()
-		cfg, err := parseConfig([]byte(`{` + base + extra + `,"repos":[{"name":"a/b","path":"mattermost"},{"name":"a/c","path":"~/src/mattermost"},{"name":"a/d","path":"/abs/x"},{"name":"a/e"}]}`))
+		cfg, err := parseConfig([]byte(`{` + base + extra + `,"repos":[{"name":"a/b","path":"mattermost"},{"name":"a/c","path":"~/src/other"},{"name":"a/d","path":"/abs/x"},{"name":"a/e"}]}`))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1695,10 +2413,10 @@ func TestReposDir(t *testing.T) {
 		}
 		return out
 	}
-	if got, want := dirs(""), []string{"/home/me/src/mattermost", "/home/me/src/mattermost", "/abs/x", ""}; !slices.Equal(got, want) {
+	if got, want := dirs(""), []string{"/home/me/src/mattermost", "/home/me/src/other", "/abs/x", ""}; !slices.Equal(got, want) {
 		t.Errorf("default repos_dir: %v, want %v", got, want)
 	}
-	if got, want := dirs(`,"repos_dir":"/code/"`), []string{"/code/mattermost", "/home/me/src/mattermost", "/abs/x", ""}; !slices.Equal(got, want) {
+	if got, want := dirs(`,"repos_dir":"/code/"`), []string{"/code/mattermost", "/home/me/src/other", "/abs/x", ""}; !slices.Equal(got, want) {
 		t.Errorf("repos_dir /code/: %v, want %v", got, want)
 	}
 	if got := (RepoConfig{Path: "x"}).Dir(); got != "/home/me/src/x" {
@@ -1917,6 +2635,58 @@ func TestDecodeEpicFields(t *testing.T) {
 	}
 }
 
+func TestChangedJQL(t *testing.T) {
+	for _, c := range []struct {
+		keys, epics []string
+		want        string
+	}{
+		{[]string{"MM-1", "MM-2"}, nil, "(key in (MM-1,MM-2)) AND updated >= -7m"},
+		{nil, []string{"MM-10"}, "(parent in (MM-10)) AND updated >= -7m"},
+		{[]string{"MM-1"}, []string{"MM-10", "MM-20"}, "(key in (MM-1) OR parent in (MM-10,MM-20)) AND updated >= -7m"},
+	} {
+		if got := changedJQL(c.keys, c.epics, 7); got != c.want {
+			t.Errorf("changedJQL(%v, %v) = %q, want %q", c.keys, c.epics, got, c.want)
+		}
+	}
+}
+
+func TestMoveChild(t *testing.T) {
+	a := []JiraIssue{{Key: "MM-1"}, {Key: "MM-2"}}
+	children := map[string][]JiraIssue{"MM-10": a, "MM-20": {{Key: "MM-3"}}}
+	keys := func(epic string) []string {
+		var ks []string
+		for _, c := range children[epic] {
+			ks = append(ks, c.Key)
+		}
+		return ks
+	}
+
+	moveChild(children, "MM-2", JiraIssue{Key: "MM-2", Summary: "Renamed", Parent: "MM-10"}, true)
+	if got := keys("MM-10"); !slices.Equal(got, []string{"MM-2", "MM-1"}) || children["MM-10"][0].Summary != "Renamed" {
+		t.Errorf("changed in place: MM-10 = %v, want MM-2 first with its new summary", children["MM-10"])
+	}
+	if a[0].Key != "MM-1" || a[1].Key != "MM-2" {
+		t.Errorf("the old list was changed in place: %v", a)
+	}
+
+	moveChild(children, "MM-1", JiraIssue{Key: "MM-1", Parent: "MM-20"}, true)
+	if !slices.Equal(keys("MM-10"), []string{"MM-2"}) || !slices.Equal(keys("MM-20"), []string{"MM-1", "MM-3"}) {
+		t.Errorf("moved: %v", children)
+	}
+
+	moveChild(children, "MM-4", JiraIssue{Key: "MM-4", Parent: "MM-10"}, true)
+	moveChild(children, "MM-5", JiraIssue{Key: "MM-5", Parent: "MM-99"}, true)
+	if !slices.Equal(keys("MM-10"), []string{"MM-4", "MM-2"}) || len(children) != 2 {
+		t.Errorf("new child of a cached epic, then of an epic not cached: %v", children)
+	}
+
+	moveChild(children, "MM-3", JiraIssue{}, false)
+	moveChild(children, "MM-2", JiraIssue{Key: "MM-2"}, true)
+	if !slices.Equal(keys("MM-20"), []string{"MM-1"}) || !slices.Equal(keys("MM-10"), []string{"MM-4"}) {
+		t.Errorf("deleted, then moved out of every epic: %v", children)
+	}
+}
+
 func TestBuildTasksEpicFields(t *testing.T) {
 	cfg := testConfig(t)
 	tasks := buildTasks(cfg, sources{issues: map[string]JiraIssue{
@@ -2103,5 +2873,170 @@ func TestIndexEpics(t *testing.T) {
 	}
 	if viewer := get("192.0.2.1:1234"); !strings.Contains(viewer, `id="epic-MM-10"`) || strings.Contains(viewer, "data-highlight ") {
 		t.Error("a viewer should see the epics read-only")
+	}
+}
+
+func TestRenderMarkdown(t *testing.T) {
+	got, err := renderMarkdown([]byte("# MM-1 plan\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\n<script>alert(1)</script>\n\n[x](javascript:alert(1))\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(got)
+	for _, want := range []string{"<h1", "MM-1 plan</h1>", "<table>", "<td>1</td>"} {
+		if !strings.Contains(s, want) {
+			t.Errorf("missing %q in %s", want, s)
+		}
+	}
+	for _, bad := range []string{"<script", "javascript:"} {
+		if strings.Contains(s, bad) {
+			t.Errorf("unexpected %q in %s", bad, s)
+		}
+	}
+}
+
+func TestSplitFrontMatter(t *testing.T) {
+	for _, tc := range []struct {
+		in     string
+		fields []planField
+		body   string
+	}{
+		{"---\nstatus: approved\n---\nbody\n", []planField{{"status", "approved"}}, "body\n"},
+		{"---\r\nstatus: \"draft\"\r\nreviewers:\r\n  - alice\r\n  - bob\r\n---\r\nbody", []planField{{"status", "draft"}, {"reviewers", "- alice - bob"}}, "body"},
+		{"---\n---\nbody", nil, "body"},
+		{"# title\n---\n", nil, "# title\n---\n"},
+		{"---\nstatus: draft\n", nil, "---\nstatus: draft\n"},
+	} {
+		fields, body := splitFrontMatter([]byte(tc.in))
+		if !slices.Equal(fields, tc.fields) || string(body) != tc.body {
+			t.Errorf("splitFrontMatter(%q) = %q, %q, want %q, %q", tc.in, fields, body, tc.fields, tc.body)
+		}
+	}
+}
+
+func TestExtensionDownload(t *testing.T) {
+	h := newServer(NewBoard(testConfig(t)), "")
+	get := func(path, host string, tlsReq bool) *httptest.ResponseRecorder {
+		t.Helper()
+		req := httptest.NewRequest("GET", path, nil)
+		req.Host = host
+		if tlsReq {
+			req.TLS = &tls.ConnectionState{}
+		}
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET %s on %s: %d", path, host, rec.Code)
+		}
+		return rec
+	}
+	matches := func(manifest string) []string {
+		t.Helper()
+		var m struct {
+			Version        string
+			ContentScripts []struct{ Matches []string } `json:"content_scripts"`
+		}
+		if err := json.Unmarshal([]byte(manifest), &m); err != nil {
+			t.Fatal(err)
+		}
+		if m.Version != extensionVersion() {
+			t.Errorf("manifest version %q, want %q", m.Version, extensionVersion())
+		}
+		return m.ContentScripts[0].Matches
+	}
+	defaults := []string{"http://127.0.0.1/*", "http://localhost/*"}
+
+	for _, c := range []struct {
+		host string
+		tls  bool
+		want []string
+	}{
+		{"localhost:8080", false, defaults},
+		{"127.0.0.1:8080", false, defaults},
+		{"board.example:8443", true, append(slices.Clone(defaults), "https://board.example/*")},
+		{"localhost:8443", true, append(slices.Clone(defaults), "https://localhost/*")},
+		{"[::1]:8443", true, defaults},
+	} {
+		rec := get("/"+extensionZipName, c.host, c.tls)
+		if ct := rec.Header().Get("Content-Type"); ct != "application/zip" {
+			t.Fatalf("%s: Content-Type %q", c.host, ct)
+		}
+		zr, err := zip.NewReader(bytes.NewReader(rec.Body.Bytes()), int64(rec.Body.Len()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		zipped := map[string]string{}
+		for _, f := range zr.File {
+			if f.Modified.Year() > time.Now().Year() {
+				t.Errorf("%s dated %v", f.Name, f.Modified)
+			}
+			rc, err := f.Open()
+			if err != nil {
+				t.Fatal(err)
+			}
+			data, _ := io.ReadAll(rc)
+			rc.Close()
+			zipped[f.Name] = string(data)
+		}
+		for _, want := range []string{"manifest.json", "background.js", "content.js"} {
+			if _, ok := zipped[want]; !ok {
+				t.Errorf("%s: zip lacks %s at its root", c.host, want)
+			}
+		}
+		if got := matches(zipped["manifest.json"]); !slices.Equal(got, c.want) {
+			t.Errorf("%s: zip matches %v, want %v", c.host, got, c.want)
+		}
+
+		var files map[string]string
+		if err := json.Unmarshal(get("/extension/files.json", c.host, c.tls).Body.Bytes(), &files); err != nil {
+			t.Fatal(err)
+		}
+		if !maps.Equal(files, zipped) {
+			t.Errorf("%s: files.json differs from the zip", c.host)
+		}
+	}
+
+	for _, path := range []string{"/", "/extension"} {
+		body := get(path, "localhost", false).Body.String()
+		if !strings.Contains(body, `<meta name="taskboard-extension-version" content="`+extensionVersion()+`">`) {
+			t.Errorf("%s lacks the extension version meta", path)
+		}
+	}
+	if !strings.Contains(get("/extension", "localhost", false).Body.String(), "/"+extensionZipName) {
+		t.Error("install page lacks the download link")
+	}
+}
+
+func TestConfigTemplates(t *testing.T) {
+	names := templateNames()
+	if !slices.Contains(names, "basic") || !slices.Contains(names, "mattermost") {
+		t.Fatalf("templates = %v", names)
+	}
+	for _, name := range names {
+		data, err := configTemplate(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := parseConfig(data); err != nil {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	if _, err := configTemplate("nope"); err == nil {
+		t.Error("unknown template accepted")
+	}
+}
+
+func TestWriteNewConfig(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "taskboard.json")
+	if err := writeNewConfig(path, []byte("one"), false); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeNewConfig(path, []byte("two"), false); err == nil {
+		t.Error("overwrote an existing config without -force")
+	}
+	if err := writeNewConfig(path, []byte("three"), true); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(path); string(b) != "three" {
+		t.Errorf("config = %q, want three", b)
 	}
 }

@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/sha256"
 	"embed"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"html/template"
@@ -20,6 +22,9 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/yuin/goldmark"
+	"github.com/yuin/goldmark/extension"
 )
 
 //go:embed templates/*.html
@@ -38,6 +43,7 @@ var templates = template.Must(template.New("").Funcs(template.FuncMap{
 	"repoRow":      repoRow,
 	"row":          func(t Task, d indexData) taskRow { return taskRow{t, d} },
 	"prRow":        func(l PRLink, d indexData, canAdd bool) prRow { return prRow{l, d, canAdd} },
+	"extVersion":   extensionVersion,
 }).ParseFS(templateFS, "templates/*.html"))
 
 func slug(name string) string {
@@ -124,6 +130,8 @@ type indexData struct {
 	Sections       []section
 	Nav            []navItem
 	Errors         []string
+	Notices        []string
+	AsOf           []string
 	Updated        time.Time
 	Refreshing     bool
 	Version        string
@@ -140,6 +148,7 @@ type indexData struct {
 // on the taskboard machine; web ones open the browser terminal.
 type controls struct {
 	ID      string
+	Group   string
 	Path    string
 	Session bool
 	Native  bool
@@ -152,7 +161,7 @@ type controls struct {
 }
 
 func taskControls(t Task, d indexData) controls {
-	c := controls{ID: t.Key, Session: t.Session != nil}
+	c := controls{ID: t.Key, Group: t.Key, Session: t.Session != nil}
 	if t.NoCheckout && t.PR != nil && t.Session == nil && t.Worktree == nil && (t.CanStart() || t.NoTicket && t.Stage != StageDone) {
 		if d.CanAct {
 			c.Repo, c.Clone = t.PR.Repo, "Clone repo"
@@ -170,6 +179,9 @@ func taskControls(t Task, d indexData) controls {
 	}
 	if d.CanAct && t.NeedsCleanup() {
 		c.Clean = "Clean up: close the session, remove the worktree and branch"
+		if t.removableWorktree() == nil {
+			c.Clean = "Clean up: close the session"
+		}
 	}
 	return c
 }
@@ -178,7 +190,7 @@ func prControls(p PRLink, d indexData) controls {
 	if p.ReviewName == "" {
 		return controls{}
 	}
-	c := controls{ID: p.ReviewName, Path: "/review", Repo: p.Repo}
+	c := controls{ID: p.ReviewName, Group: p.Group(), Path: "/review", Repo: p.Repo}
 	if p.NoCheckout {
 		if d.CanAct {
 			c.Clone = "Clone repo"
@@ -223,8 +235,61 @@ func repoRow(c *Config, r RepoConfig) repoField {
 }
 
 type planData struct {
-	Task    Task
-	Content string
+	Task        Task
+	FrontMatter []planField
+	Content     template.HTML
+	Hash        string
+	CanAct      bool
+}
+
+type planField struct{ Key, Value string }
+
+func (d planData) Status() string {
+	for _, f := range d.FrontMatter {
+		if f.Key == "status" {
+			return f.Value
+		}
+	}
+	return ""
+}
+
+var planMarkdown = goldmark.New(goldmark.WithExtensions(extension.GFM))
+
+// Goldmark leaves out raw HTML and unsafe link schemes unless told otherwise, which keeps plan files from running script on this origin.
+func renderMarkdown(src []byte) (template.HTML, error) {
+	var buf bytes.Buffer
+	if err := planMarkdown.Convert(src, &buf); err != nil {
+		return "", err
+	}
+	return template.HTML(buf.String()), nil
+}
+
+// splitFrontMatter returns the "key: value" lines of a leading --- block and the Markdown after it;
+// other lines in the block, such as YAML list items, are appended to the field before them.
+func splitFrontMatter(src []byte) ([]planField, []byte) {
+	first, rest, ok := bytes.Cut(src, []byte("\n"))
+	if !ok || string(bytes.TrimSpace(first)) != "---" {
+		return nil, src
+	}
+	var fields []planField
+	for len(rest) > 0 {
+		var raw []byte
+		raw, rest, _ = bytes.Cut(rest, []byte("\n"))
+		line := strings.TrimSpace(string(raw))
+		if line == "---" {
+			return fields, rest
+		}
+		k, v, ok := strings.Cut(line, ":")
+		switch {
+		case line == "":
+		case ok && k != "" && !strings.ContainsAny(k, " \t-"):
+			fields = append(fields, planField{k, strings.Trim(strings.TrimSpace(v), `"'`)})
+		case len(fields) > 0:
+			f := &fields[len(fields)-1]
+			f.Value = strings.TrimSpace(f.Value + " " + line)
+		}
+	}
+	return nil, src
 }
 
 func newServer(board *Board, configPath string) http.Handler {
@@ -234,6 +299,7 @@ func newServer(board *Board, configPath string) http.Handler {
 	mux.HandleFunc("GET /{$}", s.index)
 	mux.HandleFunc("GET /version", s.version)
 	mux.HandleFunc("GET /plan/{key}", s.plan)
+	mux.HandleFunc("POST /approve/{key}", s.approve)
 	mux.HandleFunc("POST /attach/{key}", s.attach)
 	mux.HandleFunc("POST /start/{key}", s.start)
 	mux.HandleFunc("POST /stop/{key}", s.stop)
@@ -249,6 +315,9 @@ func newServer(board *Board, configPath string) http.Handler {
 	mux.HandleFunc("GET /term/{id}", s.termPage)
 	mux.HandleFunc("GET /term/{id}/ws", s.termSocket)
 	mux.HandleFunc("GET /static/{file}", s.static)
+	mux.HandleFunc("GET /extension", s.extensionPage)
+	mux.HandleFunc("GET /extension/files.json", s.extensionFilesJSON)
+	mux.HandleFunc("GET /"+extensionZipName, s.extensionDownload)
 	mux.HandleFunc("GET /settings", s.settings)
 	mux.HandleFunc("POST /settings", s.saveSettings)
 	return s.checkHost(mux)
@@ -285,8 +354,10 @@ func (s *server) index(w http.ResponseWriter, r *http.Request) {
 	}
 	data := indexData{
 		Errors:         snap.Errors,
+		Notices:        snap.Notices,
+		AsOf:           snap.AsOf,
 		Updated:        snap.Updated,
-		RefreshSeconds: int(cfg.PollInterval.Seconds()),
+		RefreshSeconds: cfg.refreshSeconds(),
 		Refreshing:     s.board.Refreshing(),
 		Version:        snap.Version,
 		Native:         len(cfg.AttachCommand) > 0 && s.accessOf(r) == local,
@@ -364,7 +435,7 @@ func (s *server) highlight(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, id+" is not on the board", http.StatusNotFound)
 		return
 	}
-	if snap.Updated.IsZero() || len(snap.Errors) > 0 {
+	if snap.Updated.IsZero() || len(snap.Errors) > 0 || len(snap.AsOf) > 0 {
 		present = nil
 	}
 	list, err := s.board.highlights.set(id, on, present)
@@ -386,7 +457,50 @@ func (s *server) plan(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	render(w, r, "plan.html", planData{Task: t, Content: string(content)})
+	fields, body := splitFrontMatter(content)
+	html, err := renderMarkdown(body)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	render(w, r, "plan.html", planData{Task: t, FrontMatter: fields, Content: html, Hash: planHash(content), CanAct: s.accessOf(r) >= remote})
+}
+
+func planHash(content []byte) string {
+	sum := sha256.Sum256(content)
+	return hex.EncodeToString(sum[:])
+}
+
+// approve takes the hash of the plan the page showed, so a plan the agent rewrote since can't be approved unread.
+func (s *server) approve(w http.ResponseWriter, r *http.Request) {
+	_, t, release, ok := s.action(w, r)
+	if !ok {
+		return
+	}
+	defer release()
+	if t.Plan == nil {
+		http.Error(w, t.Key+" has no plan", http.StatusNotFound)
+		return
+	}
+	content, err := os.ReadFile(t.Plan.Path)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if planHash(content) != r.FormValue("hash") {
+		http.Error(w, "The plan has changed since this page loaded. Reload it and review it again.", http.StatusConflict)
+		return
+	}
+	if !planApproved(content) {
+		if err := os.WriteFile(t.Plan.Path, approvePlan(content), 0o644); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
+	ctx, cancel := actionContext()
+	defer cancel()
+	s.board.LocalChanged(ctx)
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // The custom header forces a CORS preflight, which this server never answers, so other sites cannot trigger it.
