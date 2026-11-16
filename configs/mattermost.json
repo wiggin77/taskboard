@@ -6,6 +6,7 @@
   "merged_pr_days": 90,
   "done_days": 30,
   "attach_command": ["gnome-terminal", "--", "tmux", "attach", "-t", "{target}"],
+  "repos_dir": "~/src",
   "worktree_dir": "~/worktrees",
   "worktree_links": ["~/src/enterprise"],
   "jira": {
@@ -14,7 +15,7 @@
     "done_jql": "assignee = currentUser() OR \"matty code assigner[user picker (single user)]\" = currentUser()"
   },
   "repos": [
-    {"name": "mattermost/mattermost", "path": "~/src/mattermost", "plans_dir": "plans"},
+    {"name": "mattermost/mattermost", "path": "mattermost", "plans_dir": "plans"},
     {"name": "mattermost/mattermost-plugin-jira", "path": "~/src/mattermost-plugin-jira"}
   ],
   "github": {

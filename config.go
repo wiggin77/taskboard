@@ -29,6 +29,7 @@ type Config struct {
 	TmuxSession    string       `json:"tmux_session,omitempty"`
 	AgentCommand   string       `json:"agent_command,omitempty"`
 	AgentResume    string       `json:"agent_resume_command,omitempty"`
+	ReposDir       string       `json:"repos_dir,omitempty"`
 	WorktreeDir    string       `json:"worktree_dir,omitempty"`
 	WorktreeLinks  []string     `json:"worktree_links,omitempty"`
 	Jira           JiraConfig   `json:"jira"`
@@ -45,6 +46,7 @@ const (
 	defaultAgentResume = "claude --continue"
 	defaultTmuxSession = "taskboard"
 	defaultPlansDir    = "plans"
+	defaultReposDir    = "~/src"
 )
 
 const (
@@ -75,9 +77,52 @@ type RepoConfig struct {
 	Path       string `json:"path,omitempty"`
 	PlansDir   string `json:"plans_dir,omitempty"`
 	BaseBranch string `json:"base_branch,omitempty"`
+
+	root string
 }
 
-func (r RepoConfig) Dir() string { return expandHome(r.Path) }
+// Dir returns the local checkout folder. A relative path is inside the repos folder; an empty path means no checkout.
+func (r RepoConfig) Dir() string {
+	if r.Path == "" {
+		return ""
+	}
+	p := expandHome(r.Path)
+	if filepath.IsAbs(p) {
+		return p
+	}
+	root := r.root
+	if root == "" {
+		root = resolveReposDir("")
+	}
+	return filepath.Join(root, p)
+}
+
+// reposDir returns the folder that holds repo checkouts.
+func (c *Config) reposDir() string { return resolveReposDir(c.ReposDir) }
+
+func resolveReposDir(dir string) string {
+	if dir == "" {
+		dir = defaultReposDir
+	}
+	return filepath.Clean(expandHome(dir))
+}
+
+// displayPath returns the form of a repo path the settings page shows: relative to the repos folder when the
+// checkout is inside it, otherwise home-relative where possible.
+func (c *Config) displayPath(p string) string {
+	if p == "" {
+		return ""
+	}
+	full := expandHome(p)
+	if !filepath.IsAbs(full) {
+		return p
+	}
+	rel, err := filepath.Rel(c.reposDir(), filepath.Clean(full))
+	if err == nil && rel != "." && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return rel
+	}
+	return shortenHome(full)
+}
 
 func expandHome(p string) string {
 	if p != "~" && !strings.HasPrefix(p, "~/") {
@@ -257,6 +302,12 @@ func (c *Config) validate() error {
 	}
 	if c.WorktreeDir != "" && !filepath.IsAbs(expandHome(c.WorktreeDir)) {
 		return errors.New("worktree_dir must be an absolute path or start with ~/")
+	}
+	if c.ReposDir != "" && !filepath.IsAbs(expandHome(c.ReposDir)) {
+		return errors.New("repos_dir must be an absolute path or start with ~/")
+	}
+	for i := range c.Repos {
+		c.Repos[i].root = c.reposDir()
 	}
 	for _, l := range c.WorktreeLinks {
 		if !filepath.IsAbs(expandHome(l)) {

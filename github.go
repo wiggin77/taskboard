@@ -228,6 +228,8 @@ type PRLink struct {
 
 	ReviewName string
 	Review     *Review
+	// NoCheckout is true when the repo has a configured folder that does not exist on disk.
+	NoCheckout bool
 }
 
 func (p *PRLink) setKey(cfg *Config, body string) {

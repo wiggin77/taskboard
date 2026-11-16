@@ -120,6 +120,10 @@ a:hover{text-decoration:underline}
 .icon.busy .wait{display:block;animation:spin 1s linear infinite}
 .icon.busy{cursor:progress}
 @media (prefers-reduced-motion:reduce){.icon.busy .wait{animation:none}}
+.clone-repo{display:inline-flex;align-items:center;gap:.4rem;padding:.1rem .6rem;border:1px solid var(--line);border-radius:6px;background:transparent;color:var(--link);font:inherit;cursor:pointer}
+.clone-repo svg{width:14px;height:14px}
+.clone-repo:hover:not(:disabled){border-color:var(--link)}
+.clone-repo.busy{cursor:progress;opacity:.6}
 .badge{display:inline-block;margin-right:.5rem;padding:.05rem .4rem;border-radius:5px;vertical-align:1px;font-size:.6875rem;font-weight:650;line-height:1.4;
   color:var(--link);background:color-mix(in srgb,var(--link) 13%,transparent)}
 .epic{margin:0 0 1rem;scroll-margin-top:7.5rem}
@@ -200,7 +204,7 @@ a:hover{text-decoration:underline}
 </section>
 
 {{$stations := .Stations}}
-{{range .Sections}}
+{{range $sec := .Sections}}
 <section id="{{slug .Name}}"{{if eq .Name "Done"}} class="done"{{end}}>
   {{if .Epics}}<h2>{{.Name}} <span class="count">{{.Count}}</span></h2>
   {{else}}<details{{if ne .Name "Done"}} open{{end}}><summary>{{.Name}} <span class="count">{{.Count}}</span></summary>{{end}}
@@ -224,7 +228,7 @@ a:hover{text-decoration:underline}
   {{range .}}{{template "taskrow" (row . $)}}{{end}}
   </ul>{{end}}
   {{with .PRs}}<ul class="tasks">
-  {{range .}}{{template "prrow" (prRow . $)}}{{end}}
+  {{range .}}{{template "prrow" (prRow . $ $sec.CanAdd)}}{{end}}
   </ul>{{end}}
   {{if not .Epics}}</details>{{end}}
 </section>
@@ -417,6 +421,10 @@ document.addEventListener("click", async (e) => {
   if (stop) return stopSession(stop);
   const clean = e.target.closest("[data-cleanup]");
   if (clean) return cleanUp(clean);
+  const add = e.target.closest("[data-add-repo]");
+  if (add) return addRepo(add);
+  const clone = e.target.closest("[data-clone-repo]");
+  if (clone) return cloneRepo(clone);
   const open = e.target.closest("[data-attach]");
   if (open) {
     let ok = false;
@@ -450,6 +458,36 @@ async function action(button, title, run) {
   if (!r.ok) return showError(title, typeof r.body === "string" ? r.body : "");
   flashIcon(button, "ok", r.done);
   setTimeout(check, 1500);
+}
+function addRepo(button) {
+  const repo = button.dataset.addRepo;
+  const same = [...document.querySelectorAll("[data-add-repo]")].filter(b => b.dataset.addRepo === repo);
+  let added = false;
+  for (const b of same) if (b !== button) setBusy(b, true);
+  return action(button, "Could not add " + repo, async () => {
+    const r = await post("/repos/add", { repo });
+    if (r.ok) r.done = r.body.cloned ? "Cloned into " + r.body.path + " and added" : "Added " + r.body.path;
+    added = r.ok;
+    return r;
+  }).finally(() => {
+    // The rows stay until the refresh with the new config lands, and another click would only report the repo as already added.
+    for (const b of same) {
+      if (b !== button) setBusy(b, false);
+      if (added) b.disabled = true;
+    }
+  });
+}
+function cloneRepo(button) {
+  const repo = button.dataset.cloneRepo;
+  const same = [...document.querySelectorAll("[data-clone-repo]")].filter(b => b.dataset.cloneRepo === repo);
+  for (const b of same) if (b !== button) setBusy(b, true);
+  return action(button, "Could not clone " + repo, async () => {
+    const r = await post("/repos/clone", { repo });
+    if (r.ok) r.done = r.body.cloned ? "Cloned into " + r.body.path : "Found " + r.body.path;
+    return r;
+  }).finally(() => {
+    for (const b of same) if (b !== button) setBusy(b, false);
+  });
 }
 function startSession(button) {
   const key = button.dataset.start;
@@ -540,6 +578,7 @@ taskboardExtension.onInstalled(state => {
 {{define "highlightbutton"}}<button class="mark" type="button" data-highlight aria-pressed="{{.}}" title="{{if .}}Remove highlight{{else}}Highlight{{end}}" aria-label="{{if .}}Remove highlight{{else}}Highlight{{end}}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m19 21-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16z"/></svg></button>{{end}}
 
 {{define "controls"}}{{if .ID}}{{$c := .}}
+        {{with .Clone}}<button class="clone-repo" type="button" data-clone-repo="{{$c.Repo}}" title="Clone {{$c.Repo}} into its configured folder"><svg class="main" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 22v-4a4.8 4.8 0 0 0-1-3.5c3 0 6-2 6-5.5.08-1.25-.27-2.48-1-3.5.28-1.15.28-2.35 0-3.5 0 0-1 0-3 1.5-2.64-.5-5.36-.5-8 0C6 2 5 2 5 2c-.3 1.15-.3 2.35 0 3.5A5.403 5.403 0 0 0 4 9c0 3.5 3 5.5 6 5.5-.39.49-.68 1.05-.85 1.65-.17.6-.22 1.23-.15 1.85v4"/><path d="M9 18c-4.51 2-5-2-7-2"/></svg>{{.}}</button>{{end}}
         {{if .Session}}
         {{if .Native}}<button class="icon" type="button" data-attach="{{.ID}}"{{with $c.Path}} data-path="{{.}}"{{end}} title="Open in a terminal" aria-label="Open in a terminal"><svg class="main" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m7 11 2-2-2-2"/><path d="M11 13h4"/><rect width="18" height="18" x="3" y="3" rx="2"/></svg><svg class="ok" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg><svg class="err" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg></button>{{end}}
         {{if .Web}}<a class="icon" href="/term/{{.ID}}" target="term-{{.ID}}" data-group="{{.Group}}" title="Open in the browser" aria-label="Open in the browser"><svg class="main" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M2 8h20"/><path d="M6 4v4"/><path d="M10 4v4"/></svg></a>{{end}}

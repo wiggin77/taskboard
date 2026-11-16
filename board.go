@@ -174,7 +174,10 @@ func (b *Board) Task(key string) (Task, bool) {
 
 func (b *Board) Review(name string) (PRLink, bool) {
 	reviews := b.Snapshot().Reviews
-	if i := slices.IndexFunc(reviews, func(l PRLink) bool { return l.ReviewName != "" && l.ReviewName == name }); i >= 0 {
+	if name == "" {
+		return PRLink{}, false
+	}
+	if i := slices.IndexFunc(reviews, func(l PRLink) bool { return l.ReviewName == name }); i >= 0 {
 		return reviews[i], true
 	}
 	return PRLink{}, false
@@ -440,6 +443,13 @@ func (b *Board) compose(ctx context.Context, r *fetched, loc *localState, gen ui
 	s := sources{issues: r.issues, resolved: r.resolved, missing: r.missing, prs: r.prs,
 		worktrees: loc.worktrees, plans: loc.plans, sessions: ticketSessions(loc.windows)}
 	tasks := buildTasks(r.cfg, s, time.Now())
+	for i := range tasks {
+		if pr := tasks[i].PR; pr != nil {
+			if rc, ok := r.cfg.repo(pr.Repo); ok {
+				tasks[i].NoCheckout = missingCheckout(rc)
+			}
+		}
+	}
 	reviews, leftovers := attachReviews(r.cfg, r.reviews, loc.worktrees, loc.windows)
 	reviews = withoutTaskPRs(reviews, tasks, r.github.login)
 	for i, l := range leftovers {
@@ -500,7 +510,7 @@ func (b *Board) keepUnlisted(issues map[string]JiraIssue, key string, is JiraIss
 func scanLocal(ctx context.Context, cfg *Config) localState {
 	l := localState{windows: listWindows(ctx, cfg)}
 	for _, repo := range cfg.Repos {
-		if repo.Path == "" {
+		if repo.Path == "" || missingCheckout(repo) {
 			continue
 		}
 		wts, err := listWorktrees(ctx, cfg, repo)

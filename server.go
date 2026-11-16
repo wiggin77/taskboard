@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -39,8 +40,9 @@ var templates = template.Must(template.New("").Funcs(template.FuncMap{
 	"shortHome":    shortenHome,
 	"taskControls": taskControls,
 	"prControls":   prControls,
+	"repoRow":      repoRow,
 	"row":          func(t Task, d indexData) taskRow { return taskRow{t, d} },
-	"prRow":        func(l PRLink, d indexData) prRow { return prRow{l, d} },
+	"prRow":        func(l PRLink, d indexData, canAdd bool) prRow { return prRow{l, d, canAdd} },
 	"extVersion":   extensionVersion,
 }).ParseFS(templateFS, "templates/*.html"))
 
@@ -84,6 +86,9 @@ type server struct {
 
 	mu   sync.Mutex
 	busy map[string]bool
+
+	// cfgMu serializes read-modify-write changes to the config file.
+	cfgMu sync.Mutex
 }
 
 const (
@@ -99,6 +104,7 @@ type section struct {
 	Tasks  []Task
 	Epics  []EpicGroup
 	PRs    []PRLink
+	CanAdd bool
 }
 
 func (s section) Count() int { return len(s.Tasks) + len(s.Epics) + len(s.PRs) }
@@ -110,7 +116,8 @@ type taskRow struct {
 
 type prRow struct {
 	PRLink
-	Page indexData
+	Page   indexData
+	CanAdd bool
 }
 
 type navItem struct {
@@ -149,10 +156,18 @@ type controls struct {
 	Stop    bool
 	Start   string
 	Clean   string
+	Repo    string
+	Clone   string
 }
 
 func taskControls(t Task, d indexData) controls {
 	c := controls{ID: t.Key, Group: t.Key, Session: t.Session != nil}
+	if t.NoCheckout && t.PR != nil && t.Session == nil && t.Worktree == nil && (t.CanStart() || t.NoTicket && t.Stage != StageDone) {
+		if d.CanAct {
+			c.Repo, c.Clone = t.PR.Repo, "Clone repo"
+		}
+		return c
+	}
 	if c.Session {
 		c.Native, c.Web, c.Stop = d.Native, d.CanAct, d.CanAct
 	} else if d.CanAct && t.CanStart() {
@@ -175,7 +190,13 @@ func prControls(p PRLink, d indexData) controls {
 	if p.ReviewName == "" {
 		return controls{}
 	}
-	c := controls{ID: p.ReviewName, Group: p.Group(), Path: "/review"}
+	c := controls{ID: p.ReviewName, Group: p.Group(), Path: "/review", Repo: p.Repo}
+	if p.NoCheckout {
+		if d.CanAct {
+			c.Clone = "Clone repo"
+		}
+		return c
+	}
 	var wt *Worktree
 	if p.Review != nil {
 		c.Session, wt = p.Review.Session != nil, p.Review.Worktree
@@ -200,7 +221,17 @@ type settingsData struct {
 	ConfigPath string
 	Listen     string
 	TLSListen  string
-	NewRepo    RepoConfig
+	NewRepo    repoField
+}
+
+// repoField is a repo with the path as the settings page shows it.
+type repoField struct {
+	RepoConfig
+	Path string
+}
+
+func repoRow(c *Config, r RepoConfig) repoField {
+	return repoField{RepoConfig: r, Path: c.displayPath(r.Path)}
 }
 
 type planData struct {
@@ -279,6 +310,8 @@ func newServer(board *Board, configPath string) http.Handler {
 	mux.HandleFunc("POST /review/cleanup/{name}", s.reviewCleanup)
 	mux.HandleFunc("POST /refresh", s.refresh)
 	mux.HandleFunc("POST /highlight", s.highlight)
+	mux.HandleFunc("POST /repos/add", s.addRepo)
+	mux.HandleFunc("POST /repos/clone", s.cloneRepo)
 	mux.HandleFunc("GET /term/{id}", s.termPage)
 	mux.HandleFunc("GET /term/{id}/ws", s.termSocket)
 	mux.HandleFunc("GET /static/{file}", s.static)
@@ -349,7 +382,7 @@ func (s *server) index(w http.ResponseWriter, r *http.Request) {
 		case sectionReviews:
 			sec = section{Name: name, PRs: snap.Reviews}
 		case sectionOtherRepos:
-			sec = section{Name: name, PRs: snap.OtherPRs}
+			sec = section{Name: name, PRs: snap.OtherPRs, CanAdd: data.CanAct}
 		}
 		if sec.Count() == 0 {
 			continue
@@ -614,6 +647,7 @@ func (s *server) start(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+		cfg := checkedOut(cfg)
 		plan, err := startPlan(cfg, t, branches)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
@@ -802,7 +836,8 @@ func (s *server) settings(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "settings need a browser on the taskboard machine or a client certificate", http.StatusForbidden)
 		return
 	}
-	render(w, r, "settings.html", settingsData{Config: s.board.Config(), ConfigPath: s.configPath, Listen: s.listen, TLSListen: s.tlsListen})
+	cfg := s.board.Config()
+	render(w, r, "settings.html", settingsData{Config: cfg, NewRepo: repoRow(cfg, RepoConfig{}), ConfigPath: s.configPath, Listen: s.listen, TLSListen: s.tlsListen})
 }
 
 func (s *server) saveSettings(w http.ResponseWriter, r *http.Request) {
@@ -820,11 +855,16 @@ func (s *server) saveSettings(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if err := SaveConfig(s.configPath, cfg); err != nil {
+	s.cfgMu.Lock()
+	err = SaveConfig(s.configPath, cfg)
+	if err == nil {
+		s.board.SetConfig(cfg)
+	}
+	s.cfgMu.Unlock()
+	if err != nil {
 		http.Error(w, "save "+s.configPath+": "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	s.board.SetConfig(cfg)
 	w.Header().Set("Content-Type", "application/json")
 	restart := cfg.Listen != s.listen || cfg.TLSListen != s.tlsListen || cfg.TLSDir != s.tlsDir
 	json.NewEncoder(w).Encode(map[string]bool{"restart": restart})
@@ -879,4 +919,96 @@ func render(w http.ResponseWriter, r *http.Request, name string, data any) {
 	gz := gzip.NewWriter(w)
 	gz.Write(buf.Bytes())
 	gz.Close()
+}
+
+// addRepo adds a repo listed under Other repos to repos, cloning its checkout into repos_dir when missing.
+func (s *server) addRepo(w http.ResponseWriter, r *http.Request) {
+	if !s.allowAction(w, r) {
+		return
+	}
+	name := r.FormValue("repo")
+	rc, dir, err := addRepoPlan(s.board.Config(), s.board.Snapshot(), name)
+	switch {
+	case errors.Is(err, errNotListed):
+		http.Error(w, name+" is not under Other repos", http.StatusNotFound)
+		return
+	case err != nil:
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
+	release, ok := s.claim(w, "repo:"+name)
+	if !ok {
+		return
+	}
+	defer release()
+	// A page reload must not abort a clone.
+	ctx, cancel := context.WithTimeout(context.Background(), cloneTimeout)
+	defer cancel()
+	cloned, err := ensureCheckout(ctx, name, dir)
+	if errors.Is(err, errCheckoutMismatch) {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	s.cfgMu.Lock()
+	defer s.cfgMu.Unlock()
+	cfg := s.board.Config()
+	if cfg.hasRepo(name) {
+		http.Error(w, name+" is already in your repos", http.StatusConflict)
+		return
+	}
+	// repos_dir can change while the clone runs; the entry must still name the folder that was cloned.
+	if filepath.Join(cfg.reposDir(), rc.Path) != dir {
+		rc.Path = shortenHome(dir)
+	}
+	next, err := withRepo(cfg, rc)
+	if err == nil {
+		err = SaveConfig(s.configPath, next)
+	}
+	if err != nil {
+		http.Error(w, "save "+s.configPath+": "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	s.board.SetConfig(next)
+	writeJSON(w, http.StatusOK, map[string]any{"repo": name, "path": shortenHome(dir), "cloned": cloned})
+}
+
+// cloneRepo clones a repo in repos into its configured folder when that folder is missing.
+func (s *server) cloneRepo(w http.ResponseWriter, r *http.Request) {
+	if !s.allowAction(w, r) {
+		return
+	}
+	name := r.FormValue("repo")
+	rc, ok := s.board.Config().repo(name)
+	if !ok || rc.Path == "" {
+		http.Error(w, name+" has no configured folder", http.StatusNotFound)
+		return
+	}
+	if !repoNameRE.MatchString(rc.Name) {
+		http.Error(w, rc.Name+" is not an owner/repo name", http.StatusBadRequest)
+		return
+	}
+	release, ok := s.claim(w, "repo:"+rc.Name)
+	if !ok {
+		return
+	}
+	defer release()
+	// A page reload must not abort a clone.
+	ctx, cancel := context.WithTimeout(context.Background(), cloneTimeout)
+	defer cancel()
+	dir := rc.Dir()
+	cloned, err := ensureCheckout(ctx, rc.Name, dir)
+	switch {
+	case errors.Is(err, errCheckoutMismatch):
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	case err != nil:
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	s.board.LocalChanged(context.Background())
+	writeJSON(w, http.StatusOK, map[string]any{"repo": rc.Name, "path": shortenHome(dir), "cloned": cloned})
 }

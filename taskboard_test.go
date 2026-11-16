@@ -10,6 +10,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"maps"
@@ -1512,7 +1513,7 @@ func TestSettingsPage(t *testing.T) {
 		t.Fatalf("loopback: %d, want 200", rec.Code)
 	}
 	body := rec.Body.String()
-	for _, want := range []string{`value="1m"`, ">tmux\nattach\n-t\n{target}</textarea>", `value="mattermost/mattermost"`, `value="MM"`, `id="orgs"`, `id="add-org"`, `<input data-field="name" placeholder="e.g. mattermost" value="acme"`, `name="auto_refresh" checked`} {
+	for _, want := range []string{`value="1m"`, ">tmux\nattach\n-t\n{target}</textarea>", `value="mattermost/mattermost"`, `value="MM"`, `id="orgs"`, `id="add-org"`, `<input data-field="name" placeholder="e.g. mattermost" value="acme"`, `name="auto_refresh" checked`, `name="repos_dir" placeholder="~/src"`} {
 		if !strings.Contains(body, want) {
 			t.Errorf("settings page missing %q", want)
 		}
@@ -1790,6 +1791,7 @@ func TestSessionConfig(t *testing.T) {
 		`"repos":[{"name":"a/b","base_branch":"main"}]`,
 		`"repos":[{"name":"a/b"}],"tmux_session":"my:work"`,
 		`"repos":[{"name":"a/b"}],"worktree_dir":"wt"`,
+		`"repos":[{"name":"a/b"}],"repos_dir":"code"`,
 		`"repos":[{"name":"a/b"}],"worktree_links":["enterprise"]`,
 		`"repos":[{"name":"a/foo","path":"/src/a/foo"},{"name":"b/foo","path":"/src/b/Foo/"}]`,
 	} {
@@ -1880,6 +1882,26 @@ func TestReviewCommand(t *testing.T) {
 	}
 }
 
+func TestCheckedOut(t *testing.T) {
+	dir := t.TempDir()
+	cfg := testConfig(t)
+	cfg.Repos = []RepoConfig{
+		{Name: "o/here", Path: dir},
+		{Name: "o/gone", Path: filepath.Join(dir, "gone")},
+		{Name: "o/nopath"},
+	}
+	got := checkedOut(cfg)
+	if len(got.Repos) != 2 || got.Repos[0].Name != "o/here" || got.Repos[1].Name != "o/nopath" {
+		t.Errorf("repos = %+v", got.Repos)
+	}
+	if len(cfg.Repos) != 3 {
+		t.Errorf("cfg was changed: %+v", cfg.Repos)
+	}
+	if r := localRepos(got); len(r) != 1 || r[0].Name != "o/here" {
+		t.Errorf("local repos = %+v", r)
+	}
+}
+
 func TestControls(t *testing.T) {
 	local := indexData{Native: true, CanAct: true}
 	remote := indexData{CanAct: true}
@@ -1896,11 +1918,26 @@ func TestControls(t *testing.T) {
 	if c := taskControls(Task{Key: "MM-1", Stage: StageCoding, Session: sess}, indexData{}); c.Native || c.Web || c.Stop || c.Start != "" {
 		t.Errorf("viewer gets no actions: %+v", c)
 	}
+	if c := taskControls(Task{Key: "MM-1", Stage: StageTicket, PR: &PR{Repo: "o/mm"}, NoCheckout: true}, local); c.Clone != "Clone repo" || c.Repo != "o/mm" || c.Start != "" || c.Native || c.Web {
+		t.Errorf("task with a missing checkout: %+v", c)
+	}
+	if c := taskControls(Task{Key: "o/mm#5", NoTicket: true, Stage: StageChangesRequested, PR: &PR{Repo: "o/mm"}, NoCheckout: true}, remote); c.Clone != "Clone repo" || c.Web {
+		t.Errorf("PR without a ticket and a missing checkout: %+v", c)
+	}
+	if c := taskControls(Task{Key: "MM-1", Stage: StageTicket, PR: &PR{Repo: "o/mm"}, NoCheckout: true}, indexData{}); c.Clone != "" {
+		t.Errorf("viewer gets no clone button: %+v", c)
+	}
 	if c := prControls(PRLink{Number: 1}, local); c.ID != "" {
 		t.Errorf("PR without a local checkout: %+v", c)
 	}
 	if c := prControls(PRLink{ReviewName: "mm-pr1", Role: RoleRequested}, remote); c.Start != "Start review" || c.Path != "/review" || !c.Web || c.Native || c.Clean != "" {
 		t.Errorf("new review, remote browser: %+v", c)
+	}
+	if c := prControls(PRLink{Repo: "o/mm", ReviewName: "mm-pr1", NoCheckout: true}, remote); c.Clone != "Clone repo" || c.Repo != "o/mm" || c.Start != "" || c.Web {
+		t.Errorf("missing checkout: %+v", c)
+	}
+	if c := prControls(PRLink{ReviewName: "mm-pr1", NoCheckout: true}, indexData{}); c.Clone != "" {
+		t.Errorf("viewer gets no clone button: %+v", c)
 	}
 	if c := prControls(PRLink{ReviewName: "mm-pr1", Role: RoleReviewed, Review: &Review{Worktree: &Worktree{}}}, local); c.Start != "Resume review" || c.Clean == "" {
 		t.Errorf("review with a worktree: %+v", c)
@@ -2225,7 +2262,7 @@ func TestDefaultsAreNotSaved(t *testing.T) {
 		t.Fatal(err)
 	}
 	raw, _ := os.ReadFile(path)
-	for _, def := range []string{"claude", `"taskboard"`, `"plans"`, "statusCategory", "done_jql"} {
+	for _, def := range []string{"claude", `"taskboard"`, `"plans"`, "statusCategory", "done_jql", "repos_dir", "~/src"} {
 		if strings.Contains(string(raw), def) {
 			t.Errorf("saved config contains the default %s; defaults belong in placeholders:\n%s", def, raw)
 		}
@@ -2358,6 +2395,223 @@ func TestHighlightEndpoint(t *testing.T) {
 	}
 	if page := do("GET", "/", "192.0.2.1:1234", false, "").Body.String(); strings.Contains(page, "data-highlight ") {
 		t.Error("a viewer should not get highlight toggles")
+	}
+}
+
+func TestReposDir(t *testing.T) {
+	t.Setenv("HOME", "/home/me")
+	base := `"project_keys":["MM"],"jira":{"base_url":"https://x.atlassian.net"}`
+	dirs := func(extra string) []string {
+		t.Helper()
+		cfg, err := parseConfig([]byte(`{` + base + extra + `,"repos":[{"name":"a/b","path":"mattermost"},{"name":"a/c","path":"~/src/other"},{"name":"a/d","path":"/abs/x"},{"name":"a/e"}]}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out []string
+		for _, r := range cfg.Repos {
+			out = append(out, r.Dir())
+		}
+		return out
+	}
+	if got, want := dirs(""), []string{"/home/me/src/mattermost", "/home/me/src/other", "/abs/x", ""}; !slices.Equal(got, want) {
+		t.Errorf("default repos_dir: %v, want %v", got, want)
+	}
+	if got, want := dirs(`,"repos_dir":"/code/"`), []string{"/code/mattermost", "/home/me/src/other", "/abs/x", ""}; !slices.Equal(got, want) {
+		t.Errorf("repos_dir /code/: %v, want %v", got, want)
+	}
+	if got := (RepoConfig{Path: "x"}).Dir(); got != "/home/me/src/x" {
+		t.Errorf("Dir without validate = %q", got)
+	}
+	_, err := parseConfig([]byte(`{` + base + `,"repos_dir":"code","repos":[{"name":"a/b"}]}`))
+	if err == nil || !strings.Contains(err.Error(), "repos_dir") {
+		t.Errorf("relative repos_dir error = %v", err)
+	}
+}
+
+func TestDisplayPath(t *testing.T) {
+	t.Setenv("HOME", "/home/me")
+	cfg := testConfig(t)
+	for in, want := range map[string]string{
+		"":                 "",
+		"mattermost":       "mattermost",
+		"../work/x":        "../work/x",
+		"~/src/mattermost": "mattermost",
+		"/home/me/src/a/b": "a/b",
+		"~/src":            "~/src",
+		"/opt/x":           "/opt/x",
+		"~/work/x":         "~/work/x",
+		"~/src/":           "~/src",
+		"~/srcother/x":     "~/srcother/x",
+	} {
+		if got := cfg.displayPath(in); got != want {
+			t.Errorf("displayPath(%q) = %q, want %q", in, got, want)
+		}
+	}
+	cfg.ReposDir = "/code/"
+	if got := cfg.displayPath("/code/x"); got != "x" {
+		t.Errorf("custom repos_dir: %q", got)
+	}
+}
+
+func TestSettingsPageShortPaths(t *testing.T) {
+	t.Setenv("HOME", "/home/me")
+	cfg := testConfig(t)
+	cfg.Repos = []RepoConfig{{Name: "a/b", Path: "~/src/mattermost"}}
+	if err := cfg.validate(); err != nil {
+		t.Fatal(err)
+	}
+	h := newServer(NewBoard(cfg), "/tmp/taskboard.json")
+	req := httptest.NewRequest("GET", "/settings", nil)
+	req.Host = "localhost"
+	req.RemoteAddr = "127.0.0.1:1234"
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if !strings.Contains(rec.Body.String(), `data-field="path" placeholder="optional, e.g. repo or ~/src/repo" value="mattermost"`) {
+		t.Errorf("settings page should show the short path:\n%s", rec.Body.String())
+	}
+}
+
+func TestAddRepoPlan(t *testing.T) {
+	t.Setenv("HOME", "/home/me")
+	cfg := testConfig(t)
+	snap := Snapshot{OtherPRs: []PRLink{{Repo: "acme/widget", Number: 1}, {Repo: "acme/..", Number: 2}, {Repo: "mattermost/Mattermost", Number: 3}}}
+	rc, dir, err := addRepoPlan(cfg, snap, "acme/widget")
+	if err != nil || rc != (RepoConfig{Name: "acme/widget", Path: "widget"}) || dir != "/home/me/src/widget" {
+		t.Errorf("listed: %+v %q %v", rc, dir, err)
+	}
+	for _, name := range []string{"acme/other", "acme/..", ""} {
+		if _, _, err := addRepoPlan(cfg, snap, name); !errors.Is(err, errNotListed) {
+			t.Errorf("%q: %v, want errNotListed", name, err)
+		}
+	}
+	if _, _, err := addRepoPlan(cfg, snap, "mattermost/Mattermost"); !errors.Is(err, errManaged) {
+		t.Errorf("managed with other case: %v, want errManaged", err)
+	}
+}
+
+func TestRemoteMatches(t *testing.T) {
+	for url, want := range map[string]bool{
+		"https://github.com/acme/widget.git\n": true,
+		"https://github.com/acme/widget":       true,
+		"https://github.com/Acme/Widget/":      true,
+		"git@github.com:acme/widget.git":       true,
+		"ssh://git@github.com/acme/widget":     true,
+		"https://github.com/other/widget.git":  false,
+		"https://gitlab.com/acme/widget.git":   false,
+		"git@gitlab.com:acme/widget.git":       false,
+		"https://me@github.com/acme/widget":    true,
+		"ssh://git@github.com:22/acme/widget":  true,
+		"github.com/acme/widget":               false,
+		"https://github.com/acme/big-widget":   false,
+		"":                                     false,
+	} {
+		if got := remoteMatches(url, "acme/widget"); got != want {
+			t.Errorf("remoteMatches(%q) = %v, want %v", url, got, want)
+		}
+	}
+}
+
+func TestWithRepo(t *testing.T) {
+	t.Setenv("HOME", "/home/me")
+	cfg := testConfig(t)
+	next, err := withRepo(cfg, RepoConfig{Name: "acme/widget", Path: "widget"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.Repos) != 1 || len(next.Repos) != 2 {
+		t.Fatalf("repos: old %d, new %d", len(cfg.Repos), len(next.Repos))
+	}
+	if got := next.Repos[1].Dir(); got != "/home/me/src/widget" {
+		t.Errorf("Dir = %q", got)
+	}
+	path := filepath.Join(t.TempDir(), "taskboard.json")
+	if err := SaveConfig(path, next); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := os.ReadFile(path)
+	if strings.Contains(string(raw), "repos_dir") || !strings.Contains(string(raw), `"path": "widget"`) {
+		t.Errorf("saved config:\n%s", raw)
+	}
+}
+
+func TestAddRepoEndpointGuards(t *testing.T) {
+	board := NewBoard(testConfig(t))
+	board.snap.OtherPRs = []PRLink{{Repo: "acme/widget", Number: 1}, {Repo: "mattermost/mattermost", Number: 2}}
+	s := &server{board: board, busy: map[string]bool{}}
+	call := func(remote string, header bool, repo string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest("POST", "/repos/add", strings.NewReader("repo="+repo))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.RemoteAddr = remote
+		if header {
+			req.Header.Set("X-Taskboard", "1")
+		}
+		rec := httptest.NewRecorder()
+		s.addRepo(rec, req)
+		return rec
+	}
+	const local = "127.0.0.1:1234"
+	for _, c := range []struct {
+		remote string
+		header bool
+		repo   string
+		want   int
+	}{
+		{local, false, "acme/widget", http.StatusForbidden},
+		{"192.0.2.1:1234", true, "acme/widget", http.StatusForbidden},
+		{local, true, "acme/unknown", http.StatusNotFound},
+		{local, true, "mattermost/mattermost", http.StatusConflict},
+	} {
+		if rec := call(c.remote, c.header, c.repo); rec.Code != c.want {
+			t.Errorf("%+v: %d %s, want %d", c, rec.Code, strings.TrimSpace(rec.Body.String()), c.want)
+		}
+	}
+	s.busy["repo:acme/widget"] = true
+	if rec := call(local, true, "acme/widget"); rec.Code != http.StatusLocked || !s.busy["repo:acme/widget"] {
+		t.Errorf("add already running: %d, want 423 and the claim kept", rec.Code)
+	}
+}
+
+func TestIndexAddRepoButton(t *testing.T) {
+	board := NewBoard(testConfig(t))
+	board.snap = Snapshot{
+		Reviews:  []PRLink{{Repo: "acme/widget", Number: 1, Role: RoleRequested}},
+		OtherPRs: []PRLink{{Repo: "acme/widget", Number: 2, Role: RoleAuthor}},
+		Updated:  time.Now(),
+	}
+	h := newServer(board, "")
+	get := func(remote string) string {
+		req := httptest.NewRequest("GET", "/", nil)
+		req.Host = "localhost"
+		req.RemoteAddr = remote
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec.Body.String()
+	}
+	if n := strings.Count(get("127.0.0.1:1234"), `data-add-repo="acme/widget"`); n != 1 {
+		t.Errorf("local request has %d add buttons, want 1 (Other repos only)", n)
+	}
+	if strings.Contains(get("192.0.2.1:1234"), "data-add-repo=") {
+		t.Error("a viewer should not get add buttons")
+	}
+}
+
+func TestStaleClone(t *testing.T) {
+	now := time.Now()
+	old := now.Add(-cloneTimeout - time.Minute)
+	for _, c := range []struct {
+		name     string
+		modified time.Time
+		want     bool
+	}{
+		{".foo.clone-123", old, true},
+		{".foo.clone-123", now.Add(-time.Minute), false},
+		{".bar.clone-123", old, false},
+		{"foo", old, false},
+		{".foo.clone-123", now.Add(-cloneTimeout + time.Minute), false},
+	} {
+		if got := staleClone(c.name, "foo", c.modified, now); got != c.want {
+			t.Errorf("staleClone(%q, age %v) = %v, want %v", c.name, now.Sub(c.modified), got, c.want)
+		}
 	}
 }
 

@@ -100,8 +100,11 @@ button.primary{background:var(--link);border-color:var(--link);color:var(--surfa
 
 <fieldset id="repos">
   <legend>Repos</legend>
-  <span class="hint">Your PRs in these repos, and PRs assigned to you there, become tasks; PRs elsewhere go under Other repos, limited by the organizations below. With a local checkout, the board also shows its worktrees and the plan files in each worktree's plans folder (default is 'plans'), with the ticket key anywhere in the file name, like MM-1234.md or 2026-10-07-MM-1234-sync.md.</span>
-  {{range .Repos}}{{template "repo" .}}{{end}}
+  <label>Repos folder<span class="hint">Full path, or starting with ~/ for your home folder. A repo's local checkout without a leading / or ~/ is inside this folder. Default is ~/src.</span>
+  <input name="repos_dir" placeholder="~/src" value="{{shortHome .ReposDir}}"></label>
+  
+  <label>Watched repositories<span class="hint">Your PRs in these repos, and PRs assigned to you there, become tasks; PRs elsewhere go under Other repos, limited by the organizations below. With a local checkout, the board also shows its worktrees and the plan files in each worktree's plans folder (default is 'plans'), with the ticket key anywhere in the file name, like MM-1234.md or 2026-10-07-MM-1234-sync.md.</span></label>
+  {{range .Repos}}{{template "repo" (repoRow $.Config .)}}{{end}}
   <button class="icon add" type="button" id="add-repo" title="Add repo" aria-label="Add repo"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M12 5v14"/></svg></button>
   <label>Skip assigned PRs from<span class="hint">Comma separated GitHub logins, or app/name for apps. PRs these accounts open and assign to you, such as automated cherry-picks of your PRs, don't become tasks.</span>
     <input name="github.ignore_assigned_authors" placeholder="e.g. mattermost-build" value="{{join .GitHub.IgnoreAssignedAuthors ", "}}"></label>
@@ -109,7 +112,7 @@ button.primary{background:var(--link);border-color:var(--link);color:var(--surfa
 
 <fieldset id="orgs">
   <legend>Organizations for Other repos</legend>
-  <span class="hint">Other repos lists PRs from these organizations or user accounts only, e.g. mattermost. With none listed, every repo shows. This doesn't affect repos in the Repos section: their PRs show as tasks or under Reviews whatever their organization.</span>
+  <span class="hint">Other repos lists PRs from these organizations or user accounts only, e.g. mattermost. With none listed, every repo shows. Repos in the Repos section always show, whatever their organization.</span>
   {{range .GitHub.Organizations}}{{template "org" .}}{{end}}
   <button class="icon add" type="button" id="add-org" title="Add organization" aria-label="Add organization"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M12 5v14"/></svg></button>
 </fieldset>
@@ -225,6 +228,7 @@ form.addEventListener("submit", async e => {
     agent_command: val("agent_command"),
     agent_resume_command: val("agent_resume_command"),
     tmux_session: val("tmux_session"),
+    repos_dir: val("repos_dir"),
     worktree_dir: val("worktree_dir"),
     worktree_links: lines("worktree_links"),
     github: {
@@ -263,14 +267,14 @@ form.addEventListener("submit", async e => {
 </body>
 </html>
 
-{{define "repo"}}{{$plans := .PlansDir}}{{$path := shortHome .Path}}<div class="repo">
+{{define "repo"}}{{$plans := .PlansDir}}{{$path := .Path}}<div class="repo">
   <label class="repo-name">GitHub repo<input data-field="name" placeholder="e.g. owner/repo" value="{{.Name}}" title="{{.Name}}"></label>
   <label class="repo-plans">Plans folder<input data-field="plans_dir" placeholder="plans" value="{{$plans}}" title="{{$plans}}"></label>
   <button class="icon remove" type="button" title="Remove {{or .Name "this repo"}}" aria-label="Remove {{or .Name "this repo"}}">
     <svg class="trash" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><path d="M10 11v6M14 11v6"/></svg>
     <svg class="undo" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></svg>
   </button>
-  <label class="repo-path">Local checkout<input data-field="path" placeholder="optional, e.g. ~/src/repo" value="{{$path}}" title="{{$path}}"></label>
+  <label class="repo-path">Local checkout<input data-field="path" placeholder="optional, e.g. repo or ~/src/repo" value="{{$path}}" title="{{$path}}"></label>
   <label class="repo-base">Base branch<input data-field="base_branch" placeholder="origin/HEAD" value="{{.BaseBranch}}" title="{{.BaseBranch}}"></label>
 </div>{{end}}
 
