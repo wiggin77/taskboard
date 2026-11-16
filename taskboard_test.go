@@ -2615,6 +2615,38 @@ func TestStaleClone(t *testing.T) {
 	}
 }
 
+func TestCreateJiraControls(t *testing.T) {
+	local := indexData{CanAct: true}
+	pr := &PR{Repo: "o/mm", Number: 5}
+	if c := taskControls(Task{Key: "o/mm#5", NoTicket: true, Stage: StageChangesRequested, PR: pr}, local); c.Jira == "" {
+		t.Error("a ticketless PR should offer Create Jira")
+	}
+	if c := taskControls(Task{Key: "o/mm#5", NoTicket: true, Stage: StageChangesRequested, PR: pr}, indexData{}); c.Jira != "" {
+		t.Error("a viewer should not see Create Jira")
+	}
+	if c := taskControls(Task{Key: "MM-1", Stage: StageTicket, PR: pr}, local); c.Jira != "" {
+		t.Error("a task with a ticket should not offer Create Jira")
+	}
+	if c := taskControls(Task{Key: "o/mm#5", NoTicket: true, Stage: StageDone, PR: pr}, local); c.Jira != "" {
+		t.Error("a done PR should not offer Create Jira")
+	}
+}
+
+func TestParseCreatedKey(t *testing.T) {
+	cfg := testConfig(t)
+	for in, want := range map[string]string{`{"key":"MM-12"}`: "MM-12", "Created MM-13 ok": "MM-13"} {
+		if got, err := parseCreatedKey(cfg, []byte(in)); err != nil || got != want {
+			t.Errorf("parseCreatedKey(%q) = %q, %v", in, got, err)
+		}
+	}
+	if _, err := parseCreatedKey(cfg, []byte("nothing")); err == nil {
+		t.Error("expected an error without a key")
+	}
+	if got := retitle("MM-1", "Fix it"); got != "MM-1 Fix it" {
+		t.Errorf("retitle = %q", got)
+	}
+}
+
 func TestDecodeEpicFields(t *testing.T) {
 	out := []byte(`[{"key":"MM-10","fields":{"summary":"Epic","status":{"name":"Open"},"issuetype":{"name":"Epic","hierarchyLevel":1}}},
 {"key":"MM-11","fields":{"summary":"Story","status":{"name":"Open"},"issuetype":{"name":"Story","hierarchyLevel":0},

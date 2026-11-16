@@ -162,6 +162,7 @@ The extension works on `http://127.0.0.1`, `http://localhost` and the address it
 - `merged_pr_days` (default 90) is how far back merged PRs are checked for "merged, update Jira".
 - The first refresh views each Jira ticket once (about 30s for 100 tickets); later refreshes only view tickets that changed.
 - When a source fails, a banner says so and the board keeps that source's last good data, with its age in the header. When GitHub's API budget (shared with everything using your `gh` login) runs low, taskboard pauses GitHub requests until it resets.
+- A task row for a PR without a ticket (not done) shows a **Create Jira ticket** button for a local browser or a client certificate. It runs `acli jira workitem create` in the first `project_keys` project (type Task, assigned to you, summary from the PR title), then prefixes the PR title with the new key using `gh pr edit`. The next refresh joins the PR to the ticket, so the start buttons appear. If the rename fails, the ticket still exists and the error names its key.
 
 ## License
 
