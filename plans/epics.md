@@ -64,7 +64,7 @@ Epics assigned to you already show up on the board, but as ordinary rows: taskbo
   - Grouping that moves a `StageTicket` epic to Epics and keeps an epic with a PR in its stage.
 - `go vet ./...`, `go test ./...`, gofmt on edited files.
 - Against the real site:
-  - MM-68189 (Cross Guard plugin for CDS) shows in Epics with MM-71014, MM-71020 and MM-71024 under it, and those rows' stage entries show `epic MM-68189`.
+  - MM-68189 shows in Epics with MM-71014, MM-71020 and MM-71024 under it, and those rows' stage entries show `epic MM-68189`.
   - The other assigned epics (MM-70599, MM-67346, MM-60889) appear in Epics too.
   - A collapsed group stays collapsed after a reload.
   - A viewer (not local, no certificate) sees the section read-only.

@@ -3,3 +3,5 @@ taskboard.json
 /certs
 taskboard-highlights.json
 /dist
+.DS_Store
+

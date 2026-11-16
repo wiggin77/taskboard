@@ -3,10 +3,14 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="application-name" content="taskboard">
 {{template "theme"}}
+{{template "phone"}}
 {{template "tabs"}}
-<noscript><meta http-equiv="refresh" content="{{.RefreshSeconds}}"></noscript>
+{{template "extensioninstall"}}
+{{if .RefreshSeconds}}<noscript><meta http-equiv="refresh" content="{{.RefreshSeconds}}"></noscript>{{end}}
 <title>taskboard</title>
+<link rel="icon" href="/static/board.svg" type="image/svg+xml">
 <style>
 {{template "tokens"}}
 {{template "actionstyle"}}
@@ -18,6 +22,8 @@ h1{font-size:1.25rem;font-weight:700;letter-spacing:-.02em;margin:0}
 .updated::before{content:"";width:7px;height:7px;border-radius:50%;background:var(--ok);box-shadow:0 0 0 3px color-mix(in srgb,var(--ok) 22%,transparent)}
 .updated.refreshing::before{background:var(--needs);box-shadow:0 0 0 3px color-mix(in srgb,var(--needs) 22%,transparent)}
 .status{display:flex;align-items:center;gap:.5rem}
+:root[data-taskboard-extension-state=current] .get-extension{display:none}
+:root[data-taskboard-extension-state=outdated] .get-extension{border-color:color-mix(in srgb,var(--needs) 50%,var(--line));color:var(--needs)}
 .updated{margin-right:.25rem}
 .refresh:disabled svg{animation:spin 1s linear infinite}
 @keyframes spin{to{transform:rotate(360deg)}}
@@ -34,6 +40,10 @@ h1{font-size:1.25rem;font-weight:700;letter-spacing:-.02em;margin:0}
   padding:.75rem 1rem;margin:0 0 1.75rem;font-size:.8125rem}
 .errors p{margin:0 0 .25rem;font-weight:600}
 .errors ul{margin:0;padding-left:1.1rem;color:var(--muted)}
+.notices{border:1px solid var(--line);border-radius:10px;background:var(--surface);padding:.75rem 1rem;margin:0 0 1.75rem;font-size:.8125rem;color:var(--muted)}
+.notices p{margin:0}
+.notices p+p{margin-top:.25rem}
+.asof{color:var(--needs);font-size:.8125rem;font-variant-numeric:tabular-nums;margin-right:.25rem}
 section{margin-bottom:2.25rem;scroll-margin-top:7.5rem}
 h2,summary{display:flex;align-items:center;gap:.55rem;font-size:.9375rem;font-weight:650;letter-spacing:-.005em;margin:0 0 .65rem}
 .count{display:inline-block;min-width:1.5rem;padding:0 .45rem;border-radius:999px;background:var(--chip);color:var(--muted);
@@ -137,6 +147,19 @@ a:hover{text-decoration:underline}
   .child{grid-template-columns:auto minmax(0,1fr)}
   .child .stage,.child .meta{grid-column:2}
 }
+.phone .bar{flex-wrap:wrap;row-gap:.5rem}
+.phone .get-extension{display:none}
+.phone .icon,.phone .links .icon{width:40px;height:40px}
+.phone .icon svg,.phone .links .icon svg{width:18px;height:18px}
+.phone .jump a{padding:.55rem .45rem .55rem .9rem}
+.phone summary{min-height:40px}
+.phone .task,.phone .legend{padding-left:2.5rem}
+.phone .mark{width:calc(2.5rem - 3px);padding-top:1rem}
+.phone .mark svg{width:16px;height:16px}
+.phone .links{gap:0 .9rem}
+.phone .links>a:not(.icon){line-height:40px}
+.phone .child{padding-left:2.5rem}
+.phone .child a.key{padding:.45rem .55rem}
 </style>
 </head>
 <body>
@@ -144,22 +167,30 @@ a:hover{text-decoration:underline}
   <div class="bar">
     <h1>taskboard</h1>
     <div class="status">
-      <span class="updated{{if .Refreshing}} refreshing{{end}}">{{if .Updated.IsZero}}Loading. This page refreshes on its own.{{else}}Updated <time datetime="{{iso .Updated}}">{{.Updated.Format "15:04"}}</time>{{if .Refreshing}}, refreshing{{end}}{{end}}</span>
+      <span class="updated{{if .Refreshing}} refreshing{{end}}">{{if .Updated.IsZero}}Loading. This page refreshes on its own.{{else}}Updated <time datetime="{{iso .Updated}}">{{.Updated.Format "15:04"}}</time>{{if .Refreshing}}, refreshing{{end}}{{end}}</span>{{with .AsOf}}
+      <span class="asof" title="These sources failed or are paused, so the board shows their last good data">· {{range $i, $a := .}}{{if $i}}, {{end}}{{$a}}{{end}}</span>{{end}}
       <button class="icon refresh" type="button"{{if .Refreshing}} disabled title="Refreshing" aria-label="Refreshing"{{else}} title="Refresh now" aria-label="Refresh now"{{end}}>
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></svg>
       </button>
+      <a class="icon get-extension" href="/extension" title="Get the tab groups extension" aria-label="Get the tab groups extension">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15.39 4.39a1 1 0 0 0 1.68-.474 2.5 2.5 0 1 1 3.014 3.015 1 1 0 0 0-.474 1.68l1.683 1.682a2.414 2.414 0 0 1 0 3.414L19.61 15.39a1 1 0 0 1-1.68-.474 2.5 2.5 0 1 0-3.014 3.015 1 1 0 0 1 .474 1.68l-1.683 1.682a2.414 2.414 0 0 1-3.414 0L8.61 19.61a1 1 0 0 0-1.68.474 2.5 2.5 0 1 1-3.014-3.015 1 1 0 0 0 .474-1.68l-1.683-1.682a2.414 2.414 0 0 1 0-3.414L4.39 8.61a1 1 0 0 1 1.68.474 2.5 2.5 0 1 0 3.014-3.015 1 1 0 0 1-.474-1.68l1.683-1.682a2.414 2.414 0 0 1 3.414 0z"/></svg>
+      </a>
       {{template "themebutton"}}
       {{if .CanAct}}<a class="icon" href="/settings" title="Settings" aria-label="Settings">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
       </a>{{end}}
     </div>
   </div>
-  {{with .Nav}}<nav class="jump" aria-label="Sections"><a href="#" class="to-highlight" title="Jump to the next highlighted item" hidden>Highlighted <span class="count"></span></a>{{range .}}<a href="#{{slug .Name}}"{{with .Tone}} class="tone-{{.}}"{{end}}>{{.Name}} <span class="count">{{.Count}}</span></a>{{end}}</nav>{{end}}
+  {{with .Nav}}<nav class="jump" aria-label="Sections"><a href="#highlighted" class="to-highlight" hidden>Highlighted <span class="count"></span></a>{{range .}}<a href="#{{slug .Name}}"{{with .Tone}} class="tone-{{.}}"{{end}}>{{.Name}} <span class="count">{{.Count}}</span></a>{{end}}</nav>{{end}}
 </header>
+
+{{with .Notices}}
+<div class="notices" role="status">{{range .}}<p>{{.}}</p>{{end}}</div>
+{{end}}
 
 {{with .Errors}}
 <div class="errors" role="status">
-  <p>Some sources failed, so the board may be incomplete.</p>
+  <p>Some sources failed. The board shows their last good data where it has it.</p>
   <ul>{{range .}}<li>{{.}}</li>{{end}}</ul>
 </div>
 {{end}}
@@ -167,6 +198,10 @@ a:hover{text-decoration:underline}
 {{if and (not .Sections) (not .Updated.IsZero)}}
 <p class="empty">No tasks yet. Check jira.jql, project_keys and repos in your config.</p>
 {{end}}
+
+<section id="highlighted" hidden>
+  <details open><summary>Highlighted <span class="count"></span></summary><ul class="tasks"></ul></details>
+</section>
 
 {{$stations := .Stations}}
 {{range $sec := .Sections}}
@@ -181,7 +216,7 @@ a:hover{text-decoration:underline}
     {{template "taskrow" (row .Task $)}}
     {{range .Children}}
       <li class="child{{if .OnBoard}} tone-{{.Tone}}{{end}}{{if .Done}} child-done{{end}}">
-        {{if .OnBoard}}<a class="key" href="#" data-goto="{{.Key}}" title="Go to its row">{{.Key}}</a>{{else}}<a class="key" href="{{.JiraURL}}" target="{{.JiraURL}}" data-tab title="Open in Jira">{{.Key}}</a>{{end}}
+        {{if .OnBoard}}<a class="key" href="#" data-goto="{{.Key}}" title="Go to its row">{{.Key}}</a>{{else}}<a class="key" href="{{.JiraURL}}" target="{{.JiraURL}}" data-tab data-group="{{.Key}}" title="Open in Jira">{{.Key}}</a>{{end}}
         <span class="child-summary">{{.Summary}}</span>
         {{if .OnBoard}}<span class="stage">{{.StageLabel}}</span>{{else}}<span class="meta">{{.Status}}, {{or .Assignee "unassigned"}}</span>{{end}}
       </li>
@@ -309,52 +344,52 @@ function setHighlighted(card, on) {
   button.title = label;
   button.setAttribute("aria-label", label);
 }
-// An epic with work of its own has a row in its stage section and another in its epic group.
-function highlightedCards() {
+const highlightSection = document.getElementById("highlighted");
+let shownHighlights = "";
+// An epic with work of its own has a row in its stage section and another in its epic group; copy only one.
+function showHighlights() {
   const seen = new Set();
-  return [...document.querySelectorAll(".task.highlighted")].filter(c => !seen.has(c.dataset.id) && seen.add(c.dataset.id));
-}
-function countHighlights() {
+  const rows = [...document.querySelectorAll(".task.highlighted")]
+    .filter(c => !highlightSection.contains(c) && !seen.has(c.dataset.id) && seen.add(c.dataset.id));
+  const ids = rows.map(c => c.dataset.id).join(" ");
+  if (ids === shownHighlights) return;
+  shownHighlights = ids;
+  highlightSection.querySelector("ul").replaceChildren(...rows.map(c => c.cloneNode(true)));
+  highlightSection.querySelector(".count").textContent = rows.length;
+  highlightSection.hidden = rows.length === 0;
   if (!highlightChip) return;
-  const n = highlightedCards().length;
-  highlightChip.hidden = n === 0;
-  highlightChip.querySelector(".count").textContent = n;
+  highlightChip.hidden = rows.length === 0;
+  highlightChip.querySelector(".count").textContent = rows.length;
 }
 function applyHighlights(ids) {
   const set = new Set(ids);
   for (const card of cards()) setHighlighted(card, set.has(card.dataset.id));
-  countHighlights();
+  showHighlights();
 }
 async function toggleHighlight(button) {
   const id = button.closest(".task").dataset.id;
   const on = !button.closest(".task").classList.contains("highlighted");
-  const same = [...cards()].filter(c => c.dataset.id === id);
-  for (const card of same) setHighlighted(card, on);
-  countHighlights();
+  const same = () => [...cards()].filter(c => c.dataset.id === id);
+  for (const card of same()) setHighlighted(card, on);
+  showHighlights();
   const r = await post("/highlight", { id, on: on ? "1" : "0" });
   if (r.ok) {
     if (!pending) applyHighlights(r.body.highlights);
     return;
   }
-  for (const card of same) setHighlighted(card, !on);
-  countHighlights();
-  flashIcon(button, "err", "Could not save the highlight");
+  for (const card of same()) setHighlighted(card, !on);
+  showHighlights();
+  for (const card of same()) {
+    const mark = card.querySelector("[data-highlight]");
+    if (mark) flashIcon(mark, "err", "Could not save the highlight");
+  }
 }
-let lastHighlight = -1;
 function reveal(card) {
   for (let d = card.closest("details"); d; d = d.parentElement.closest("details")) d.open = true;
   card.scrollIntoView({ block: "center" });
 }
-function nextHighlight() {
-  const list = highlightedCards();
-  if (!list.length) return;
-  lastHighlight = (lastHighlight + 1) % list.length;
-  const card = list[lastHighlight];
-  reveal(card);
-  card.querySelector("[data-highlight]")?.focus({ preventScroll: true });
-}
 function goToRow(key) {
-  const card = [...cards()].find(c => c.dataset.id === key && !c.closest("#epics"));
+  const card = [...cards()].find(c => c.dataset.id === key && !c.closest("#epics, #highlighted"));
   if (!card) return;
   reveal(card);
   card.classList.add("jumped");
@@ -365,10 +400,6 @@ applyHighlights({{.Highlights}});
 document.addEventListener("click", async (e) => {
   const mark = e.target.closest("[data-highlight]");
   if (mark) return toggleHighlight(mark);
-  if (e.target.closest(".to-highlight")) {
-    e.preventDefault();
-    return nextHighlight();
-  }
   const jump = e.target.closest(".jump a");
   if (jump) {
     document.querySelector(jump.getAttribute("href") + " > details")?.setAttribute("open", "");
@@ -513,6 +544,17 @@ function cleanUp(button) {
     return r;
   });
 }
+
+taskboardExtension.onInstalled(state => {
+  if (state !== "outdated") return;
+  const link = document.querySelector(".get-extension");
+  link.title = "Update the tab groups extension";
+  link.setAttribute("aria-label", link.title);
+  // Once per version; if the extension still doesn't update, the button leads to the install page.
+  if (taskboardExtension.supported && taskboardExtension.wrote() !== taskboardExtension.want) {
+    taskboardExtension.update(false).catch(err => console.warn("taskboard extension update:", err));
+  }
+});
 </script>
 </body>
 </html>
@@ -531,11 +573,11 @@ function cleanUp(button) {
         </ol>
       </div>
       <div class="links">
-        {{if not .NoTicket}}<a href="{{.JiraURL}}" target="{{.JiraURL}}" data-tab>Jira{{with .JiraStatus}} <span class="meta">{{.}}</span>{{end}}{{if .JiraMissing}} <span class="meta">not found</span>{{end}}</a>{{end}}
-        {{if .Parent}}{{if index $p.EpicGroups .Parent}}<a href="#epic-{{.Parent}}" data-to-epic="{{.Parent}}" title="{{.ParentSummary}}">epic {{.Parent}}</a>{{else}}<a href="{{.ParentURL}}" target="{{.ParentURL}}" data-tab title="{{.ParentSummary}}">epic {{.Parent}}</a>{{end}}{{end}}
-        {{with .PR}}<a href="{{.URL}}" target="{{.URL}}" data-tab>PR #{{.Number}}{{with .CI.String}} <span class="meta">{{.}}</span>{{end}}</a>{{end}}
+        {{if not .NoTicket}}<a href="{{.JiraURL}}" target="{{.JiraURL}}" data-tab data-group="{{.Key}}">Jira{{with .JiraStatus}} <span class="meta">{{.}}</span>{{end}}{{if .JiraMissing}} <span class="meta">not found</span>{{end}}</a>{{end}}
+        {{if .Parent}}{{if index $p.EpicGroups .Parent}}<a href="#epic-{{.Parent}}" data-to-epic="{{.Parent}}" title="{{.ParentSummary}}">epic {{.Parent}}</a>{{else}}<a href="{{.ParentURL}}" target="{{.ParentURL}}" data-tab data-group="{{.Parent}}" title="{{.ParentSummary}}">epic {{.Parent}}</a>{{end}}{{end}}
+        {{with .PR}}<a href="{{.URL}}" target="{{.URL}}" data-tab data-group="{{$.Key}}">PR #{{.Number}}{{with .CI.String}} <span class="meta">{{.}}</span>{{end}}</a>{{end}}
         {{with .Worktree}}<span class="meta" title="{{.Path}}">worktree {{.Dir}}</span>{{end}}
-        {{with .Plan}}<a href="/plan/{{.Key}}">Plan{{if .Approved}} <span class="meta">approved</span>{{end}}</a>{{end}}
+        {{with .Plan}}<a href="/plan/{{.Key}}" target="plan-{{.Key}}" data-tab data-group="{{$.Key}}">Plan{{if .Approved}} <span class="meta">approved</span>{{end}}</a>{{end}}
         {{template "controls" (taskControls .Task $p)}}
       </div>
     </li>
@@ -550,11 +592,11 @@ function cleanUp(button) {
         {{with .Clone}}<button class="clone-repo" type="button" data-clone-repo="{{$c.Repo}}" title="Clone {{$c.Repo}} into its configured folder"><svg class="main" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 22v-4a4.8 4.8 0 0 0-1-3.5c3 0 6-2 6-5.5.08-1.25-.27-2.48-1-3.5.28-1.15.28-2.35 0-3.5 0 0-1 0-3 1.5-2.64-.5-5.36-.5-8 0C6 2 5 2 5 2c-.3 1.15-.3 2.35 0 3.5A5.403 5.403 0 0 0 4 9c0 3.5 3 5.5 6 5.5-.39.49-.68 1.05-.85 1.65-.17.6-.22 1.23-.15 1.85v4"/><path d="M9 18c-4.51 2-5-2-7-2"/></svg>{{.}}</button>{{end}}
         {{if .Session}}
         {{if .Native}}<button class="icon" type="button" data-attach="{{.ID}}"{{with $c.Path}} data-path="{{.}}"{{end}} title="Open in a terminal" aria-label="Open in a terminal"><svg class="main" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m7 11 2-2-2-2"/><path d="M11 13h4"/><rect width="18" height="18" x="3" y="3" rx="2"/></svg><svg class="ok" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg><svg class="err" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg></button>{{end}}
-        {{if .Web}}<a class="icon" href="/term/{{.ID}}" target="term-{{.ID}}" title="Open in the browser" aria-label="Open in the browser"><svg class="main" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M2 8h20"/><path d="M6 4v4"/><path d="M10 4v4"/></svg></a>{{end}}
+        {{if .Web}}<a class="icon" href="/term/{{.ID}}" target="term-{{.ID}}" data-group="{{.Group}}" title="Open in the browser" aria-label="Open in the browser"><svg class="main" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M2 8h20"/><path d="M6 4v4"/><path d="M10 4v4"/></svg></a>{{end}}
         {{if .Stop}}<button class="icon stop" type="button" data-stop="{{.ID}}"{{with $c.Path}} data-path="{{.}}"{{end}} title="Stop session" aria-label="Stop session"><svg class="main" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><rect x="9" y="9" width="6" height="6" rx="1"/></svg>{{template "marks"}}</button>{{end}}
         {{else}}{{with .Start}}
         {{if $c.Native}}<button class="icon" type="button" data-start="{{$c.ID}}"{{with $c.Path}} data-path="{{.}}"{{end}} title="{{.}} in a terminal" aria-label="{{.}} in a terminal"><svg class="main" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="6 3 20 12 6 21 6 3"/></svg>{{template "marks"}}</button>{{end}}
-        {{if $c.Web}}<a class="icon" href="/term/{{$c.ID}}?start=1" target="term-{{$c.ID}}" title="{{.}} in the browser" aria-label="{{.}} in the browser"><svg class="main" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/><path d="m10 7 5 3-5 3z"/></svg></a>{{end}}
+        {{if $c.Web}}<a class="icon" href="/term/{{$c.ID}}?start=1" target="term-{{$c.ID}}" data-group="{{$c.Group}}" title="{{.}} in the browser" aria-label="{{.}} in the browser"><svg class="main" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/><path d="m10 7 5 3-5 3z"/></svg></a>{{end}}
         {{end}}{{end}}
         {{with .Clean}}<button class="icon clean" type="button" data-cleanup="{{$c.ID}}"{{with $c.Path}} data-path="{{.}}"{{end}} title="{{.}}" aria-label="Clean up"><svg class="main" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>{{template "marks"}}</button>{{end}}
 {{end}}{{end}}

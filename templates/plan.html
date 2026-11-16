@@ -3,35 +3,77 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="application-name" content="taskboard">
 {{template "theme"}}
 {{template "tabs"}}
 <title>{{.Task.Key}} plan</title>
+<link rel="icon" href="/static/plan.svg" type="image/svg+xml">
 <style>
 {{template "tokens"}}
+{{template "actionstyle"}}
 body{padding-top:1.5rem}
 header{display:flex;align-items:center;justify-content:space-between;gap:1rem;margin-bottom:1rem}
 nav{display:flex;flex-wrap:wrap;gap:.25rem 1rem;font-size:.875rem}
 a{color:var(--link);text-decoration:none}
 a:hover{text-decoration:underline}
 :focus-visible{outline:2px solid var(--link);outline-offset:2px}
-h1{font-size:1.25rem;font-weight:650;margin:0 0 .25rem}
-.path{color:var(--muted);font-size:.8125rem;margin:0 0 1rem;overflow-wrap:anywhere}
-pre{background:var(--surface);border:1px solid var(--line);border-radius:6px;padding:1rem;white-space:pre-wrap;overflow-wrap:anywhere;
-  font:13.5px/1.55 ui-monospace,"JetBrains Mono","Ubuntu Mono",monospace;max-width:80ch}
+.title{font-size:1.25rem;font-weight:650;margin:0 0 .25rem}
+.path{color:var(--muted);font-size:.8125rem;margin:0 0 .5rem;overflow-wrap:anywhere}
+.meta{display:flex;flex-wrap:wrap;align-items:center;gap:.25rem 1rem;color:var(--muted);font-size:.8125rem;margin:0 0 1rem;overflow-wrap:anywhere}
+.status{font-weight:600;border-radius:999px;padding:.1rem .6rem;background:color-mix(in srgb,currentColor 12%,transparent)}
+.status.ok{color:var(--ok)}
+.status.needs{color:var(--needs)}
+#approve{padding:.15rem .8rem;border:1px solid var(--link);border-radius:999px;background:var(--link);color:var(--surface);font:inherit;font-weight:600;cursor:pointer}
+#approve:hover{border-color:var(--ink)}
+#approve:disabled{opacity:.6;cursor:default}
+article{background:var(--surface);border:1px solid var(--line);border-radius:6px;padding:.5rem 1.75rem 1.25rem;overflow-wrap:anywhere}
+article h1,article h2,article h3,article h4{line-height:1.25;margin:1.5rem 0 .6rem;font-weight:650}
+article h1{font-size:1.5rem}
+article h2{font-size:1.25rem;padding-bottom:.3rem;border-bottom:1px solid var(--line)}
+article h3{font-size:1.0625rem}
+article h4{font-size:1rem}
+article p,article ul,article ol,article table,article pre,article blockquote{margin:0 0 1rem}
+article ul,article ol{padding-left:1.5rem}
+article li+li{margin-top:.25rem}
+article li>ul,article li>ol{margin:.25rem 0 0}
+article li:has(>input[type=checkbox]){list-style:none;margin-left:-1.25rem}
+article code{font:.875em/1.5 ui-monospace,"JetBrains Mono","Ubuntu Mono",monospace;background:var(--chip);border-radius:4px;padding:.1em .35em}
+article pre{background:var(--chip);border-radius:6px;padding:.85rem 1rem;overflow-x:auto}
+article pre code{background:none;padding:0;font-size:13.5px;overflow-wrap:normal}
+article blockquote{border-left:3px solid var(--line);color:var(--muted);padding:0 1rem;margin-left:0}
+article table{border-collapse:collapse;display:block;overflow-x:auto;overflow-wrap:normal}
+article th,article td{border:1px solid var(--line);padding:.35rem .7rem;text-align:left;vertical-align:top}
+article th{background:var(--chip);font-weight:600}
+article hr{border:0;border-top:1px solid var(--line);margin:1.5rem 0}
+article img{max-width:100%}
 </style>
 </head>
 <body>
 <header>
   <nav>
-    <a href="/">Back to board</a>
-    <a href="{{.Task.JiraURL}}" target="{{.Task.JiraURL}}" data-tab>Jira</a>
-    {{with .Task.PR}}<a href="{{.URL}}" target="{{.URL}}" data-tab>PR #{{.Number}}</a>{{end}}
-    {{with .Task.Plan.GitHubURL}}<a href="{{.}}" target="{{.}}" data-tab>Plan on GitHub</a>{{end}}
+    <a href="{{.Task.JiraURL}}" target="{{.Task.JiraURL}}" data-tab data-group="{{.Task.Key}}">Jira</a>
+    {{with .Task.PR}}<a href="{{.URL}}" target="{{.URL}}" data-tab data-group="{{$.Task.Key}}">PR #{{.Number}}</a>{{end}}
+    {{with .Task.Plan.GitHubURL}}<a href="{{.}}" target="{{.}}" data-tab data-group="{{$.Task.Key}}">Plan on GitHub</a>{{end}}
   </nav>
   {{template "themebutton"}}
 </header>
-<h1>{{.Task.Key}} {{.Task.Summary}}</h1>
-<p class="path">{{.Task.Plan.Path}}{{if .Task.Plan.Approved}} (approved){{end}}</p>
-<pre>{{.Content}}</pre>
+<p class="title">{{.Task.Key}} {{.Task.Summary}}</p>
+<p class="path">{{.Task.Plan.Path}}</p>
+<p class="meta">{{if .Task.Plan.Approved}}<span class="status ok">{{.Status}}</span>{{else}}<span class="status needs" title="Shows as Plan needs review on the board">{{or .Status "no status"}}, needs review</span>{{if .CanAct}}<button id="approve" type="button" title="Sets status: approved in the plan's front matter">Approve</button>{{end}}{{end}}
+  {{range .FrontMatter}}{{if ne .Key "status"}}<span>{{.Key}}: {{.Value}}</span>{{end}}{{end}}</p>
+<article>{{.Content}}</article>
+{{if and .CanAct (not .Task.Plan.Approved)}}
+{{template "actions"}}
+<script>
+const approveButton = document.getElementById("approve");
+approveButton.addEventListener("click", async () => {
+  approveButton.disabled = true;
+  const r = await post("/approve/" + encodeURIComponent({{.Task.Key}}), { hash: {{.Hash}} });
+  if (r.ok) return location.reload();
+  approveButton.disabled = false;
+  showError("Could not approve the plan", typeof r.body === "string" ? r.body : "");
+});
+</script>
+{{end}}
 </body>
 </html>

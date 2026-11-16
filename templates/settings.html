@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 {{template "theme"}}
 <title>taskboard settings</title>
+<link rel="icon" href="/static/board.svg" type="image/svg+xml">
 <style>
 {{template "tokens"}}
 body{padding-top:1.5rem;max-width:48rem}
@@ -25,6 +26,7 @@ input,textarea{display:block;width:100%;margin-top:.3rem;padding:.4rem .55rem;bo
   font:13.5px/1.45 ui-monospace,"JetBrains Mono","SF Mono",Menlo,monospace}
 textarea{resize:vertical;min-height:4.5rem}
 input:focus,textarea:focus{outline:2px solid var(--link);outline-offset:-1px}
+label.check input{display:inline;width:auto;margin:0 .4rem 0 0;vertical-align:-2px}
 .row3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:0 .75rem;align-items:end}
 .row2{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 .75rem;align-items:end}
 input::placeholder,textarea::placeholder{color:var(--faint)}
@@ -84,13 +86,15 @@ button.primary{background:var(--link);border-color:var(--link);color:var(--surfa
     <input name="jira.base_url" type="url" required placeholder="e.g. https://yourcompany.atlassian.net" value="{{.Jira.BaseURL}}"></label>
   <label>Tickets to show (JQL)<span class="hint">Tickets matching this query always appear. Tickets named by a PR, worktree or session appear even if it misses them.</span>
     <textarea name="jira.jql" rows="2" placeholder="assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC">{{.Jira.JQL}}</textarea></label>
+  <label>Finished tickets to show (JQL)<span class="hint">Which resolved tickets are yours. Taskboard adds the Done status and the days-to-keep window, so leave those and ORDER BY out.</span>
+    <textarea name="jira.done_jql" rows="2" placeholder="assignee = currentUser()">{{.Jira.DoneJQL}}</textarea></label>
   <label>Project keys<span class="hint">Comma separated. A key like MM-1234 in a branch name, PR title, plan file name or tmux window name ties it to that ticket.</span>
     <input name="project_keys" required placeholder="e.g. MM, PLUG" value="{{join .ProjectKeys ", "}}"></label>
   <div class="row2">
     <label>Days to keep finished tasks<span class="hint">Tasks whose PR merged or ticket was resolved this recently stay under Done. Default is 30.</span>
       <input name="done_days" type="number" min="1" required value="{{.DoneDays}}"></label>
-    <label>Merged PRs to check per repo<span class="hint">Recent merged PRs checked for a ticket that still needs closing. Default is 20.</span>
-      <input name="merged_pr_limit" type="number" min="1" required value="{{.MergedPRLimit}}"></label>
+    <label>Days of merged PRs to check<span class="hint">PRs merged this recently are checked for a ticket that still needs closing. Default is 90.</span>
+      <input name="merged_pr_days" type="number" min="1" required value="{{.MergedPRDays}}"></label>
   </div>
 </fieldset>
 
@@ -99,9 +103,11 @@ button.primary{background:var(--link);border-color:var(--link);color:var(--surfa
   <label>Repos folder<span class="hint">Full path, or starting with ~/ for your home folder. A repo's local checkout without a leading / or ~/ is inside this folder. Default is ~/src.</span>
   <input name="repos_dir" placeholder="~/src" value="{{shortHome .ReposDir}}"></label>
   
-  <label>Watched repositories<span class="hint">Your PRs in these repos become tasks; PRs elsewhere go under Other repos, limited by the organizations below. With a local checkout, the board also shows its worktrees and the plan files in each worktree's plans folder (default is 'plans'), with the ticket key anywhere in the file name, like MM-1234.md or 2026-10-07-MM-1234-sync.md.</span></label>
+  <label>Watched repositories<span class="hint">Your PRs in these repos, and PRs assigned to you there, become tasks; PRs elsewhere go under Other repos, limited by the organizations below. With a local checkout, the board also shows its worktrees and the plan files in each worktree's plans folder (default is 'plans'), with the ticket key anywhere in the file name, like MM-1234.md or 2026-10-07-MM-1234-sync.md.</span></label>
   {{range .Repos}}{{template "repo" (repoRow $.Config .)}}{{end}}
   <button class="icon add" type="button" id="add-repo" title="Add repo" aria-label="Add repo"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M12 5v14"/></svg></button>
+  <label>Skip assigned PRs from<span class="hint">Comma separated GitHub logins, or app/name for apps. PRs these accounts open and assign to you, such as automated cherry-picks of your PRs, don't become tasks.</span>
+    <input name="github.ignore_assigned_authors" placeholder="e.g. mattermost-build" value="{{join .GitHub.IgnoreAssignedAuthors ", "}}"></label>
 </fieldset>
 
 <fieldset id="orgs">
@@ -113,12 +119,11 @@ button.primary{background:var(--link);border-color:var(--link);color:var(--surfa
 
 <fieldset>
   <legend>Polling</legend>
-  <span class="hint">The board is on screen while any browser tab is showing it, and for 15 minutes after. A closed tab, a background tab or a minimized window is off screen. Durations like 90s, 2m or 1h. The Refresh button on the board refreshes at any time.</span>
-  <div class="row3">
-    <label>Refresh while on screen<span class="hint">At least 10s.</span>
-      <input name="poll_interval" required placeholder="e.g. 2m" value="{{.PollInterval}}"></label>
-    <label>Refresh while off screen<span class="hint">0 turns it off, and showing the board again refreshes right away. Otherwise at least the on-screen interval.</span>
-      <input name="idle_poll_interval" placeholder="0" value="{{.IdlePollInterval}}"></label>
+  <span class="hint">The board is on screen while any browser tab is showing it, and for 90 seconds after. A closed tab, a background tab or a minimized window is off screen. Durations like 90s, 5m or 1h. The Refresh button on the board refreshes at any time.</span>
+  <label class="check"><input type="checkbox" name="auto_refresh"{{if not .ManualRefresh}} checked{{end}}>Refresh automatically<span class="hint">While the board is on screen, and as soon as it is shown again if the data is older than the interval. Never while it is off screen. When off, the board refreshes only when you press Refresh, start, stop or clean up a session, or save settings.</span></label>
+  <div class="row2">
+    <label>Refresh interval<span class="hint">How often to refresh automatically. At least 1m.</span>
+      <input name="poll_interval" required placeholder="e.g. 5m" value="{{.PollInterval}}"></label>
     <label>Refresh time limit<span class="hint">A refresh still running after this is cut short and reports the sources it missed.</span>
       <input name="refresh_timeout" required placeholder="e.g. 5m" value="{{.RefreshTimeout}}"></label>
   </div>
@@ -214,10 +219,10 @@ form.addEventListener("submit", async e => {
     tls_dir: val("tls_dir"),
     revoked_certs: lines("revoked_certs"),
     poll_interval: val("poll_interval"),
-    idle_poll_interval: val("idle_poll_interval") || "0s",
+    manual_refresh: !form.elements.auto_refresh.checked,
     refresh_timeout: val("refresh_timeout"),
     project_keys: val("project_keys").split(/[\s,]+/).filter(Boolean),
-    merged_pr_limit: Number(val("merged_pr_limit")),
+    merged_pr_days: Number(val("merged_pr_days")),
     done_days: Number(val("done_days")),
     attach_command: lines("attach_command"),
     agent_command: val("agent_command"),
@@ -226,8 +231,11 @@ form.addEventListener("submit", async e => {
     repos_dir: val("repos_dir"),
     worktree_dir: val("worktree_dir"),
     worktree_links: lines("worktree_links"),
-    github: { organizations: [...orgs.querySelectorAll(".org:not(.removed) [data-field=name]")].map(i => i.value.trim()).filter(Boolean) },
-    jira: { base_url: val("jira.base_url"), jql: val("jira.jql") },
+    github: {
+      organizations: [...orgs.querySelectorAll(".org:not(.removed) [data-field=name]")].map(i => i.value.trim()).filter(Boolean),
+      ignore_assigned_authors: val("github.ignore_assigned_authors").split(/[\s,]+/).filter(Boolean),
+    },
+    jira: { base_url: val("jira.base_url"), jql: val("jira.jql"), done_jql: val("jira.done_jql") },
     repos: [...repos.querySelectorAll(".repo:not(.removed)")].map(row => {
       const f = n => row.querySelector(`[data-field=${n}]`).value.trim();
       return { name: f("name"), path: f("path"), plans_dir: f("plans_dir"), base_branch: f("base_branch") };
