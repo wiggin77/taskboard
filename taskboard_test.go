@@ -2187,6 +2187,18 @@ func TestPairing(t *testing.T) {
 	if res, body := do(device, "GET", page, nil); res.StatusCode != http.StatusOK || !strings.Contains(string(body), "Add iphone to taskboard") {
 		t.Errorf("pair page: %d", res.StatusCode)
 	}
+	chromebook, _ := http.NewRequest("GET", srv.URL+page, nil)
+	chromebook.Header.Set("User-Agent", "Mozilla/5.0 (X11; CrOS x86_64 14541.0.0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36")
+	if res, err := device.Do(chromebook); err != nil {
+		t.Error(err)
+	} else {
+		body, _ := io.ReadAll(res.Body)
+		res.Body.Close()
+		first, _, _ := strings.Cut(string(body), "A different device or browser?")
+		if !strings.Contains(first, "<h2>Chrome on Chromebook</h2>") || !strings.Contains(first, "Import and Bind") || strings.Contains(first, "Install a certificate") {
+			t.Error("a Chromebook should get its own steps first, without Android's")
+		}
+	}
 	for _, path := range []string{"/pair/" + added.Code + "/wrong/iphone.p12", page + "laptop.p12"} {
 		if res, _ := do(device, "GET", path, nil); res.StatusCode != http.StatusNotFound {
 			t.Errorf("GET %s: %d, want 404", path, res.StatusCode)
@@ -2241,6 +2253,37 @@ func TestPairing(t *testing.T) {
 	handler.ServeHTTP(rec, plain)
 	if rec.Code != http.StatusNotFound {
 		t.Errorf("pairing on the plain listener: %d, want 404", rec.Code)
+	}
+}
+
+func TestPairPlatform(t *testing.T) {
+	for _, c := range []struct{ ua, key, browser, device string }{
+		{"Mozilla/5.0 (X11; CrOS x86_64 14541.0.0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36", "chromeos", "Chrome", "Chromebook"},
+		{"Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Mobile Safari/537.36", "android", "Chrome", "Android"},
+		{"Mozilla/5.0 (Android 14; Mobile; rv:132.0) Gecko/132.0 Firefox/132.0", "android", "Firefox", "Android"},
+		{"Mozilla/5.0 (Linux; Android 14; SM-S921B) AppleWebKit/537.36 (KHTML, like Gecko) SamsungBrowser/26.0 Chrome/122.0.0.0 Mobile Safari/537.36", "android", "Samsung Internet", "Android"},
+		{"Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1", "ios", "Safari", "iPhone"},
+		{"Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) CriOS/130.0.6723.90 Mobile/15E148 Safari/604.1", "ios", "Chrome", "iPhone"},
+		{"Mozilla/5.0 (iPad; CPU OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) FxiOS/132.0 Mobile/15E148 Safari/605.1.15", "ios", "Firefox", "iPad"},
+		{"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15", "mac", "Safari", "Mac"},
+		{"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36", "mac", "Chrome", "Mac"},
+		{"Mozilla/5.0 (Macintosh; Intel Mac OS X 14.0; rv:132.0) Gecko/20100101 Firefox/132.0", "firefox", "Firefox", "Mac"},
+		{"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36 Edg/130.0.0.0", "windows", "Edge", "Windows"},
+		{"Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:132.0) Gecko/20100101 Firefox/132.0", "firefox", "Firefox", "Windows"},
+		{"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36", "linux", "Chrome", "Linux"},
+		{"Mozilla/5.0 (X11; Linux x86_64; rv:132.0) Gecko/20100101 Firefox/132.0", "firefox", "Firefox", "Linux"},
+		{"Go-http-client/1.1", "", "", ""},
+	} {
+		if key, browser, device := pairPlatform(c.ua); key != c.key || browser != c.browser || device != c.device {
+			t.Errorf("pairPlatform(%.60q) = %q, %q, %q, want %q, %q, %q", c.ua, key, browser, device, c.key, c.browser, c.device)
+		}
+	}
+	d := newPairData("pixel", "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Mobile Safari/537.36")
+	if d.Primary == nil || d.Primary.Key != "android" || d.Primary.Title != "Chrome on Android" || len(d.Others) != len(pairStepTitles)-1 {
+		t.Errorf("pair data for Chrome on Android: %+v, %d others", d.Primary, len(d.Others))
+	}
+	if d := newPairData("x", "curl/8.0"); d.Primary != nil || len(d.Others) != len(pairStepTitles) {
+		t.Errorf("an unknown browser should get every device's steps, none first")
 	}
 }
 

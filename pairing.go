@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"crypto/rand"
 	"crypto/subtle"
 	"crypto/x509"
@@ -472,7 +473,98 @@ func (s *server) pairOpen(w http.ResponseWriter, r *http.Request) {
 
 type pairData struct {
 	Name string
-	P12  string
+	// Primary is the steps for the browser that opened the page, when it is recognised; Others are the rest.
+	Primary *pairSteps
+	Others  []pairSteps
+}
+
+// pairSteps picks a block of the pair page's "steps" template. Browser and Device name what the user is on,
+// or are empty in the list of other devices.
+type pairSteps struct {
+	Key     string
+	Title   string
+	Browser string
+	Device  string
+	P12     string
+}
+
+func (p pairSteps) BrowserName() string { return cmp.Or(p.Browser, "your browser") }
+
+var pairStepTitles = []struct{ key, title string }{
+	{"ios", "iPhone or iPad"},
+	{"mac", "Mac with Safari, Chrome or Edge"},
+	{"android", "Android"},
+	{"windows", "Windows with Chrome or Edge"},
+	{"chromeos", "Chromebook"},
+	{"linux", "Linux with Chrome, Edge or Chromium"},
+	{"firefox", "Firefox on Windows, Mac or Linux"},
+}
+
+// pairPlatform reads the browser and device from a User-Agent. The key follows the certificate store the browser
+// uses, so desktop Firefox, which keeps its own, is "firefox" whatever the OS.
+func pairPlatform(ua string) (key, browser, device string) {
+	has := func(subs ...string) bool {
+		return slices.ContainsFunc(subs, func(sub string) bool { return strings.Contains(ua, sub) })
+	}
+	switch {
+	case has("FxiOS/", "Firefox/"):
+		browser = "Firefox"
+	case has("EdgiOS/", "EdgA/", "Edg/"):
+		browser = "Edge"
+	case has("SamsungBrowser/"):
+		browser = "Samsung Internet"
+	case has("OPR/", "OPiOS/"):
+		browser = "Opera"
+	case has("CriOS/", "Chrome/"):
+		browser = "Chrome"
+	case has("Safari/"):
+		browser = "Safari"
+	}
+	switch {
+	case has("iPhone", "iPod"):
+		device = "iPhone"
+	case has("iPad"):
+		device = "iPad"
+	case has("Android"):
+		device = "Android"
+	case has("Macintosh"):
+		device = "Mac"
+	case has("Windows"):
+		device = "Windows"
+	case has("CrOS"):
+		device = "Chromebook"
+	case has("Linux", "X11"):
+		device = "Linux"
+	default:
+		return "", "", ""
+	}
+	switch {
+	case device == "iPhone" || device == "iPad":
+		key = "ios"
+	case device == "Android":
+		key = "android"
+	case browser == "Firefox":
+		key = "firefox"
+	default:
+		key = map[string]string{"Mac": "mac", "Windows": "windows", "Chromebook": "chromeos", "Linux": "linux"}[device]
+	}
+	return key, browser, device
+}
+
+func newPairData(name, ua string) pairData {
+	d := pairData{Name: name}
+	key, browser, device := pairPlatform(ua)
+	for _, t := range pairStepTitles {
+		steps := pairSteps{Key: t.key, Title: t.title, P12: name + ".p12"}
+		if t.key == key {
+			steps.Browser, steps.Device = browser, device
+			steps.Title = cmp.Or(browser, "Your browser") + " on " + device
+			d.Primary = &steps
+			continue
+		}
+		d.Others = append(d.Others, steps)
+	}
+	return d
 }
 
 func (s *server) pairPage(w http.ResponseWriter, r *http.Request) {
@@ -481,7 +573,7 @@ func (s *server) pairPage(w http.ResponseWriter, r *http.Request) {
 		renderStatus(w, r, http.StatusNotFound, "pair.html", pairData{})
 		return
 	}
-	render(w, r, "pair.html", pairData{Name: p.name, P12: p.name + ".p12"})
+	render(w, r, "pair.html", newPairData(p.name, r.UserAgent()))
 }
 
 func (s *server) pairFile(w http.ResponseWriter, r *http.Request) {
