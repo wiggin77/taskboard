@@ -56,13 +56,13 @@ b{font-weight:600}
   </ol>
 </details>
 
-<details data-os="firefox">
-  <summary>Firefox, or Chrome on Linux</summary>
+<details data-os="chrome">
+  <summary>Chromebook, Linux or Firefox</summary>
   <div class="files"><a href="taskboard-ca.crt" download>taskboard-ca.crt</a><a href="{{.P12}}">{{.P12}}</a></div>
   <ol>
-    <li>Open certificate settings: in Firefox, Settings &gt; Privacy &amp; Security &gt; View Certificates; in Chrome, Settings &gt; Privacy and security &gt; Security &gt; Manage certificates.</li>
+    <li>Open certificate settings: in Chrome, search Settings for <b>certificates</b> and open Manage certificates; in Firefox, Settings &gt; Privacy &amp; Security &gt; View Certificates.</li>
     <li>Under <b>Authorities</b>, import taskboard-ca.crt and trust it to identify websites.</li>
-    <li>Under <b>Your Certificates</b>, import {{.P12}} and enter the passphrase.</li>
+    <li>Under <b>Your Certificates</b>, import {{.P12}} and enter the passphrase. On a Chromebook, choose Import and Bind if offered, which keeps the key in the device's security chip.</li>
   </ol>
 </details>
 
@@ -70,7 +70,7 @@ b{font-weight:600}
 <p class="muted">If the board says this device has no certificate, the browser is still using its earlier choice: quit it completely and try again.</p>
 <script>
 const ua = navigator.userAgent;
-const os = /Firefox\//.test(ua) ? "firefox" : /Android/.test(ua) ? "android" : /iPhone|iPad|Macintosh/.test(ua) ? "apple" : /Windows/.test(ua) ? "windows" : /Linux/.test(ua) ? "firefox" : "";
+const os = /Firefox\//.test(ua) ? "chrome" : /Android/.test(ua) ? "android" : /iPhone|iPad|Macintosh/.test(ua) ? "apple" : /Windows/.test(ua) ? "windows" : /CrOS|Linux/.test(ua) ? "chrome" : "";
 const first = document.querySelector(`[data-os="${os}"]`);
 if (first) {
   first.open = true;

@@ -26,7 +26,7 @@ import (
 
 const (
 	pairingTTL    = 10 * time.Minute
-	minPassphrase = 16
+	minPassphrase = 12
 	// Crockford's base32: no I, L, O or U, so a typed code is hard to get wrong.
 	pairAlphabet = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
 	pairCodeLen  = 8
@@ -223,6 +223,8 @@ type remoteAccessData struct {
 	Hosts   string
 	Running bool
 	Error   string
+
+	MinPassphrase int
 }
 
 type certInfo struct {
@@ -231,7 +233,7 @@ type certInfo struct {
 }
 
 func (s *server) remoteAccess() remoteAccessData {
-	d := remoteAccessData{Dir: s.certDir, Running: s.tlsListen != ""}
+	d := remoteAccessData{Dir: s.certDir, Running: s.tlsListen != "", MinPassphrase: minPassphrase}
 	ca, err := readCert(filepath.Join(s.certDir, "ca.crt"))
 	if err != nil {
 		if !os.IsNotExist(err) {

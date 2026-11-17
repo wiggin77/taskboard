@@ -119,7 +119,7 @@ Set it up under **Settings > Remote access** on the taskboard machine:
 
 1. Enter every name and address other devices will use, such as a Tailscale name, and choose **Create certificates**. This makes a certificate authority and a server certificate in `tls_dir` (default `certs`, next to the config file).
 2. Set **Remote access address** (`tls_listen`, for example `0.0.0.0:8443` or a Tailscale address), save and restart taskboard.
-3. For each device, enter a name and a passphrase of at least 16 characters and choose **Add device**. Scan the QR code with the device, or open the link shown on it. Accept the certificate warning, which appears only this first time, and install the certificate as the page describes, typing the passphrase when asked. iPhones, iPads and Macs get a single profile; other systems get `taskboard-ca.crt` and a `.p12`. Then quit and reopen the browser.
+3. For each device, enter a name and a passphrase of at least 12 characters and choose **Add device**. Scan the QR code with the device, or open the link shown on it. Accept the certificate warning, which appears only this first time, and install the certificate as the page describes, typing the passphrase when asked. iPhones, iPads and Macs get a single profile; other systems get `taskboard-ca.crt` and a `.p12`. Then quit and reopen the browser.
 
 The code works once, for 10 minutes. The dialog shows the address of the device that opened it; if that wasn't yours, **Revoke** cuts its certificate off at once. The passphrase is never stored or sent to the device: it only encrypts the `.p12`, so someone who intercepts the download can't use it.
 
