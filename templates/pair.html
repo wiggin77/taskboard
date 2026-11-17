@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+{{template "theme"}}
+<title>{{if .Name}}Add {{.Name}} to taskboard{{else}}taskboard pairing{{end}}</title>
+<style>
+{{template "tokens"}}
+body{padding-top:1.5rem;max-width:40rem}
+h1{font-size:1.25rem;font-weight:700;letter-spacing:-.02em;margin:0 0 .5rem}
+p{margin:0 0 .75rem}
+.muted{color:var(--muted);font-size:.875rem}
+details{margin:0 0 .75rem;padding:.75rem 1rem;background:var(--surface);border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow)}
+summary{font-weight:650;cursor:pointer}
+details[open] summary{margin-bottom:.6rem}
+ol{margin:.6rem 0 0;padding-left:1.25rem}
+li+li{margin-top:.35rem}
+.files{display:flex;flex-wrap:wrap;gap:.5rem}
+.files a{display:inline-block;padding:.45rem 1rem;border:1px solid var(--link);border-radius:999px;background:var(--link);color:var(--surface);font-weight:600;text-decoration:none}
+a{color:var(--link)}
+b{font-weight:600}
+</style>
+</head>
+<body>
+{{if .Name}}
+<h1>Add {{.Name}} to taskboard</h1>
+<p>Install the certificate for your device below, entering the passphrase chosen for it when asked. These downloads work for 10 minutes.</p>
+
+<details data-os="apple">
+  <summary>iPhone, iPad or Mac</summary>
+  <div class="files"><a href="taskboard.mobileconfig">Download profile</a></div>
+  <ol>
+    <li>iPhone or iPad: open Settings, tap <b>Profile Downloaded</b>, then Install, and enter the passphrase. Then turn on <b>taskboard CA</b> under General &gt; About &gt; Certificate Trust Settings.</li>
+    <li>Mac: open System Settings &gt; General &gt; Device Management (Profiles on older macOS), double-click the profile, Install, and enter the passphrase.</li>
+  </ol>
+</details>
+
+<details data-os="android">
+  <summary>Android</summary>
+  <div class="files"><a href="taskboard-ca.crt" download>taskboard-ca.crt</a><a href="{{.P12}}">{{.P12}}</a></div>
+  <ol>
+    <li>In Settings, search for <b>Install a certificate</b> (under Encryption &amp; credentials).</li>
+    <li>Install taskboard-ca.crt as a <b>CA certificate</b>.</li>
+    <li>Install {{.P12}} as a <b>VPN &amp; app user certificate</b>, entering the passphrase. Use Chrome to open the board.</li>
+  </ol>
+</details>
+
+<details data-os="windows">
+  <summary>Windows</summary>
+  <div class="files"><a href="taskboard-ca.crt" download>taskboard-ca.crt</a><a href="{{.P12}}">{{.P12}}</a></div>
+  <ol>
+    <li>Open taskboard-ca.crt, choose Install Certificate, Current User, and place it in <b>Trusted Root Certification Authorities</b>.</li>
+    <li>Open {{.P12}}, choose Current User and enter the passphrase. Chrome and Edge use both.</li>
+  </ol>
+</details>
+
+<details data-os="firefox">
+  <summary>Firefox, or Chrome on Linux</summary>
+  <div class="files"><a href="taskboard-ca.crt" download>taskboard-ca.crt</a><a href="{{.P12}}">{{.P12}}</a></div>
+  <ol>
+    <li>Open certificate settings: in Firefox, Settings &gt; Privacy &amp; Security &gt; View Certificates; in Chrome, Settings &gt; Privacy and security &gt; Security &gt; Manage certificates.</li>
+    <li>Under <b>Authorities</b>, import taskboard-ca.crt and trust it to identify websites.</li>
+    <li>Under <b>Your Certificates</b>, import {{.P12}} and enter the passphrase.</li>
+  </ol>
+</details>
+
+<p>Then quit and reopen the browser, and <a href="/">open the board</a>.</p>
+<p class="muted">If the board says this device has no certificate, the browser is still using its earlier choice: quit it completely and try again.</p>
+<script>
+const ua = navigator.userAgent;
+const os = /Firefox\//.test(ua) ? "firefox" : /Android/.test(ua) ? "android" : /iPhone|iPad|Macintosh/.test(ua) ? "apple" : /Windows/.test(ua) ? "windows" : /Linux/.test(ua) ? "firefox" : "";
+const first = document.querySelector(`[data-os="${os}"]`);
+if (first) {
+  first.open = true;
+  document.querySelector("details").before(first);
+}
+</script>
+{{else}}
+<h1>This pairing code doesn't work</h1>
+<p>It has expired, was cancelled, or was already used by another device. Add the device again under Settings &gt; Remote access on a device that can use the board.</p>
+{{end}}
+</body>
+</html>

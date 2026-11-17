@@ -17,6 +17,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -67,13 +68,50 @@ func runCerts(args []string) error {
 	now := time.Now()
 	switch cmd {
 	case "init":
-		return certsInit(*dir, splitHosts(*hosts), now)
+		server, err := initCerts(*dir, splitHosts(*hosts), now)
+		if err != nil {
+			return err
+		}
+		printServerCert(server)
+		fmt.Printf("Install %s on each device as a trusted root, then issue each one a client certificate with certs client.\n", filepath.Join(*dir, "ca.crt"))
+		return nil
 	case "server":
-		return certsServer(*dir, splitHosts(*hosts), now)
+		server, err := issueServer(*dir, splitHosts(*hosts), now)
+		if err != nil {
+			return err
+		}
+		printServerCert(server)
+		return nil
 	case "client":
-		return certsClient(*dir, name, now)
+		out := filepath.Join(*dir, name+".p12")
+		if _, err := os.Stat(out); err == nil {
+			return fmt.Errorf("%s already exists", out)
+		}
+		password, err := randomPassword()
+		if err != nil {
+			return err
+		}
+		cert, p12, err := issueClient(*dir, name, password, now)
+		if err != nil {
+			return err
+		}
+		if err := os.WriteFile(out, p12, 0o600); err != nil {
+			return err
+		}
+		fmt.Printf("Wrote %s\n  password: %s\n  serial:   %s (add to revoked_certs to cut this device off)\n",
+			out, password, serialHex(cert.SerialNumber))
+		return nil
 	}
 	return errors.New(certsUsage)
+}
+
+func printServerCert(cert *x509.Certificate) {
+	fmt.Printf("Wrote the server certificate for %s, valid until %s. Restart taskboard to use it.\n",
+		strings.Join(certNames(cert), ", "), cert.NotAfter.Format("2006-01-02"))
+}
+
+func certNames(cert *x509.Certificate) []string {
+	return slices.Concat(cert.DNSNames, ipStrings(cert.IPAddresses))
 }
 
 func splitHosts(s string) []string {
@@ -86,81 +124,67 @@ func splitHosts(s string) []string {
 	return hosts
 }
 
-func certsInit(dir string, hosts []string, now time.Time) error {
+func initCerts(dir string, hosts []string, now time.Time) (*x509.Certificate, error) {
 	if len(hosts) == 0 {
-		return errors.New("-host is required, e.g. -host ubuntu,ubuntu.tailnet.ts.net,100.64.0.5")
+		return nil, errors.New("-host is required, e.g. -host ubuntu,ubuntu.tailnet.ts.net,100.64.0.5")
 	}
 	if _, err := os.Stat(filepath.Join(dir, "ca.crt")); err == nil {
-		return fmt.Errorf("%s already has a CA; replacing it would invalidate every client certificate. Use certs server to re-issue the server certificate", dir)
+		return nil, fmt.Errorf("%s already has a CA; replacing it would invalidate every client certificate. Re-issue the server certificate instead", dir)
 	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return err
+		return nil, err
 	}
 	ca, caKey, err := newCA(now)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if err := writeCertAndKey(dir, "ca", ca, caKey); err != nil {
-		return err
+		return nil, err
 	}
-	if err := certsServer(dir, hosts, now); err != nil {
-		return err
-	}
-	fmt.Printf("Install %s on each device as a trusted root, then issue each one a client certificate with certs client.\n", filepath.Join(dir, "ca.crt"))
-	return nil
+	return issueServer(dir, hosts, now)
 }
 
-func certsServer(dir string, hosts []string, now time.Time) error {
+func issueServer(dir string, hosts []string, now time.Time) (*x509.Certificate, error) {
 	if len(hosts) == 0 {
-		return errors.New("-host is required")
+		return nil, errors.New("-host is required")
 	}
 	ca, caKey, err := loadCA(dir)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	cert, key, err := issue(ca, caKey, serverTemplate(hosts, now))
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if err := writeCertAndKey(dir, "server", cert, key); err != nil {
-		return err
+		return nil, err
 	}
-	fmt.Printf("Wrote the server certificate for %s, valid until %s. Restart taskboard to use it.\n",
-		strings.Join(slices.Concat(cert.DNSNames, ipStrings(cert.IPAddresses)), ", "), cert.NotAfter.Format("2006-01-02"))
-	return nil
+	return cert, nil
 }
 
-func certsClient(dir, name string, now time.Time) error {
-	if strings.ContainsAny(name, `/\`) || name == "" || strings.HasPrefix(name, ".") {
-		return fmt.Errorf("invalid client name %q", name)
-	}
-	out := filepath.Join(dir, name+".p12")
-	if _, err := os.Stat(out); err == nil {
-		return fmt.Errorf("%s already exists", out)
+func issueClient(dir, name, password string, now time.Time) (*x509.Certificate, []byte, error) {
+	if !validClientName(name) {
+		return nil, nil, fmt.Errorf("invalid client name %q", name)
 	}
 	ca, caKey, err := loadCA(dir)
 	if err != nil {
-		return err
+		return nil, nil, err
 	}
 	cert, key, err := issue(ca, caKey, clientTemplate(name, now))
 	if err != nil {
-		return err
-	}
-	password, err := randomPassword()
-	if err != nil {
-		return err
+		return nil, nil, err
 	}
 	p12, err := encodeP12(key, cert, ca, password)
 	if err != nil {
-		return err
+		return nil, nil, err
 	}
-	if err := os.WriteFile(out, p12, 0o600); err != nil {
-		return err
-	}
-	fmt.Printf("Wrote %s\n  password: %s\n  serial:   %s (add to revoked_certs to cut this device off)\n",
-		out, password, serialHex(cert.SerialNumber))
-	return nil
+	return cert, p12, nil
 }
+
+// Client names become file names and download paths.
+var clientNameRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._ -]{0,63}$`)
+
+func validClientName(name string) bool { return clientNameRE.MatchString(name) }
 
 func newCA(now time.Time) (*x509.Certificate, *ecdsa.PrivateKey, error) {
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -276,7 +300,7 @@ func writeCertAndKey(dir, name string, cert *x509.Certificate, key *ecdsa.Privat
 func loadCA(dir string) (*x509.Certificate, crypto.Signer, error) {
 	pair, err := tls.LoadX509KeyPair(filepath.Join(dir, "ca.crt"), filepath.Join(dir, "ca.key"))
 	if err != nil {
-		return nil, nil, fmt.Errorf("load CA from %s (run taskboard certs init first): %w", dir, err)
+		return nil, nil, fmt.Errorf("load CA from %s (create the certificates first): %w", dir, err)
 	}
 	cert, err := x509.ParseCertificate(pair.Certificate[0])
 	if err != nil {
@@ -289,12 +313,13 @@ func loadCA(dir string) (*x509.Certificate, crypto.Signer, error) {
 	return cert, signer, nil
 }
 
-// serverTLS requires a client certificate from taskboard's CA. Revocation is checked against the live
-// config on every handshake, so revoking a device needs no restart.
+// serverTLS verifies client certificates against taskboard's CA but lets devices without one connect, so they can
+// pair; the server then refuses them everything else. Revocation is checked against the live config on every
+// handshake, so revoking a device needs no restart.
 func serverTLS(dir string, revoked func() []string) (*tls.Config, error) {
 	cert, err := tls.LoadX509KeyPair(filepath.Join(dir, "server.crt"), filepath.Join(dir, "server.key"))
 	if err != nil {
-		return nil, fmt.Errorf("load server certificate from %s (run taskboard certs init): %w", dir, err)
+		return nil, fmt.Errorf("load server certificate from %s (create the certificates first): %w", dir, err)
 	}
 	caPEM, err := os.ReadFile(filepath.Join(dir, "ca.crt"))
 	if err != nil {
@@ -307,7 +332,7 @@ func serverTLS(dir string, revoked func() []string) (*tls.Config, error) {
 	return &tls.Config{
 		MinVersion:   tls.VersionTLS12,
 		Certificates: []tls.Certificate{cert},
-		ClientAuth:   tls.RequireAndVerifyClientCert,
+		ClientAuth:   tls.VerifyClientCertIfGiven,
 		ClientCAs:    pool,
 		VerifyConnection: func(cs tls.ConnectionState) error {
 			if len(cs.PeerCertificates) > 0 && isRevoked(revoked(), cs.PeerCertificates[0]) {
@@ -320,4 +345,49 @@ func serverTLS(dir string, revoked func() []string) (*tls.Config, error) {
 
 func isRevoked(revoked []string, cert *x509.Certificate) bool {
 	return slices.Contains(revoked, serialHex(cert.SerialNumber))
+}
+
+func readCert(path string) (*x509.Certificate, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	block, _ := pem.Decode(b)
+	if block == nil || block.Type != "CERTIFICATE" {
+		return nil, fmt.Errorf("%s has no certificate", path)
+	}
+	return x509.ParseCertificate(block.Bytes)
+}
+
+// suggestHosts guesses the names devices could use: this machine's host name and the IPv4 addresses of its
+// network interfaces that are up, leaving out container and VM bridges.
+func suggestHosts() []string {
+	var hosts []string
+	if h, err := os.Hostname(); err == nil && h != "" {
+		hosts = append(hosts, h)
+	}
+	ifaces, _ := net.Interfaces()
+	for _, iface := range ifaces {
+		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 || isVirtualInterface(iface.Name) {
+			continue
+		}
+		addrs, _ := iface.Addrs()
+		for _, a := range addrs {
+			if ipnet, ok := a.(*net.IPNet); ok {
+				if ip := ipnet.IP.To4(); ip != nil && !ip.IsLinkLocalUnicast() {
+					hosts = append(hosts, ip.String())
+				}
+			}
+		}
+	}
+	return hosts
+}
+
+func isVirtualInterface(name string) bool {
+	for _, prefix := range []string{"docker", "br-", "virbr", "veth", "vmnet", "vboxnet", "lxc", "lxd", "cni", "flannel", "podman", "bridge"} {
+		if strings.HasPrefix(name, prefix) {
+			return true
+		}
+	}
+	return false
 }

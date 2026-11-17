@@ -62,7 +62,24 @@ button.primary{background:var(--link);border-color:var(--link);color:var(--surfa
 #status{margin:0;font-size:.8125rem;white-space:pre-wrap}
 #status.error{color:var(--fail)}
 #status.ok{color:var(--ok)}
+h3{margin:1.25rem 0 .25rem;font-size:.875rem;font-weight:650}
+.inline{display:flex;align-items:center;gap:.75rem;margin-top:.75rem}
+.msg{margin:0;font-size:.8125rem;white-space:pre-wrap}
+.msg.error{color:var(--fail)}
+.msg.ok{color:var(--ok)}
+select{margin-left:.5rem;padding:.25rem .4rem;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--ink);font:inherit}
+dialog{max-width:36rem;padding:1.25rem 1.4rem;border:1px solid var(--line);border-radius:12px;background:var(--surface);color:var(--ink);box-shadow:var(--shadow)}
+dialog::backdrop{background:rgba(16,24,40,.45)}
+dialog h2{margin:0 0 1rem;font-size:1.0625rem}
+dialog p{margin:0 0 .6rem;font-size:.875rem}
+dialog code{font:13px/1.45 ui-monospace,"JetBrains Mono","SF Mono",Menlo,monospace;overflow-wrap:anywhere}
+.pair{display:grid;grid-template-columns:220px minmax(0,1fr);gap:1.1rem;align-items:start}
+.pair img{border-radius:6px;background:#fff}
+#pair-state.ok{color:var(--ok)}
+#pair-state.needs{color:var(--needs)}
+.dialog-actions{display:flex;justify-content:flex-end;gap:.6rem;margin-top:1rem}
 @media (max-width:40rem){
+  .pair{grid-template-columns:minmax(0,1fr)}
   .row3,.row2{grid-template-columns:minmax(0,1fr)}
   .repo{grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"name remove" "path path" "plans ." "base ."}
 }
@@ -150,15 +167,48 @@ button.primary{background:var(--link);border-color:var(--link);color:var(--surfa
     <input name="listen" required placeholder="e.g. 127.0.0.1:8484" value="{{.Listen}}"></label>
   <label>Extra hostnames<span class="hint">One per line, e.g. a Tailscale MagicDNS name. IP addresses and localhost always work; other hostnames are refused to block DNS rebinding.</span>
     <textarea name="allowed_hosts" rows="2" placeholder="e.g. devbox.tailnet.ts.net">{{join .AllowedHosts "\n"}}</textarea></label>
-  <label>Remote access address<span class="hint">host:port for HTTPS that requires a client certificate, so other machines can use the board, sessions and browser terminal without SSH, e.g. 0.0.0.0:8443 or a Tailscale address. Create the certificates first with taskboard certs init. Leave empty for none. Takes effect after a restart{{with $.TLSListen}}; running on {{.}}{{end}}.</span>
+  <label>Remote access address<span class="hint">host:port for HTTPS that requires a client certificate, so other machines can use the board, sessions and browser terminal without SSH, e.g. 0.0.0.0:8443 or a Tailscale address. Create the certificates under Remote access first. Leave empty for none. Takes effect after a restart{{with $.TLSListen}}; running on {{.}}{{end}}.</span>
     <input name="tls_listen" placeholder="e.g. 0.0.0.0:8443" value="{{.TLSListen}}"></label>
   <div class="row2">
     <label>Certificate folder<span class="hint">Relative to the config file's folder, or a full path. Default is 'certs'. Takes effect after a restart.</span>
       <input name="tls_dir" placeholder="certs" value="{{.TLSDir}}"></label>
-    <label>Revoked certificates<span class="hint">Serials from taskboard certs client, one per line. Refused right away.</span>
+    <label>Revoked certificates<span class="hint">Client certificate serials, one per line, as shown by Add device or taskboard certs client. Refused right away.</span>
       <textarea name="revoked_certs" rows="2" placeholder="e.g. 1f3a…">{{join .RevokedCerts "\n"}}</textarea></label>
   </div>
 </fieldset>
+
+{{with $.Remote}}
+<fieldset id="remote">
+  <legend>Remote access</legend>
+  <span class="hint">Other computers and phones can use the board over HTTPS with a client certificate from taskboard. Certificates are kept in {{.Dir}}.</span>
+  {{with .Error}}<p class="msg error">{{.}}</p>{{end}}
+  <label>Names and addresses<span class="hint">Comma separated host names and IP addresses other devices use to reach this machine, e.g. a Tailscale name.
+    {{- if .Server}} The server certificate covers these until {{.Server.Expires.Format "Jan 2, 2006"}}. Re-issue it when the machine gets a new name, then restart taskboard.
+    {{- else}} Creates a certificate authority and a server certificate. Then set the remote access address above, save and restart taskboard.{{end}}</span>
+    <input form="certs-form" name="hosts" required value="{{.Hosts}}"></label>
+  <div class="inline">
+    <button form="certs-form" type="submit">{{if .CA}}Re-issue server certificate{{else}}Create certificates{{end}}</button>
+    <p class="msg" id="certs-status" role="status"></p>
+  </div>
+  {{if .Server}}
+  <h3>Add a device</h3>
+  {{if .Running}}
+  <span class="hint">Shows a QR code to scan on the new device, or a link to type there. The device installs its certificate and asks for the passphrase.</span>
+  <div class="row2">
+    <label>Device name<input form="device-form" name="name" required maxlength="64" pattern="[A-Za-z0-9][A-Za-z0-9._ \-]*" placeholder="e.g. iphone" autocomplete="off"></label>
+    <label>Passphrase<span class="hint">At least 16 characters, e.g. a few words. You type it once on the device. It isn't saved.</span>
+      <input form="device-form" name="passphrase" required minlength="16" autocomplete="off" autocapitalize="off" spellcheck="false"></label>
+  </div>
+  <div class="inline">
+    <button form="device-form" type="submit">Add device</button>
+    <p class="msg" id="device-status" role="status"></p>
+  </div>
+  {{else}}
+  <span class="hint">Set the remote access address above, save and restart taskboard to add devices.</span>
+  {{end}}
+  {{end}}
+</fieldset>
+{{end}}
 
 <div class="actions">
   <button class="primary" type="submit">Save</button>
@@ -166,6 +216,28 @@ button.primary{background:var(--link);border-color:var(--link);color:var(--surfa
 </div>
 </form>
 {{end}}
+
+<form id="certs-form"></form>
+<form id="device-form"></form>
+<dialog id="pair" aria-labelledby="pair-title">
+  <h2 id="pair-title"></h2>
+  <div class="pair">
+    <img id="pair-qr" alt="QR code of the pairing link" width="220" height="220">
+    <div>
+      <p>Scan this with the device's camera, or open this on it:</p>
+      <p><code id="pair-url"></code></p>
+      <label id="pair-hosts" hidden>Address<select></select></label>
+      <p>Accept the certificate warning, which appears only this once, then install the certificate with the passphrase.</p>
+      <p id="pair-state" role="status"></p>
+    </div>
+  </div>
+  <p class="hint" id="pair-serial"></p>
+  <div class="dialog-actions">
+    <button type="button" id="pair-cancel">Cancel code</button>
+    <button type="button" id="pair-revoke" hidden>Revoke</button>
+    <button type="button" class="primary" id="pair-close">Done</button>
+  </div>
+</dialog>
 
 <template id="repo-row">{{template "repo" .NewRepo}}</template>
 <template id="org-row">{{template "org" ""}}</template>
@@ -207,6 +279,121 @@ for (const section of [repos, orgs]) {
     labelRemove(row);
   });
 }
+async function post(url, body) {
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "X-Taskboard": "1", "Content-Type": "application/json" },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error((await res.text()).trim() || res.statusText);
+  return res.status === 204 ? null : res.json();
+}
+function report(el, ok, text) {
+  el.className = "msg " + (ok ? "ok" : "error");
+  el.textContent = text;
+}
+const certsForm = document.getElementById("certs-form");
+certsForm.addEventListener("submit", async e => {
+  e.preventDefault();
+  const out = document.getElementById("certs-status");
+  try {
+    const { names, expires } = await post("/certs", { hosts: certsForm.elements.hosts.value });
+    report(out, true, `Server certificate for ${names.join(", ")}, valid until ${new Date(expires).toLocaleDateString()}. Set the remote access address if needed, save and restart taskboard to use it.`);
+  } catch (err) {
+    report(out, false, err.message);
+  }
+});
+const deviceForm = document.getElementById("device-form");
+const pair = document.getElementById("pair");
+let pairing = null;
+deviceForm.addEventListener("submit", async e => {
+  e.preventDefault();
+  const out = document.getElementById("device-status");
+  out.textContent = "";
+  try {
+    const name = deviceForm.elements.name.value.trim();
+    const res = await post("/devices", { name, passphrase: deviceForm.elements.passphrase.value });
+    showPairing(name, res);
+  } catch (err) {
+    report(out, false, err.message);
+  }
+});
+function showPairing(name, res) {
+  pairing = { ...res, state: "waiting" };
+  document.getElementById("pair-title").textContent = "Add " + name;
+  document.getElementById("pair-serial").textContent = "Certificate serial " + res.serial;
+  const hosts = document.getElementById("pair-hosts");
+  const select = hosts.querySelector("select");
+  select.replaceChildren(...res.links.map((l, i) => new Option(l.host, i)));
+  hosts.hidden = res.links.length < 2;
+  showLink(0);
+  setButtons();
+  pair.showModal();
+  pairing.timer = setInterval(pollPairing, 2000);
+  pollPairing();
+}
+function showLink(i) {
+  const link = pairing.links[i];
+  document.getElementById("pair-qr").src = link.qr;
+  document.getElementById("pair-url").textContent = link.url;
+}
+document.querySelector("#pair-hosts select").addEventListener("change", e => showLink(Number(e.target.value)));
+function setState(text, tone) {
+  const el = document.getElementById("pair-state");
+  el.className = tone || "";
+  el.textContent = text;
+}
+function setButtons() {
+  document.getElementById("pair-cancel").hidden = pairing.state !== "waiting";
+  document.getElementById("pair-revoke").hidden = pairing.state !== "opened";
+}
+async function pollPairing() {
+  if (!pairing || pairing.state === "revoked") return;
+  try {
+    const res = await (await fetch("/devices/" + pairing.code)).json();
+    if (!pairing || pairing.state === "revoked") return;
+    if (res.state === "waiting") {
+      const left = Math.max(0, Math.round((new Date(res.expires) - Date.now()) / 1000));
+      setState(`Code ${pairing.display}. Waiting for the device; it expires in ${Math.floor(left / 60)}:${String(left % 60).padStart(2, "0")}.`);
+    } else if (res.state === "opened") {
+      pairing.state = "opened";
+      setState(`Opened from ${res.by} at ${new Date(res.at).toLocaleTimeString()}. If that wasn't your device, revoke its certificate.`, "ok");
+    } else if (pairing.state === "waiting") {
+      pairing.state = "expired";
+      setState("The code expired before a device opened it. Add the device again.", "needs");
+    } else {
+      clearInterval(pairing.timer);
+    }
+    setButtons();
+  } catch {}
+}
+function closePairing() {
+  if (!pairing) return;
+  clearInterval(pairing.timer);
+  pairing = null;
+  deviceForm.reset();
+}
+pair.addEventListener("close", closePairing);
+document.getElementById("pair-close").addEventListener("click", () => pair.close());
+document.getElementById("pair-cancel").addEventListener("click", async () => {
+  try {
+    await post(`/devices/${pairing.code}/cancel`);
+    pair.close();
+  } catch (err) {
+    setState("Not cancelled: " + err.message, "needs");
+  }
+});
+document.getElementById("pair-revoke").addEventListener("click", async () => {
+  try {
+    const { revoked_certs } = await post("/certs/revoke", { serial: pairing.serial });
+    form.elements.revoked_certs.value = revoked_certs.join("\n");
+    pairing.state = "revoked";
+    setButtons();
+    setState("Revoked. That certificate is refused from now on.", "needs");
+  } catch (err) {
+    setState("Not revoked: " + err.message, "needs");
+  }
+});
 form.addEventListener("submit", async e => {
   e.preventDefault();
   const cfg = {

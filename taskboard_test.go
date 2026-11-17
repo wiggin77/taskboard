@@ -9,7 +9,9 @@ import (
 	"crypto/ecdsa"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/json"
+	"encoding/xml"
 	"fmt"
 	"io"
 	"maps"
@@ -2021,11 +2023,11 @@ func TestCertificates(t *testing.T) {
 	if _, cert, chain, err := pkcs12.DecodeChain(p12, "secret"); err != nil || !cert.Equal(client) || len(chain) != 1 || !chain[0].Equal(pki.ca) {
 		t.Errorf("p12 round trip: %v", err)
 	}
-	if err := certsInit(pki.dir, []string{"devbox"}, time.Now()); err == nil {
+	if _, err := initCerts(pki.dir, []string{"devbox"}, time.Now()); err == nil {
 		t.Error("certs init must not replace an existing CA")
 	}
-	for _, bad := range []string{"", "../x", ".hidden", "a/b"} {
-		if err := certsClient(pki.dir, bad, time.Now()); err == nil {
+	for _, bad := range []string{"", "../x", ".hidden", "a/b", strings.Repeat("x", 65)} {
+		if _, _, err := issueClient(pki.dir, bad, "secret", time.Now()); err == nil {
 			t.Errorf("client name %q should be rejected", bad)
 		}
 	}
@@ -2046,30 +2048,275 @@ func TestTLSListener(t *testing.T) {
 
 	roots := x509.NewCertPool()
 	roots.AddCert(pki.ca)
-	get := func(withCert bool) (int, error) {
+	get := func(path string, withCert bool) (int, error) {
 		tc := &tls.Config{RootCAs: roots}
 		if withCert {
 			tc.Certificates = []tls.Certificate{pki.client}
 		}
 		client := &http.Client{Transport: &http.Transport{TLSClientConfig: tc}}
-		res, err := client.Get(srv.URL + "/settings")
+		res, err := client.Get(srv.URL + path)
 		if err != nil {
 			return 0, err
 		}
 		res.Body.Close()
 		return res.StatusCode, nil
 	}
-	if code, err := get(true); err != nil || code != http.StatusOK {
+	if code, err := get("/settings", true); err != nil || code != http.StatusOK {
 		t.Errorf("with a client certificate: %d %v, want 200 (remote access to settings)", code, err)
 	}
-	if _, err := get(false); err == nil {
-		t.Error("without a client certificate the handshake should fail")
+	for _, path := range []string{"/", "/settings", "/version", "/plan/MM-1", "/term/MM-1", "/extension", "/" + extensionZipName} {
+		if code, err := get(path, false); err != nil || code != http.StatusForbidden {
+			t.Errorf("GET %s without a client certificate: %d %v, want 403", path, code, err)
+		}
+	}
+	if code, err := get("/pair/AAAA-AAAA", false); err != nil || code != http.StatusNotFound {
+		t.Errorf("pairing without a client certificate: %d %v, want 404 for an unknown code", code, err)
 	}
 	revoked := *cfg
 	revoked.RevokedCerts = []string{pki.serial}
 	board.SetConfig(&revoked)
-	if _, err := get(true); err == nil {
+	if _, err := get("/settings", true); err == nil {
 		t.Error("a revoked certificate should be refused")
+	}
+}
+
+func TestPairing(t *testing.T) {
+	pki := newTestPKI(t)
+	cfg := testConfig(t)
+	cfg.TLSListen = "0.0.0.0:8443"
+	cfg.TLSDir = pki.dir
+	configPath := filepath.Join(t.TempDir(), "taskboard.json")
+	board := NewBoard(cfg)
+	tlsConfig, err := serverTLS(pki.dir, func() []string { return board.Config().RevokedCerts })
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := newServer(board, configPath)
+	srv := httptest.NewUnstartedServer(handler)
+	srv.TLS = tlsConfig
+	srv.StartTLS()
+	defer srv.Close()
+
+	roots := x509.NewCertPool()
+	roots.AddCert(pki.ca)
+	clientWith := func(certs ...tls.Certificate) *http.Client {
+		return &http.Client{
+			Transport:     &http.Transport{TLSClientConfig: &tls.Config{RootCAs: roots, Certificates: certs}},
+			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+		}
+	}
+	trusted, device := clientWith(pki.client), clientWith()
+	do := func(c *http.Client, method, path string, body any) (*http.Response, []byte) {
+		t.Helper()
+		var r io.Reader
+		if body != nil {
+			b, _ := json.Marshal(body)
+			r = bytes.NewReader(b)
+		}
+		req, _ := http.NewRequest(method, srv.URL+path, r)
+		req.Header.Set("X-Taskboard", "1")
+		res, err := c.Do(req)
+		if err != nil {
+			t.Fatalf("%s %s: %v", method, path, err)
+		}
+		defer res.Body.Close()
+		out, _ := io.ReadAll(res.Body)
+		return res, out
+	}
+
+	const passphrase = "purple tractor sings"
+	for _, c := range []struct {
+		client *http.Client
+		body   any
+		want   int
+	}{
+		{device, map[string]string{"name": "iphone", "passphrase": passphrase}, http.StatusForbidden},
+		{trusted, map[string]string{"name": "iphone", "passphrase": "too short"}, http.StatusBadRequest},
+		{trusted, map[string]string{"name": "../iphone", "passphrase": passphrase}, http.StatusBadRequest},
+	} {
+		if res, body := do(c.client, "POST", "/devices", c.body); res.StatusCode != c.want {
+			t.Errorf("POST /devices %v: %d %s, want %d", c.body, res.StatusCode, body, c.want)
+		}
+	}
+	res, body := do(trusted, "POST", "/devices", map[string]string{"name": "iphone", "passphrase": passphrase})
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("POST /devices: %d %s", res.StatusCode, body)
+	}
+	var added struct {
+		Code, Display, Serial string
+		Links                 []pairLink
+	}
+	if err := json.Unmarshal(body, &added); err != nil {
+		t.Fatal(err)
+	}
+	var urls []string
+	for _, l := range added.Links {
+		urls = append(urls, l.URL)
+		if !strings.HasPrefix(l.QR, "data:image/svg+xml;base64,") {
+			t.Errorf("QR for %s: %.40q", l.Host, l.QR)
+		}
+	}
+	want := []string{"https://devbox:8443/pair/" + added.Display, "https://100.64.0.5:8443/pair/" + added.Display}
+	if !slices.Equal(urls, want) {
+		t.Errorf("pairing links %q, want %q (no loopback names)", urls, want)
+	}
+	status := func() string {
+		_, body := do(trusted, "GET", "/devices/"+added.Code, nil)
+		var st struct{ State, By string }
+		json.Unmarshal(body, &st)
+		return st.State + " " + st.By
+	}
+	if got := status(); got != "waiting " {
+		t.Errorf("status before the device opens the code: %q", got)
+	}
+
+	if res, _ := do(device, "GET", "/pair/WRONG000", nil); res.StatusCode != http.StatusNotFound {
+		t.Errorf("unknown code: %d, want 404", res.StatusCode)
+	}
+	res, _ = do(device, "GET", "/pair/"+strings.ToLower(added.Display), nil)
+	page := res.Header.Get("Location")
+	if res.StatusCode != http.StatusSeeOther || !strings.HasPrefix(page, "/pair/"+added.Code+"/") {
+		t.Fatalf("opening the code: %d to %q", res.StatusCode, page)
+	}
+	if res, _ := do(device, "GET", "/pair/"+added.Display, nil); res.StatusCode != http.StatusNotFound {
+		t.Errorf("a second open of the code: %d, want 404", res.StatusCode)
+	}
+	if got := status(); got != "opened 127.0.0.1" {
+		t.Errorf("status after the device opens the code: %q", got)
+	}
+	if res, body := do(device, "GET", page, nil); res.StatusCode != http.StatusOK || !strings.Contains(string(body), "Add iphone to taskboard") {
+		t.Errorf("pair page: %d", res.StatusCode)
+	}
+	for _, path := range []string{"/pair/" + added.Code + "/wrong/iphone.p12", page + "laptop.p12"} {
+		if res, _ := do(device, "GET", path, nil); res.StatusCode != http.StatusNotFound {
+			t.Errorf("GET %s: %d, want 404", path, res.StatusCode)
+		}
+	}
+
+	_, p12 := do(device, "GET", page+"iphone.p12", nil)
+	key, cert, chain, err := pkcs12.DecodeChain(p12, passphrase)
+	if err != nil {
+		t.Fatalf("decode the device's .p12 with its passphrase: %v", err)
+	}
+	if cert.Subject.CommonName != "iphone" || serialHex(cert.SerialNumber) != added.Serial || len(chain) != 1 || !chain[0].Equal(pki.ca) {
+		t.Errorf("device certificate %q serial %s, chain %d", cert.Subject.CommonName, serialHex(cert.SerialNumber), len(chain))
+	}
+	_, caPEM := do(device, "GET", page+"taskboard-ca.crt", nil)
+	if onDisk, _ := os.ReadFile(filepath.Join(pki.dir, "ca.crt")); !bytes.Equal(caPEM, onDisk) {
+		t.Error("taskboard-ca.crt differs from the CA")
+	}
+	res, profile := do(device, "GET", page+"taskboard.mobileconfig", nil)
+	if ct := res.Header.Get("Content-Type"); ct != "application/x-apple-aspen-config" {
+		t.Errorf("profile Content-Type %q", ct)
+	}
+	for _, want := range []string{"com.apple.security.root", "com.apple.security.pkcs12", base64.StdEncoding.EncodeToString(p12)} {
+		if !bytes.Contains(profile, []byte(want)) {
+			t.Errorf("profile lacks %.40q", want)
+		}
+	}
+	if bytes.Contains(profile, []byte("<key>Password</key>")) {
+		t.Error("the profile must not carry the passphrase")
+	}
+
+	paired := clientWith(tls.Certificate{Certificate: [][]byte{cert.Raw}, PrivateKey: key})
+	if res, _ := do(paired, "GET", "/settings", nil); res.StatusCode != http.StatusOK {
+		t.Errorf("settings with the paired certificate: %d, want 200", res.StatusCode)
+	}
+	res, body = do(trusted, "POST", "/certs/revoke", map[string]string{"serial": added.Serial})
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("revoke: %d %s", res.StatusCode, body)
+	}
+	if saved, err := LoadConfig(configPath); err != nil || !slices.Contains(saved.RevokedCerts, added.Serial) {
+		t.Errorf("revoked serial not saved: %v", err)
+	}
+	paired.CloseIdleConnections()
+	if _, err := paired.Get(srv.URL + "/settings"); err == nil {
+		t.Error("the revoked device certificate should be refused")
+	}
+
+	plain := httptest.NewRequest("GET", "/pair/"+added.Code, nil)
+	plain.RemoteAddr = "127.0.0.1:5000"
+	plain.Host = "127.0.0.1:8484"
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, plain)
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("pairing on the plain listener: %d, want 404", rec.Code)
+	}
+}
+
+func TestPairings(t *testing.T) {
+	var ps pairings
+	now := time.Now()
+	ps.add(&pairing{code: "ABCD1234", expires: now.Add(pairingTTL)}, now)
+	ps.add(&pairing{code: "ZZZZ0000", expires: now.Add(pairingTTL)}, now)
+	if _, ok := ps.open("abcd-l234", "x", now.Add(pairingTTL)); ok {
+		t.Error("an expired code should not open")
+	}
+	ps.add(&pairing{code: "ABCD1234", expires: now.Add(pairingTTL)}, now)
+	opened := now.Add(5 * time.Minute)
+	secret, ok := ps.open("abcd-i234", "x", opened)
+	if !ok {
+		t.Fatal("a typed code with I for 1 and a dash should open")
+	}
+	if _, ok := ps.get("ABCD1234", secret, opened.Add(pairingTTL-time.Second)); !ok {
+		t.Error("downloads should work for pairingTTL after the open")
+	}
+	if _, ok := ps.get("ABCD1234", secret, opened.Add(pairingTTL)); ok {
+		t.Error("downloads should stop pairingTTL after the open")
+	}
+	ps.cancel("zzzz-oooo")
+	if _, ok := ps.status("ZZZZ0000", now); ok {
+		t.Error("a cancelled code should be gone")
+	}
+	code, err := newPairCode()
+	if err != nil || len(code) != pairCodeLen || strings.Trim(code, pairAlphabet) != "" || normalizePairCode(displayPairCode(code)) != code {
+		t.Errorf("newPairCode() = %q, %v", code, err)
+	}
+}
+
+func TestCreateCerts(t *testing.T) {
+	cfg := testConfig(t)
+	cfg.TLSDir = filepath.Join(t.TempDir(), "certs")
+	h := newServer(NewBoard(cfg), filepath.Join(t.TempDir(), "taskboard.json"))
+	post := func(hosts string) int {
+		req := httptest.NewRequest("POST", "/certs", strings.NewReader(`{"hosts":"`+hosts+`"}`))
+		req.RemoteAddr = "127.0.0.1:5000"
+		req.Host = "127.0.0.1:8484"
+		req.Header.Set("X-Taskboard", "1")
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec.Code
+	}
+	if code := post(" , "); code != http.StatusBadRequest {
+		t.Errorf("no hosts: %d, want 400", code)
+	}
+	if code := post("devbox, 100.64.0.9"); code != http.StatusOK {
+		t.Fatalf("create: %d", code)
+	}
+	ca, _ := os.ReadFile(filepath.Join(cfg.TLSDir, "ca.crt"))
+	if code := post("newname"); code != http.StatusOK {
+		t.Fatalf("re-issue: %d", code)
+	}
+	if again, _ := os.ReadFile(filepath.Join(cfg.TLSDir, "ca.crt")); !bytes.Equal(ca, again) {
+		t.Error("re-issuing the server certificate must keep the CA")
+	}
+	server, err := readCert(filepath.Join(cfg.TLSDir, "server.crt"))
+	if err != nil || !slices.Equal(pairHosts(server), []string{"newname"}) {
+		t.Errorf("re-issued server certificate names: %v", err)
+	}
+}
+
+func TestMobileconfigEscapes(t *testing.T) {
+	pki := newTestPKI(t)
+	caPEM, _ := os.ReadFile(filepath.Join(pki.dir, "ca.crt"))
+	d := xml.NewDecoder(bytes.NewReader(mobileconfig("a&b <c>", "1f", caPEM, []byte("p12"))))
+	d.Strict = true
+	for {
+		if _, err := d.Token(); err == io.EOF {
+			break
+		} else if err != nil {
+			t.Fatalf("profile is not well-formed XML: %v", err)
+		}
 	}
 }
 
@@ -2666,7 +2913,8 @@ func TestExtensionDownload(t *testing.T) {
 		req := httptest.NewRequest("GET", path, nil)
 		req.Host = host
 		if tlsReq {
-			req.TLS = &tls.ConnectionState{}
+			cert := &x509.Certificate{SerialNumber: big.NewInt(1)}
+			req.TLS = &tls.ConnectionState{PeerCertificates: []*x509.Certificate{cert}, VerifiedChains: [][]*x509.Certificate{{cert}}}
 		}
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, req)

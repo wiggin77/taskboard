@@ -6,6 +6,7 @@ require (
 	github.com/coder/websocket v1.8.15
 	github.com/creack/pty v1.1.24
 	github.com/yuin/goldmark v1.8.7
+	rsc.io/qr v0.2.0
 	software.sslmate.com/src/go-pkcs12 v0.5.0
 )
 
