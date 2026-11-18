@@ -21,8 +21,8 @@ body{max-width:none;margin:0;padding:0;background:#0F1318;overflow:hidden}
 #status button:hover{border-color:#9AA5B2}
 #status button[hidden]{display:none}
 #keys{display:none}
-.phone #term{bottom:2.75rem}
-.phone #keys{position:absolute;left:0;right:0;bottom:0;height:2.75rem;display:flex;gap:1px;border-top:1px solid #28313B;background:#28313B}
+.osk #term{bottom:calc(var(--osk-inset,0px) + 2.75rem)}
+.osk #keys{position:absolute;left:0;right:0;bottom:var(--osk-inset,0px);height:2.75rem;display:flex;gap:1px;border-top:1px solid #28313B;background:#28313B}
 #keys button{flex:1;min-width:0;padding:0;border:0;background:#171C23;color:#E4E9EF;font:600 .9375rem/1 ui-monospace,"JetBrains Mono","SF Mono",Menlo,monospace;
   touch-action:manipulation;-webkit-user-select:none;user-select:none}
 #keys button:active,#keys button[aria-pressed=true]{background:#3A4654}
@@ -98,6 +98,28 @@ term.onData(d => {
 const fixedKeys = { esc: "\x1b", tab: "\t", backtab: "\x1b[Z" };
 const arrowKeys = { up: "A", down: "B", right: "C", left: "D" };
 const keys = document.getElementById("keys");
+// The key row stands in for keys an on-screen keyboard lacks, so it shows only while one is open, on any touch device.
+// No browser reports a physical keyboard, but with one attached the on-screen keyboard doesn't open, and an open one
+// shrinks the visual viewport. 150px is more than browser toolbars and the iPad shortcut bar shown with a physical keyboard.
+// Safari ignores interactive-widget and lays the keyboard over the page, so --osk-inset lifts the row above it.
+const coarse = matchMedia("(pointer:coarse)");
+let fullHeight = 0, lastWidth = 0;
+function placeKeys() {
+  const vv = window.visualViewport;
+  if (!vv) return;
+  if (innerWidth !== lastWidth) { lastWidth = innerWidth; fullHeight = 0; }
+  const height = vv.height * vv.scale;
+  fullHeight = Math.max(fullHeight, height);
+  const open = coarse.matches && fullHeight - height > 150;
+  if (!open) setCtrl(false);
+  document.documentElement.classList.toggle("osk", open);
+  document.documentElement.style.setProperty("--osk-inset", open ? Math.max(0, innerHeight - vv.height - vv.offsetTop) + "px" : "0px");
+}
+placeKeys();
+window.visualViewport?.addEventListener("resize", placeKeys);
+window.visualViewport?.addEventListener("scroll", placeKeys);
+addEventListener("resize", placeKeys);
+coarse.addEventListener("change", placeKeys);
 // Keep focus in the terminal so the on-screen keyboard stays open.
 keys.addEventListener("pointerdown", e => e.preventDefault());
 keys.addEventListener("mousedown", e => e.preventDefault());
