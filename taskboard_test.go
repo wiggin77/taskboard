@@ -243,7 +243,8 @@ func TestGitHubResult(t *testing.T) {
 			{"number": 5, "state": "MERGED", "headRefName": "MM-5-x", "repository": {"nameWithOwner": "mattermost/mattermost"}}
 		]},
 		"s3": {"nodes": [{"number": 6, "state": "MERGED", "headRefName": "MM-6-x", "repository": {"nameWithOwner": "mattermost/mattermost"}}]},
-		"s4": {"nodes": [{"number": 7, "url": "u7", "state": "OPEN", "repository": {"nameWithOwner": "mattermost/mattermost"}, "author": {"login": "someone"}}]},
+		"s4": {"nodes": [{"number": 7, "url": "u7", "state": "OPEN", "repository": {"nameWithOwner": "mattermost/mattermost"}, "author": {"login": "someone"},
+			"headRefName": "feat/MM-71149-script", "body": "Targets MM-71902-stop-sync (#105).\n\nfixes: https://example.atlassian.net/browse/MM-71149"}]},
 		"s5": {"nodes": []}
 	}}`), &resp)
 	if err != nil {
@@ -279,6 +280,8 @@ func TestGitHubResult(t *testing.T) {
 	}
 	if len(res.reviews) != 1 || res.reviews[0].Number != 7 || res.reviews[0].Author != "someone" {
 		t.Errorf("reviews = %+v, want #7 by someone", res.reviews)
+	} else if res.reviews[0].Key != "MM-71149" {
+		t.Errorf("review key %q, want MM-71149 from the branch, not the base branch the body mentions first", res.reviews[0].Key)
 	}
 	if len(res.others) != 1 || res.others[0].Number != 2 || res.others[0].Role != RoleAuthor {
 		t.Errorf("others = %+v, want your open PR #2 in other/repo", res.others)
@@ -535,7 +538,7 @@ func TestViewPRs(t *testing.T) {
 	post := func(_ context.Context, query string, vars map[string]string) ([]byte, error) {
 		gotQuery, gotVars = query, vars
 		return []byte(`{"data": {"v0": {"pullRequest": {"title": "MM-9 Fix", "url": "https://github.com/mattermost/mattermost/pull/5",
-			"state": "MERGED", "author": {"login": "someone"}}}, "v1": null}, "errors": [{"message": "Could not resolve to a Repository"}]}`), fmt.Errorf("gh: exit status 1")
+			"headRefName": "MM-8-fix", "body": "Follows MM-7", "state": "MERGED", "author": {"login": "someone"}}}, "v1": null}, "errors": [{"message": "Could not resolve to a Repository"}]}`), fmt.Errorf("gh: exit status 1")
 	}
 	views, gone, err := viewPRs(context.Background(), post, testConfig(t), links)
 	if err == nil {
@@ -544,11 +547,11 @@ func TestViewPRs(t *testing.T) {
 	if len(gone) != 1 || !gone["u6"] {
 		t.Errorf("gone = %v, want the PR GitHub couldn't resolve", gone)
 	}
-	if !strings.Contains(gotQuery, "pullRequest(number: 5)") || gotVars["o1"] != "mattermost" || gotVars["n1"] != "gone" {
+	if !strings.Contains(gotQuery, "pullRequest(number: 5)") || !strings.Contains(gotQuery, "headRefName") || gotVars["o1"] != "mattermost" || gotVars["n1"] != "gone" {
 		t.Errorf("query %s vars %v", gotQuery, gotVars)
 	}
 	v, ok := views["u5"]
-	if len(views) != 1 || !ok || v.State != "MERGED" || v.Author != "someone" || v.Key != "MM-9" || v.URL != "https://github.com/mattermost/mattermost/pull/5" {
+	if len(views) != 1 || !ok || v.State != "MERGED" || v.Author != "someone" || v.Key != "MM-8" || v.JiraURL != "https://example.atlassian.net/browse/MM-8" || v.URL != "https://github.com/mattermost/mattermost/pull/5" {
 		t.Errorf("views = %+v", views)
 	}
 }
@@ -841,6 +844,56 @@ func TestMergePRLinks(t *testing.T) {
 		t.Errorf("reviews[2].JiraURL = %q, want none", reviews[2].JiraURL)
 	}
 	check("others", others, []want{{2, RoleRequested}, {4, RoleAuthor}, {6, RoleReviewed}})
+}
+
+func TestPRKeys(t *testing.T) {
+	cfg := testConfig(t)
+	for _, c := range []struct {
+		name, branch, title, body string
+		link, task                string
+	}{
+		{"branch over a key the body mentions first", "feat/MM-71149-script-history-sync", "feat(history): add a script",
+			"Targets `MM-71902-cross-guard-stop` (#105).\n\n## Jira ticket\n\nfixes: https://example.atlassian.net/browse/MM-71149", "MM-71149", "MM-71149"},
+		{"branch over title", "MM-1-fix", "MM-2 Fix the thing", "MM-3", "MM-1", "MM-1"},
+		{"title when the branch has none", "patch-1", "[MM-2] Fix the thing", "MM-3", "MM-2", "MM-2"},
+		{"title when the branch has another project's key", "UTF-8-fix", "MM-2 Fix", "", "MM-2", "MM-2"},
+		{"body only for links", "main", "Fix the thing", "Ticket: https://example.atlassian.net/browse/MM-3", "MM-3", ""},
+		{"first key in the body", "", "", "Targets `MM-71902-stop` (#105).\nfixes: MM-71149", "MM-71902", ""},
+		{"lower case", "feature/mm-42_shared", "", "", "MM-42", "MM-42"},
+		{"none", "main", "Fix the thing", "See UTF-8", "", ""},
+	} {
+		var n ghPRNode
+		n.HeadRefName, n.Title, n.Body = c.branch, c.title, c.body
+		var l PRLink
+		l.setKey(cfg, n)
+		if l.Key != c.link {
+			t.Errorf("%s: link key %q, want %q", c.name, l.Key, c.link)
+		}
+		wantURL := ""
+		if c.link != "" {
+			wantURL = cfg.issueURL(c.link)
+		}
+		if l.JiraURL != wantURL {
+			t.Errorf("%s: link JiraURL %q, want %q", c.name, l.JiraURL, wantURL)
+		}
+		if got := n.pr(cfg, "a/b").Key; got != c.task {
+			t.Errorf("%s: task PR key %q, want %q", c.name, got, c.task)
+		}
+	}
+}
+
+func TestPRFragmentsFetchKeyFields(t *testing.T) {
+	for kind, f := range prFragments {
+		fields := strings.Fields(f.fields)
+		for _, want := range []string{"headRefName", "title"} {
+			if !slices.Contains(fields, want) {
+				t.Errorf("fragment %s lacks %s, which PR keys come from", f.name, want)
+			}
+		}
+		if prKind(kind) != prMerged && !slices.Contains(fields, "body") {
+			t.Errorf("fragment %s lacks body, which link keys fall back to", f.name)
+		}
+	}
 }
 
 func TestSplitPRLinksOtherOrgs(t *testing.T) {
