@@ -106,11 +106,11 @@ type ghReviewRequest struct {
 	} `json:"requestedReviewer"`
 }
 
+func (n ghPRNode) key(cfg *Config) string {
+	return cmp.Or(cfg.findKey(n.HeadRefName), cfg.findKey(n.Title))
+}
+
 func (n ghPRNode) pr(cfg *Config, repo string) PR {
-	key := cfg.findKey(n.HeadRefName)
-	if key == "" {
-		key = cfg.findKey(n.Title)
-	}
 	var ci CIState
 	if len(n.Commits.Nodes) > 0 {
 		rollup := n.Commits.Nodes[0].Commit.StatusCheckRollup
@@ -122,7 +122,7 @@ func (n ghPRNode) pr(cfg *Config, repo string) PR {
 	}
 	return PR{
 		Repo:      repo,
-		Key:       key,
+		Key:       n.key(cfg),
 		Number:    n.Number,
 		Title:     n.Title,
 		URL:       n.URL,
@@ -230,11 +230,9 @@ type PRLink struct {
 	Review     *Review
 }
 
-func (p *PRLink) setKey(cfg *Config, body string) {
-	p.Key = cfg.findKey(p.Title)
-	if p.Key == "" {
-		p.Key = cfg.findKey(body)
-	}
+// A body can mention other tickets (a base branch, related work) before its own.
+func (p *PRLink) setKey(cfg *Config, n ghPRNode) {
+	p.Key = cmp.Or(n.key(cfg), cfg.findKey(n.Body))
 	if p.Key != "" {
 		p.JiraURL = cfg.issueURL(p.Key)
 	}
@@ -307,7 +305,7 @@ func mergePRLinks(cfg *Config, found [3][]ghPRNode) []PRLink {
 				Role:      Role(role),
 				UpdatedAt: r.UpdatedAt,
 			}
-			l.setKey(cfg, r.Body)
+			l.setKey(cfg, r)
 			links = append(links, l)
 		}
 	}
@@ -358,7 +356,7 @@ var prFragments = [...]prFragment{
   commits(last: 1) { nodes { commit { statusCheckRollup { state contexts(first: 100) { pageInfo { hasNextPage } nodes {
     __typename ... on CheckRun { status conclusion } ... on StatusContext { state } } } } } } }`},
 	prMerged: {"mergedPR", `number title url headRefName headRefOid state isDraft reviewDecision updatedAt mergedAt repository { nameWithOwner }`},
-	prLink:   {"linkPR", `number title url body isDraft updatedAt state repository { nameWithOwner } author { login }`},
+	prLink:   {"linkPR", `number title url body headRefName isDraft updatedAt state repository { nameWithOwner } author { login }`},
 }
 
 type prSearch struct {
@@ -776,7 +774,7 @@ func viewPRs(ctx context.Context, post graphQLFunc, cfg *Config, links []PRLink)
 		}
 		v := repo.PullRequest
 		l.Title, l.URL, l.State, l.Author, l.UpdatedAt = v.Title, v.URL, v.State, v.Author.Login, v.UpdatedAt
-		l.setKey(cfg, v.Body)
+		l.setKey(cfg, *v)
 		views[links[i].URL] = l
 	}
 	return views, gone, err
