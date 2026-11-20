@@ -134,7 +134,7 @@ security import mac-laptop.p12 -k ~/Library/Keychains/login.keychain-db -P '<pas
 
 ## Tab groups
 
-The optional tab groups extension (Chrome, Edge, Firefox 140+) opens each ticket's Jira issue, PR, plan and terminal in a browser tab group named after the ticket. Review rows join the group of the ticket their PR mentions. Only plain clicks are grouped; without the extension, links open as usual.
+The optional tab groups extension (Chrome, Edge, Firefox 140+) opens each ticket's Jira issue, PR, plan and terminal in a browser tab group named after the ticket. Review rows join the group of their PR's ticket, taken from its branch name, then its title, then the first key in its description. Only plain clicks are grouped; without the extension, links open as usual.
 
 To install it, click the puzzle-piece button in the board's header and follow the install page:
 
