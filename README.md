@@ -103,7 +103,7 @@ Some builds expect sibling checkouts at a relative path, such as mattermost/matt
 
 Once a session is running, its row gets **Open in the browser**, **Open in a terminal** and **Stop**, which closes the tmux window and keeps the worktree. Terminals open on different tasks don't switch each other's window, and closing a browser terminal's tab or detaching (Ctrl-b d) leaves the session running.
 
-On a phone, the board uses larger buttons and the browser terminal adds a row of Esc, Tab, Shift-Tab, Ctrl and arrow keys, which on Android sits above the on-screen keyboard. Ctrl applies to the next key you type or arrow you tap, so Ctrl then b, d detaches.
+On a phone, the board uses larger buttons. On a phone or tablet, while the on-screen keyboard is open, the browser terminal adds a row of Esc, Tab, Shift-Tab, Ctrl and arrow keys above it; with a physical keyboard attached the on-screen one stays closed, and so does the row. Ctrl applies to the next key you type or arrow you tap, so Ctrl then b, d detaches.
 
 **Clean up** (trash icon, on Needs clean-up rows) closes the session, removes the worktree and deletes its branch. If there are uncommitted changes or unpushed commits it lists them and asks first, and it always keeps a branch with unpushed commits. A repo's main checkout is never removed or switched to another branch; clean-up only closes its session.
 
@@ -113,33 +113,24 @@ PRs in the Reviews section get the same buttons when their repo has a local chec
 
 ## Remote access
 
-To use the board from another machine, such as a Mac browser with taskboard running on a Linux box, turn on the HTTPS listener. It only lets in browsers with a client certificate that taskboard issued, and gives them everything except native terminals, which would open on the taskboard machine.
+To use the board from another machine or your phone, such as a Mac browser with taskboard running on a Linux box, turn on the HTTPS listener. It gives browsers with a client certificate that taskboard issued everything except native terminals, which would open on the taskboard machine. Browsers without one can only pair.
 
-1. Create a certificate authority and a server certificate for every name and address browsers will use. They are written to `tls_dir` (default `certs`, next to the config file):
+Set it up under **Settings > Remote access** on the taskboard machine:
 
-   ```sh
-   ./taskboard certs init -host ubuntu,ubuntu.tailnet.ts.net,100.64.0.5
-   ```
+1. Enter every name and address other devices will use, such as a Tailscale name, and choose **Create certificates**. This makes a certificate authority and a server certificate in `tls_dir` (default `certs`, next to the config file).
+2. Set **Remote access address** (`tls_listen`, for example `0.0.0.0:8443` or a Tailscale address), save and restart taskboard.
+3. For each device, enter a name and a passphrase of at least 12 characters and choose **Add device**. Scan the QR code with the device, or open the link shown on it. Accept the certificate warning, which appears only this first time, and install the certificate as the page describes, typing the passphrase when asked. iPhones, iPads and Macs get a single profile; other systems get `taskboard-ca.crt` and a `.p12`. Then quit and reopen the browser.
 
-2. Issue a client certificate for each device. This writes a password-protected `.p12` file and prints its password and serial:
+The code works once, for 10 minutes. The dialog shows the address of the device that opened it; if that wasn't yours, **Revoke** cuts its certificate off at once. The passphrase is never stored or sent to the device: it only encrypts the `.p12`, so someone who intercepts the download can't use it.
 
-   ```sh
-   ./taskboard certs client mac-laptop
-   ```
+A device with a certificate can add other devices too. When the machine gets a new name, change the names and choose **Re-issue server certificate**, then restart. To cut off a lost device, add its serial to `revoked_certs`. Keep `listen` on 127.0.0.1: it has no login, so other machines that reach it can only view the board.
 
-3. Copy `ca.crt` and `mac-laptop.p12` to the Mac and add both to the **login** keychain (Chrome, Edge and Safari read it):
+The same steps work from the command line: `./taskboard certs init -host ubuntu,ubuntu.tailnet.ts.net,100.64.0.5`, `./taskboard certs server -host ...` and `./taskboard certs client mac-laptop`, which writes `mac-laptop.p12` and prints its password and serial. On a Mac, add `ca.crt` and the `.p12` to the login keychain:
 
-   ```sh
-   security add-trusted-cert -r trustRoot -k ~/Library/Keychains/login.keychain-db ca.crt
-   security import mac-laptop.p12 -k ~/Library/Keychains/login.keychain-db -P '<password>'
-   ```
-
-   When a browser first uses the certificate, choose Always Allow. Firefox and iOS have their own certificate stores.
-
-   On Android, use Chrome: in Settings, under Encryption & credentials, install `ca.crt` as a CA certificate and the `.p12` as a VPN & app user certificate.
-4. Set `tls_listen` (for example `0.0.0.0:8443`, or a Tailscale address), restart taskboard and open `https://ubuntu:8443`.
-
-When the machine gets a new name, re-issue the server certificate with `./taskboard certs server -host ...` and restart. To cut off a lost device, add its serial to `revoked_certs`. Keep `listen` on 127.0.0.1: it has no login, so other machines that reach it can only view the board.
+```sh
+security add-trusted-cert -r trustRoot -k ~/Library/Keychains/login.keychain-db ca.crt
+security import mac-laptop.p12 -k ~/Library/Keychains/login.keychain-db -P '<password>'
+```
 
 ## Tab groups
 

@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path"
 	"slices"
 	"strconv"
 	"strings"
@@ -81,9 +82,13 @@ type server struct {
 	listen     string
 	tlsListen  string
 	tlsDir     string
+	certDir    string
 
 	mu   sync.Mutex
 	busy map[string]bool
+
+	certsMu  sync.Mutex
+	pairings pairings
 }
 
 const (
@@ -201,6 +206,7 @@ type settingsData struct {
 	Listen     string
 	TLSListen  string
 	NewRepo    RepoConfig
+	Remote     remoteAccessData
 }
 
 type planData struct {
@@ -263,7 +269,7 @@ func splitFrontMatter(src []byte) ([]planField, []byte) {
 
 func newServer(board *Board, configPath string) http.Handler {
 	cfg := board.Config()
-	s := &server{board: board, configPath: configPath, listen: cfg.Listen, tlsListen: cfg.TLSListen, tlsDir: cfg.TLSDir, busy: map[string]bool{}}
+	s := &server{board: board, configPath: configPath, listen: cfg.Listen, tlsListen: cfg.TLSListen, tlsDir: cfg.TLSDir, certDir: cfg.tlsDir(configPath), busy: map[string]bool{}}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", s.index)
 	mux.HandleFunc("GET /version", s.version)
@@ -287,7 +293,28 @@ func newServer(board *Board, configPath string) http.Handler {
 	mux.HandleFunc("GET /"+extensionZipName, s.extensionDownload)
 	mux.HandleFunc("GET /settings", s.settings)
 	mux.HandleFunc("POST /settings", s.saveSettings)
-	return s.checkHost(mux)
+	mux.HandleFunc("POST /certs", s.createCerts)
+	mux.HandleFunc("POST /certs/revoke", s.revokeCert)
+	mux.HandleFunc("POST /devices", s.addDevice)
+	mux.HandleFunc("GET /devices/{code}", s.deviceStatus)
+	mux.HandleFunc("POST /devices/{code}/cancel", s.cancelDevice)
+	mux.HandleFunc("GET /pair/{code}", s.pairOpen)
+	mux.HandleFunc("GET /pair/{code}/{secret}/{$}", s.pairPage)
+	mux.HandleFunc("GET /pair/{code}/{secret}/{file}", s.pairFile)
+	return s.checkHost(s.requireCert(mux))
+}
+
+// requireCert keeps devices without a valid client certificate on the TLS listener to pairing; the handshake
+// lets them in only so they can get one.
+func (s *server) requireCert(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p := path.Clean(r.URL.Path)
+		if r.TLS != nil && s.accessOf(r) == viewer && !strings.HasPrefix(p, "/pair/") && !strings.HasPrefix(p, "/static/") {
+			http.Error(w, "This device has no taskboard client certificate. Add it under Settings > Remote access on a device that has one.", http.StatusForbidden)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // Rejecting unknown hostnames blocks DNS rebinding on the plain listener. TLS requests skip it: a browser
@@ -802,7 +829,7 @@ func (s *server) settings(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "settings need a browser on the taskboard machine or a client certificate", http.StatusForbidden)
 		return
 	}
-	render(w, r, "settings.html", settingsData{Config: s.board.Config(), ConfigPath: s.configPath, Listen: s.listen, TLSListen: s.tlsListen})
+	render(w, r, "settings.html", settingsData{Config: s.board.Config(), ConfigPath: s.configPath, Listen: s.listen, TLSListen: s.tlsListen, Remote: s.remoteAccess()})
 }
 
 func (s *server) saveSettings(w http.ResponseWriter, r *http.Request) {
@@ -863,6 +890,10 @@ func isLoopback(r *http.Request) bool {
 }
 
 func render(w http.ResponseWriter, r *http.Request, name string, data any) {
+	renderStatus(w, r, http.StatusOK, name, data)
+}
+
+func renderStatus(w http.ResponseWriter, r *http.Request, code int, name string, data any) {
 	var buf bytes.Buffer
 	if err := templates.ExecuteTemplate(&buf, name, data); err != nil {
 		log.Printf("render %s: %v", name, err)
@@ -872,10 +903,12 @@ func render(w http.ResponseWriter, r *http.Request, name string, data any) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Vary", "Accept-Encoding")
 	if !strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
+		w.WriteHeader(code)
 		w.Write(buf.Bytes())
 		return
 	}
 	w.Header().Set("Content-Encoding", "gzip")
+	w.WriteHeader(code)
 	gz := gzip.NewWriter(w)
 	gz.Write(buf.Bytes())
 	gz.Close()

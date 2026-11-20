@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+{{template "theme"}}
+<title>{{if .Name}}Add {{.Name}} to taskboard{{else}}taskboard pairing{{end}}</title>
+<style>
+{{template "tokens"}}
+body{padding-top:1.5rem;max-width:40rem}
+h1{font-size:1.25rem;font-weight:700;letter-spacing:-.02em;margin:0 0 .5rem}
+h2{font-size:1rem;font-weight:650;margin:0 0 .75rem}
+p{margin:0 0 .75rem}
+.muted{color:var(--muted);font-size:.875rem}
+.card,details{margin:0 0 .75rem;padding:.9rem 1rem;background:var(--surface);border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow)}
+summary{font-weight:650;cursor:pointer}
+details[open] summary{margin-bottom:.6rem}
+details.others{padding:0;background:none;border:0;box-shadow:none}
+details.others>summary{color:var(--link);font-weight:550}
+details.others[open]>summary{margin-bottom:.75rem}
+.note{padding:.5rem .7rem;border-radius:8px;background:color-mix(in srgb,var(--needs) 12%,transparent);font-size:.875rem}
+ol{margin:.75rem 0 0;padding-left:1.25rem}
+li+li{margin-top:.45rem}
+.files{display:flex;flex-wrap:wrap;gap:.5rem}
+.files a{display:inline-block;padding:.45rem 1rem;border:1px solid var(--link);border-radius:999px;background:var(--link);color:var(--surface);font-weight:600;text-decoration:none}
+a{color:var(--link)}
+b{font-weight:600}
+</style>
+</head>
+<body>
+{{if .Name}}
+<h1>Add {{.Name}} to taskboard</h1>
+<p>Enter the passphrase chosen for this device when asked. These downloads work for 10 minutes.</p>
+{{with .Primary}}
+<section class="card">
+  <h2>{{.Title}}</h2>
+  {{template "pairsteps" .}}
+</section>
+{{template "pairdone"}}
+<details class="others">
+  <summary>A different device or browser?</summary>
+  {{range $.Others}}<details><summary>{{.Title}}</summary>{{template "pairsteps" .}}</details>{{end}}
+</details>
+{{else}}
+<p>Choose your device:</p>
+{{range .Others}}<details><summary>{{.Title}}</summary>{{template "pairsteps" .}}</details>{{end}}
+{{template "pairdone"}}
+{{end}}
+{{else}}
+<h1>This pairing code doesn't work</h1>
+<p>It has expired, was cancelled, or was already used by another device. Add the device again under Settings &gt; Remote access on a device that can use the board.</p>
+{{end}}
+</body>
+</html>
+
+{{define "pairdone"}}<p><a href="/">Open the board</a> when you're done.</p>
+<p class="muted">If the board says this device has no certificate, the browser is still using its earlier choice: close it completely and try again.</p>{{end}}
+
+{{define "pairfiles"}}<div class="files"><a href="taskboard-ca.crt" download>taskboard-ca.crt</a><a href="{{.P12}}">{{.P12}}</a></div>{{end}}
+
+{{define "pairsteps"}}
+{{- if eq .Key "ios"}}
+  {{if and .Browser (ne .Browser "Safari")}}<p class="note">{{.Browser}} may not offer to install the profile. If it doesn't, open this page in Safari.</p>{{end}}
+  <div class="files"><a href="taskboard.mobileconfig">Download profile</a></div>
+  <ol>
+    <li>Tap <b>Download profile</b>, then Allow.</li>
+    <li>Open the Settings app and tap <b>Profile Downloaded</b> near the top. Tap Install and enter the passphrase.</li>
+    <li>In Settings, go to General &gt; About &gt; Certificate Trust Settings and turn on <b>taskboard CA</b>.</li>
+    <li>Close {{.BrowserName}} in the app switcher, reopen it and open the board.</li>
+  </ol>
+{{- else if eq .Key "mac"}}
+  {{if eq .Browser "Safari"}}<p class="muted">On an iPad, use the iPhone or iPad steps under A different device.</p>{{end}}
+  <div class="files"><a href="taskboard.mobileconfig">Download profile</a></div>
+  <ol>
+    <li>Click <b>Download profile</b>.</li>
+    <li>Open System Settings &gt; General &gt; Device Management (Profiles on older macOS) and double-click the taskboard profile. Click Install and enter the passphrase, then your Mac password if asked.</li>
+    <li>Quit {{.BrowserName}} with ⌘Q, reopen it and open the board. When asked to use the certificate, choose Always Allow.</li>
+  </ol>
+{{- else if eq .Key "android"}}
+  {{if eq .Browser "Firefox"}}<p class="note">Firefox on Android may not offer the certificate to websites. Install it as below, then open the board in Chrome.</p>{{end}}
+  {{template "pairfiles" .}}
+  <ol>
+    <li>Tap both files to download them.</li>
+    <li>Open the Settings app and search for <b>Install a certificate</b> (under Security, Encryption &amp; credentials).</li>
+    <li>Choose <b>CA certificate</b>, accept the warning and pick taskboard-ca.crt.</li>
+    <li>Choose <b>VPN &amp; app user certificate</b>, pick {{.P12}} and enter the passphrase.</li>
+    <li>{{if eq .Browser "Firefox"}}Open the board in Chrome.{{else}}Close {{.BrowserName}} in the app switcher, reopen it and open the board.{{end}}</li>
+  </ol>
+{{- else if eq .Key "windows"}}
+  {{template "pairfiles" .}}
+  <ol>
+    <li>Download both files and open your Downloads folder.</li>
+    <li>Open taskboard-ca.crt and click Install Certificate. Choose Current User, then <b>Place all certificates in the following store</b>, Browse, and <b>Trusted Root Certification Authorities</b>. Finish, and click Yes on the warning.</li>
+    <li>Open {{.P12}}, choose Current User, enter the passphrase and keep the other defaults.</li>
+    <li>Close every {{.BrowserName}} window, reopen it and open the board.</li>
+  </ol>
+{{- else if eq .Key "chromeos"}}
+  {{template "pairfiles" .}}
+  <ol>
+    <li>Download both files.</li>
+    <li>In Chrome, open Settings, search for <b>certificates</b> and open Manage certificates.</li>
+    <li>Under <b>Authorities</b>, import taskboard-ca.crt and tick <b>Trust this certificate for identifying websites</b>.</li>
+    <li>Under <b>Your certificates</b>, choose <b>Import and Bind</b> (or Import, if that isn't offered), pick {{.P12}} and enter the passphrase. Import and Bind keeps the key in the Chromebook's security chip.</li>
+    <li>Close every Chrome window, reopen Chrome and open the board.</li>
+  </ol>
+{{- else if eq .Key "linux"}}
+  {{template "pairfiles" .}}
+  <ol>
+    <li>Download both files.</li>
+    <li>In {{.BrowserName}}, open Settings, search for <b>certificates</b> and open Manage certificates.</li>
+    <li>Under <b>Authorities</b>, import taskboard-ca.crt and tick <b>Trust this certificate for identifying websites</b>.</li>
+    <li>Under <b>Your certificates</b>, import {{.P12}} and enter the passphrase.</li>
+    <li>Close every {{.BrowserName}} window, reopen it and open the board.</li>
+  </ol>
+{{- else if eq .Key "firefox"}}
+  {{template "pairfiles" .}}
+  <ol>
+    <li>Download both files.</li>
+    <li>In Firefox, open Settings &gt; Privacy &amp; Security, scroll to Certificates and click <b>View Certificates</b>.</li>
+    <li>On the <b>Authorities</b> tab, import taskboard-ca.crt and tick <b>Trust this CA to identify websites</b>.</li>
+    <li>On the <b>Your Certificates</b> tab, import {{.P12}} and enter the passphrase.</li>
+    <li>Quit Firefox, reopen it and open the board.</li>
+  </ol>
+{{- end}}
+{{end}}
