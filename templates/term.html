@@ -95,6 +95,21 @@ term.onData(d => {
   }
   send(encoder.encode(d));
 });
+// Android-style on-screen keyboards, ChromeOS's among them, send a keydown with key Unidentified and keyCode 229 before
+// inserting text. After that keydown xterm ignores the input event and diffs its textarea on a timer, losing text that
+// lands after the timer runs (xterm.js #6259); without it, xterm takes the text from the input event. So the keydown is
+// kept from xterm, whose own listener is a capture listener on the textarea. These keyboards also delete from the
+// textarea instead of pressing Backspace once it holds text, and xterm ignores a deletion with no keydown.
+term.element.addEventListener("keydown", e => {
+  if (e.target === term.textarea && e.keyCode === 229 && e.key === "Unidentified") e.stopPropagation();
+}, true);
+let keyHeld = false;
+term.textarea.addEventListener("keydown", () => keyHeld = true, true);
+term.textarea.addEventListener("keyup", () => keyHeld = false, true);
+term.textarea.addEventListener("blur", () => keyHeld = false);
+term.textarea.addEventListener("input", e => {
+  if (e.inputType === "deleteContentBackward" && !keyHeld) term.input("\x7f");
+});
 const fixedKeys = { esc: "\x1b", tab: "\t", backtab: "\x1b[Z" };
 const arrowKeys = { up: "A", down: "B", right: "C", left: "D" };
 const keys = document.getElementById("keys");
